@@ -1,0 +1,319 @@
+@page
+@model UserModel
+@{
+    ViewData["Title"] = "用户界面";
+}
+
+<div class="container-fluid px-4 py-3">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="user-title mb-1">用户控制面板</h1>
+            <p class="text-secondary">欢迎回来, @Model.Username</p>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+            <span class="ip-badge">IP: @Model.UserIP</span>
+            <a href="/Logout" class="btn btn-outline-danger">退出登录</a>
+        </div>
+    </div>
+
+    <!-- 资源使用概览 -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-4">
+            <div class="resource-card">
+                <div class="resource-icon storage">
+                    <i class="fas fa-cloud"></i>
+                </div>
+                <div class="resource-info">
+                    <h3>云存储使用量</h3>
+                    <div class="progress-info">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>已使用 2.4 GB</span>
+                            <span>共 10 GB</span>
+                        </div>
+                        <div class="progress">
+                            <div class="progress-bar" style="width: 24%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="resource-card">
+                <div class="resource-icon bandwidth">
+                    <i class="fas fa-tachometer-alt"></i>
+                </div>
+                <div class="resource-info">
+                    <h3>本月流量</h3>
+                    <div class="progress-info">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>已用 45 GB</span>
+                            <span>共 100 GB</span>
+                        </div>
+                        <div class="progress">
+                            <div class="progress-bar" style="width: 45%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="resource-card">
+                <div class="resource-icon services">
+                    <i class="fas fa-server"></i>
+                </div>
+                <div class="resource-info">
+                    <h3>活跃服务</h3>
+                    <div class="services-info">
+                        <span class="service-count">3</span>
+                        <span class="service-label">个服务运行中</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 服务状态和活动日志 -->
+    <div class="row g-4">
+        <div class="col-md-8">
+            <div class="content-card">
+                <div class="card-header">
+                    <h2>服务状态</h2>
+                    <div class="header-actions">
+                        <button class="btn btn-sm btn-outline-primary">
+                            <i class="fas fa-plus"></i> 添加服务
+                        </button>
+                    </div>
+                </div>
+                <div class="services-table">
+                    <div class="service-row">
+                        <div class="service-info">
+                            <div class="status-dot online"></div>
+                            <div>
+                                <div class="service-name">Web服务器</div>
+                                <div class="service-details">运行时间: 15天</div>
+                            </div>
+                        </div>
+                        <div class="service-metrics">
+                            <div class="metric">
+                                <span class="metric-label">CPU</span>
+                                <span class="metric-value">2.3%</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">内存</span>
+                                <span class="metric-value">128MB</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="content-card">
+                <div class="card-header">
+                    <h2>最近活动</h2>
+                </div>
+                <div class="activity-list">
+                    <div class="activity-item">
+                        <div class="activity-icon login">
+                            <i class="fas fa-sign-in-alt"></i>
+                        </div>
+                        <div class="activity-content">
+                            <div class="activity-title">登录成功</div>
+                            <div class="activity-time">2分钟前</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .user-title {
+        color: #1d2432;
+        font-size: 1.75rem;
+        font-weight: 600;
+    }
+
+    .ip-badge {
+        background: #f2f4f7;
+        color: #4a5568;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-family: monospace;
+    }
+
+    .resource-card {
+        background: white;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border: 1px solid #e2e8f0;
+        height: 100%;
+    }
+
+    .resource-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 16px;
+    }
+
+    .resource-icon.storage { background: #ebf8ff; color: #3182ce; }
+    .resource-icon.bandwidth { background: #faf5ff; color: #805ad5; }
+    .resource-icon.services { background: #f0fff4; color: #38a169; }
+
+    .resource-icon i {
+        font-size: 24px;
+    }
+
+    .resource-info h3 {
+        color: #4a5568;
+        font-size: 14px;
+        margin-bottom: 16px;
+    }
+
+    .progress {
+        height: 6px;
+        background: #edf2f7;
+        border-radius: 3px;
+        overflow: hidden;
+    }
+
+    .progress-bar {
+        background: linear-gradient(90deg, #3182ce, #4299e1);
+    }
+
+    .services-info {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+    }
+
+    .service-count {
+        color: #1a202c;
+        font-size: 24px;
+        font-weight: 600;
+    }
+
+    .service-label {
+        color: #718096;
+        font-size: 14px;
+    }
+
+    .content-card {
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border: 1px solid #e2e8f0;
+    }
+
+    .card-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid #e2e8f0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .card-header h2 {
+        color: #1a202c;
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0;
+    }
+
+    .services-table {
+        padding: 12px 20px;
+    }
+
+    .service-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .service-info {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+    }
+
+    .status-dot.online { background: #48bb78; }
+    .status-dot.offline { background: #e53e3e; }
+
+    .service-name {
+        color: #2d3748;
+        font-weight: 500;
+    }
+
+    .service-details {
+        color: #718096;
+        font-size: 14px;
+    }
+
+    .service-metrics {
+        display: flex;
+        gap: 24px;
+    }
+
+    .metric {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+    }
+
+    .metric-label {
+        color: #718096;
+        font-size: 12px;
+    }
+
+    .metric-value {
+        color: #2d3748;
+        font-weight: 500;
+    }
+
+    .activity-list {
+        padding: 12px 20px;
+    }
+
+    .activity-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 0;
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .activity-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #ebf8ff;
+        color: #3182ce;
+    }
+
+    .activity-title {
+        color: #2d3748;
+        font-weight: 500;
+    }
+
+    .activity-time {
+        color: #718096;
+        font-size: 14px;
+    }
+</style> 

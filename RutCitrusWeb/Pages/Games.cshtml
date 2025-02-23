@@ -1,0 +1,187 @@
+@page
+@model GamesModel
+@{
+    ViewData["Title"] = "游戏";
+}
+
+<div class="container mt-4">
+    <h1 class="mb-4" style="color: #1a1a1a;">游戏部署服务</h1>
+    <div class="games-container">
+        <!-- Minecraft -->
+        <div class="game-card">
+            <div class="game-content">
+                <div class="game-info">
+                    <div class="game-image-container">
+                        <!-- https://www.minecraft.net/content/dam/minecraftnet/games/minecraft/key-art/Homepage_Discover-our-games_MC-Vanilla-KeyArt_864x864.jpg   https://www.minecraft.net/content/dam/games/minecraft/key-art/Games_Subnav_Minecraft-300x465.jpg -->
+                        <img src="https://www.minecraft.net/content/dam/minecraftnet/games/minecraft/key-art/Homepage_Discover-our-games_MC-Vanilla-KeyArt_864x864.jpg"
+                             alt="Minecraft" class="game-image">
+                    </div>
+                    <div class="game-details">
+                        <h2>Minecraft</h2>
+                        <div class="game-description">
+                            <p>此将部署游戏在您的电脑上供您游玩，版本是 Java版</p>
+                            <div class="additional-info">
+                                <p>额外内容如下:</p>
+                                <ul>
+                                    <li>
+                                        官方网站 - <a href="https://www.minecraft.net/zh-hans" target="_blank">minecraft.net</a>
+                                    </li>
+                                    <li>
+                                        RutCitrus服务器 - <span class="server-address">rcmc.2m.pub</span>
+                                    </li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="deploy-section">
+                    <button class="deploy-button">
+                        <span class="deploy-text">部署游戏</span>
+                        <span class="deploy-price">下载</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .games-container {
+        display: flex;
+        flex-direction: column;
+        gap: 2rem;
+    }
+
+    .game-card {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+        border: 1px solid #e0e0e0;
+        margin-bottom: 2rem;
+    }
+
+    .game-content {
+        padding: 24px;
+    }
+
+    .game-info {
+        display: flex;
+        padding: 2rem;
+        background: #f8f9fa;
+        gap: 1rem;
+        align-items: center;
+    }
+
+    .game-image-container {
+        width: 180px;
+        height: 180px;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .game-image {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transition: transform 0.3s ease;
+    }
+
+    .game-image:hover {
+        transform: scale(1.05);
+    }
+
+    .game-details {
+        flex: 2;
+        display: flex;
+        flex-direction: column;
+        padding-left: 0;
+    }
+
+    .game-details h2 {
+        color: #2b2d30;
+        font-size: 2.5rem;
+        font-weight: bold;
+        margin: 0 0 1rem 0;
+    }
+
+    .game-description {
+        color: #6c757d;
+        font-size: 1.1rem;
+    }
+
+    .game-description p {
+        margin-bottom: 1rem;
+    }
+
+    .additional-info {
+        margin-top: 1rem;
+    }
+
+    .additional-info ul {
+        list-style: none;
+        padding-left: 0;
+        margin-top: 0.5rem;
+    }
+
+    .additional-info li {
+        margin-bottom: 0.5rem;
+    }
+
+    .additional-info a {
+        color: #087CFA;
+        text-decoration: none;
+    }
+
+    .additional-info a:hover {
+        text-decoration: underline;
+    }
+
+    .server-address {
+        font-family: monospace;
+        background: #e9ecef;
+        padding: 2px 6px;
+        border-radius: 4px;
+    }
+
+    .deploy-section {
+        background: white;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 1.5rem;
+        border-top: 1px solid #eee;
+    }
+
+    .deploy-button {
+        background: linear-gradient(135deg, #2ecc71, #27ae60);
+        color: white;
+        border: none;
+        padding: 12px 32px;
+        border-radius: 6px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+
+    .deploy-button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(46, 204, 113, 0.3);
+    }
+
+    .deploy-button:active {
+        transform: scale(0.98);
+        box-shadow: none;
+    }
+
+    .deploy-text {
+        font-size: 1rem;
+        letter-spacing: 0.5px;
+    }
+
+    .deploy-price {
+        font-size: 1rem;
+        opacity: 0.9;
+        font-weight: 400;
+    }
+</style> 

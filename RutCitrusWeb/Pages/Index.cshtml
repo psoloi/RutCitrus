@@ -1,0 +1,80 @@
+﻿@page
+@model IndexModel
+@{
+    ViewData["Title"] = "主页";
+}
+
+<div class="text-center">
+    <h1 class="display-4">欢迎来到RutCitrus！</h1>
+    <p>了解关于 <a href="https://www.minecraft.net/zh-hans">官方 Minecraft</a>!</p>
+    <p>目前服务器还在开发中,进展可于项目中查看.</p>
+</div>
+
+<!-- 添加登录按钮和管理面板按钮 -->
+<div class="login-button-container">
+    @if (Model.IsLoggedIn)
+    {
+        <a href="@Model.DashboardUrl" class="dashboard-button">管理面板</a>
+    }
+    else
+    {
+        <a href="/Login" class="login-button">登录</a>
+    }
+</div>
+
+<style>
+    .login-button-container {
+        position: fixed;
+        top: 12px;
+        right: 20px;
+        z-index: 1000;
+    }
+
+    .login-button {
+        display: inline-block;
+        padding: 8px 32px;
+        background: linear-gradient(90deg, #087CFA, #3BEA62);
+        color: white;
+        text-decoration: none;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 14px;
+        border: none;
+        cursor: pointer;
+        transition: background 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .login-button:hover {
+        background: linear-gradient(90deg, #0971e6, #35d459);
+        color: white;
+        text-decoration: none;
+    }
+
+    .dashboard-button {
+        display: inline-block;
+        padding: 7px 31px;  /* 减去边框宽度 */
+        background: transparent;
+        color: #087CFA;
+        text-decoration: none;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 14px;
+        border: 2px solid;
+        border-image: linear-gradient(90deg, #087CFA, #3BEA62) 1;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .dashboard-button:hover {
+        background: linear-gradient(90deg, #087CFA, #3BEA62);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-decoration: none;
+        border-color: #3BEA62;
+    }
+</style>

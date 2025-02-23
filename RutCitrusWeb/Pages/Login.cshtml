@@ -1,0 +1,361 @@
+@page
+@model LoginModel
+@{
+    Layout = "_LoginLayout";
+}
+
+<div class="login-container">
+    <div class="login-box">
+        <div class="brand">
+            <img src="~/favicon.ico" alt="Logo" class="brand-logo">
+            <h1>RutCitrus</h1>
+        </div>
+        <h2 id="loginTitle">登录</h2>
+        <p class="subtitle" id="loginSubtitle">使用您的账号</p>
+        
+        <form method="post" id="loginForm">
+            <div id="adminLoginFields">
+                <div class="form-group">
+                    <input type="text" name="Username" placeholder="用户名" id="usernameInput">
+                </div>
+                <div class="form-group">
+                    <input type="password" name="Password" placeholder="密码" id="passwordInput">
+                </div>
+            </div>
+            <div class="form-group captcha-group">
+                <input type="text" name="Captcha" placeholder="验证码" required maxlength="4">
+                <img src="/api/captcha" alt="验证码" id="captchaImage" onclick="refreshCaptcha()">
+            </div>
+            <div class="login-mode-switch">
+                <label class="switch">
+                    <input type="checkbox" id="loginModeToggle" onchange="toggleLoginMode()">
+                    <span class="slider round"></span>
+                </label>
+                <span id="loginModeText">切换为MAC登录</span>
+            </div>
+            <button type="submit" class="login-button" id="submitButton">登录</button>
+        </form>
+
+        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-circle"></i>
+                @Model.ErrorMessage
+            </div>
+        }
+        @if (Model.IsLocked)
+        {
+            <div class="alert alert-warning">
+                <i class="fas fa-lock"></i>
+                账户已被锁定，请 @Model.LockoutMinutes 分钟后重试
+            </div>
+        }
+    </div>
+</div>
+
+<style>
+    body {
+        background-color: #ffffff;
+        background-image: 
+            linear-gradient(rgba(0, 0, 0, 0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0, 0, 0, 0.05) 1px, transparent 1px);
+        background-size: 20px 20px;
+        margin: 0;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: 'Segoe UI', sans-serif;
+        position: relative;
+        overflow: hidden;
+    }
+
+    body::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(45deg, 
+            rgba(255, 255, 255, 0.1) 25%, 
+            transparent 25%, 
+            transparent 50%, 
+            rgba(255, 255, 255, 0.1) 50%, 
+            rgba(255, 255, 255, 0.1) 75%, 
+            transparent 75%, 
+            transparent);
+        background-size: 100px 100px;
+        animation: move 10s linear infinite;
+        opacity: 0.5;
+        pointer-events: none;
+    }
+
+    @@keyframes move {
+        0% {
+            background-position: 0 0;
+        }
+        100% {
+            background-position: 100px 100px;
+        }
+    }
+
+    .login-container {
+        width: 100%;
+        max-width: 440px;
+        padding: 0 20px;
+    }
+
+    .login-box {
+        background-color: white;
+        padding: 44px;
+        border-radius: 4px;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1),
+                    0 1px 2px rgba(0, 0, 0, 0.08);
+        width: 100%;
+        box-sizing: border-box;
+        position: relative;
+        z-index: 1;
+    }
+
+    .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+    }
+
+    .brand-logo {
+        width: 32px;
+        height: 32px;
+    }
+
+    .brand h1 {
+        font-size: 24px;
+        font-weight: 600;
+        color: #000;
+        margin: 0;
+    }
+
+    h2 {
+        font-size: 24px;
+        font-weight: 600;
+        color: #000;
+        margin: 0 0 12px 0;
+    }
+
+    .subtitle {
+        font-size: 14px;
+        color: #666;
+        margin: 0 0 24px 0;
+    }
+
+    .form-group {
+        margin-bottom: 16px;
+    }
+
+    .form-group input {
+        width: 100%;
+        padding: 6px 10px;
+        height: 36px;
+        border: 1px solid #666;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+        outline: none;
+    }
+
+    .form-group input:focus {
+        border-color: #0078D4;
+        box-shadow: 0 0 0 1px #0078D4;
+    }
+
+    .login-button {
+        width: 100%;
+        height: 36px;
+        background-color: #0078D4;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .login-button:hover {
+        background-color: #006CBE;
+    }
+
+    .captcha-group {
+        display: flex;
+        gap: 8px;
+    }
+
+    .captcha-group input {
+        flex: 1;
+    }
+
+    #captchaImage {
+        height: 36px;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+    .login-mode-switch {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        justify-content: flex-start;
+    }
+
+    .switch {
+        position: relative;
+        display: inline-block;
+        width: 40px;
+        height: 20px;
+    }
+
+    .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+
+    .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: .2s;
+    }
+
+    .slider:before {
+        position: absolute;
+        content: "";
+        height: 16px;
+        width: 16px;
+        left: 2px;
+        bottom: 2px;
+        background-color: white;
+        transition: .2s;
+    }
+
+    input:checked + .slider {
+        background-color: #0078D4;
+    }
+
+    input:checked + .slider:before {
+        transform: translateX(20px);
+    }
+
+    .slider.round {
+        border-radius: 20px;
+    }
+
+    .slider.round:before {
+        border-radius: 50%;
+    }
+
+    #loginModeText {
+        font-size: 14px;
+        color: #666;
+    }
+
+    .alert {
+        padding: 12px;
+        border-radius: 4px;
+        margin-top: 16px;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .alert-danger {
+        background-color: #FDE7E9;
+        color: #D13438;
+        border: 1px solid #D13438;
+    }
+
+    .alert-warning {
+        background-color: #FFF4CE;
+        color: #805B03;
+        border: 1px solid #805B03;
+    }
+
+    /* MAC登录模式下的样式 */
+    .login-box.mac-mode {
+        padding: 32px;
+        max-width: 360px;
+    }
+
+    #adminLoginFields {
+        max-height: 200px;
+        transition: all 0.3s ease;
+        opacity: 1;
+    }
+
+    #adminLoginFields.hidden-fields {
+        max-height: 0;
+        opacity: 0;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+    }
+
+    .captcha-group {
+        opacity: 1 !important;
+        max-height: none !important;
+        overflow: visible !important;
+    }
+</style>
+
+<script>
+    function refreshCaptcha() {
+        const img = document.getElementById('captchaImage');
+        img.src = '/api/captcha?' + new Date().getTime();
+    }
+
+    function toggleLoginMode() {
+        const adminFields = document.getElementById('adminLoginFields');
+        const loginModeText = document.getElementById('loginModeText');
+        const form = document.getElementById('loginForm');
+        const loginBox = document.querySelector('.login-box');
+        const loginTitle = document.getElementById('loginTitle');
+        const loginSubtitle = document.getElementById('loginSubtitle');
+        const usernameInput = document.getElementById('usernameInput');
+        const passwordInput = document.getElementById('passwordInput');
+        
+        if (document.getElementById('loginModeToggle').checked) {
+            // MAC登录模式
+            adminFields.classList.add('hidden-fields');
+            loginBox.classList.add('mac-mode');
+            loginModeText.textContent = '切换为账号登录';
+            loginTitle.textContent = 'MAC登录';
+            loginSubtitle.textContent = '使用本机MAC地址';
+            form.action = '?handler=LocalLogin';
+            usernameInput.removeAttribute('required');
+            passwordInput.removeAttribute('required');
+        } else {
+            // 账号登录模式
+            adminFields.classList.remove('hidden-fields');
+            loginBox.classList.remove('mac-mode');
+            loginModeText.textContent = '切换为MAC登录';
+            loginTitle.textContent = '登录';
+            loginSubtitle.textContent = '使用您的账号';
+            form.action = '';
+            usernameInput.setAttribute('required', '');
+            passwordInput.setAttribute('required', '');
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const adminFields = document.getElementById('adminLoginFields');
+        adminFields.style.transition = 'all 0.3s ease';
+    });
+</script> 

@@ -1,0 +1,157 @@
+@page
+@model ServerModel
+@{
+    ViewData["Title"] = "服务";
+}
+
+<div class="container mt-4">
+    <h1 class="mb-4 gradient-title">服务器资源</h1>
+    <p>使用远端或本地端映射建立的服务器资源,基于多功能合为一体.</p>
+    <div class="row g-4">
+        <!-- 文件存储相关 -->
+        <div class="col-md-4">
+            <div class="service-card storage">
+                <div class="icon-container">
+                    <i class="fas fa-cloud"></i>
+                </div>
+                <h3>全局文件储存</h3>
+                <p>全网文件存储服务</p>
+                <a href="#" class="service-link">查看解决方案 →</a>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="service-card storage">
+                <div class="icon-container">
+                    <i class="fas fa-folder"></i>
+                </div>
+                <h3>本地文件储存</h3>
+                <p>本地文件存储服务</p>
+                <a href="#" class="service-link">查看解决方案 →</a>
+            </div>
+        </div>
+
+        <!-- 聊天服务相关 -->
+        <div class="col-md-4">
+            <div class="service-card chat">
+                <div class="icon-container">
+                    <i class="fas fa-comments"></i>
+                </div>
+                <h3>本地聊天</h3>
+                <p>局域网内即时通讯服务</p>
+                <a href="#" class="service-link">查看解决方案 →</a>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="service-card chat">
+                <div class="icon-container">
+                    <i class="fas fa-globe"></i>
+                </div>
+                <h3>全局聊天</h3>
+                <p>全网即时通讯服务</p>
+                <a href="#" class="service-link">查看解决方案 →</a>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="service-card server">
+                <div class="icon-container">
+                    <i class="fas fa-server"></i>
+                </div>
+                <h3>服务器列表</h3>
+                <p>查看可用服务器资源</p>
+                <a href="#" class="service-link">查看解决方案 →</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .service-card {
+        background: #fff;
+        border-radius: 8px;
+        padding: 24px;
+        transition: all 0.3s ease;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        border: 1px solid #e0e0e0;
+    }
+
+    /* 文件存储相关卡片样式 */
+    .service-card.storage {
+        border-left: 4px solid #607D8B;
+    }
+    .service-card.storage .icon-container {
+        background: #ECEFF1;
+        color: #607D8B;
+    }
+
+    /* 聊天服务相关卡片样式 */
+    .service-card.chat {
+        border-left: 4px solid #2196F3;
+    }
+    .service-card.chat .icon-container {
+        background: #E3F2FD;
+        color: #2196F3;
+    }
+
+    /* 服务器相关卡片样式 */
+    .service-card.server {
+        border-left: 4px solid #F44336;
+    }
+    .service-card.server .icon-container {
+        background: #FFEBEE;
+        color: #F44336;
+    }
+
+    .service-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+    }
+
+    .icon-container {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 16px;
+    }
+
+    .icon-container i {
+        font-size: 20px;
+    }
+
+    .service-card h3 {
+        color: #1a1a1a;
+        font-size: 18px;
+        margin-bottom: 12px;
+        font-weight: 600;
+    }
+
+    .service-card p {
+        color: #666;
+        font-size: 14px;
+        margin-bottom: 16px;
+        flex-grow: 1;
+    }
+
+    .service-link {
+        color: #0078D4;
+        text-decoration: none;
+        font-weight: 500;
+        font-size: 14px;
+    }
+
+    .service-link:hover {
+        text-decoration: none;
+        color: #005a9e;
+    }
+</style>
+
+<!-- 添加 Font Awesome 图标库 -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"> 
