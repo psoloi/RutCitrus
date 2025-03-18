@@ -80,7 +80,7 @@ namespace RutCitrusManager
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
             Output.Text("[white]RutCitrus - Made by psoloi[/]", 1);
-            Output.Text("[white]RutCitrusManager - https://github.com/psoloi/RutCitrusManager License:MIT [/]", 1);
+            Output.Text("[white]RutCitrusManager - https://github.com/psoloi/RutCitrus License:MIT [/]", 1);
 
             // 加载一些步骤
 
@@ -191,6 +191,7 @@ namespace RutCitrusManager
                         Console.Clear();
                         Output.Text_Time("[white]RCM 程序信息[/]", 1);
                         Output.Text("[white]版本: 2.0.2 作者: psoloi[/]", 1);
+                        Output.Text("[white]项目: https://github.com/psoloi/RutCitrus [/]", 1);
                         AnsiConsole.Markup("[white][[[/][green]所有程序版本[/][white]]] [/]"+"[white on blue]RCM|2.0.2  RCInterface|1.0  RCWeb|1.0.1 [/] [white on blueviolet].NET(Core)|8.0[/]\n");
 
                         // 获取系统位数
