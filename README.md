@@ -9,7 +9,7 @@
 ![GitHub Repo Size](https://img.shields.io/github/repo-size/psoloi/RutCitrus)
 ![GitHub License](https://img.shields.io/github/license/psoloi/RutCitrus)
 ![GitHub Issues](https://img.shields.io/github/issues/psoloi/RutCitrus)
-![GitHub Workflow](https://img.shields.io/github/actions/workflow/status/psoloi/RutCitrus/workflow.yml)
+![RCMB Status](https://img.shields.io/github/actions/workflow/status/psoloi/RutCitrus/dotnet-console.yml?label=RCM%20Build)
 
 </div>
 
