@@ -19,7 +19,7 @@ foreach (ManagementObject mo in searcher.Get())
     }
 }
 ```
-> This code may have limitations and is only applicable to the Windows platform.
+> This project has already solved this problem. However, some Windows systems may encounter unknown errors. The most likely cause is the absence of certain runtime libraries.
 
 ## Update list
 1. Add server and client LAN chat functionality.
