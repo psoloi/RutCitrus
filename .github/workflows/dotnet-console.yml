@@ -47,19 +47,8 @@ on:
 
 jobs:
   build-and-publish:
-    name: Build & Publish (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        include:
-          - os: ubuntu-latest
-            runtime: linux-x64
-          - os: windows-latest
-            runtime: win-x64
-          - os: macos-latest
-            runtime: osx-x64
-
+    name: Build & Publish (Windows)
+    runs-on: windows-latest  # 仅使用 Windows 环境
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -75,30 +64,27 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release --no-restore
 
-      # 删除 Coverlet 的测试步骤，替换为普通测试
       - name: Test
         run: dotnet test --configuration Release --no-build --verbosity normal
 
       - name: Publish Application
         run: |
-          dotnet publish \
-            -c Release \
-            -o ./publish/${{ matrix.runtime }} \
-            --self-contained true \
-            -r ${{ matrix.runtime }}
+          dotnet publish ^
+            -c Release ^
+            -o ./publish/win-x64 ^
+            --self-contained true ^
+            -r win-x64
 
-      # 调试步骤：列出目录内容
       - name: List files after publish
         run: |
           echo "查看发布目录内容："
-          ls -R ./publish/${{ matrix.runtime }}
+          dir .\publish\win-x64 /s
 
-      # 上传构建产物（使用 v4 和通配符）
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: app-${{ matrix.runtime }}
-          path: ${{ github.workspace }}/publish/${{ matrix.runtime }}/**/*
+          name: app-win-x64
+          path: ${{ github.workspace }}/publish/win-x64/**/*
 
   create-release:
     name: Create Release
