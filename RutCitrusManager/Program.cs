@@ -79,7 +79,8 @@ namespace RutCitrusManager
 
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
-            Output.Text("[white]RutCitrusSDK - Made by psoloi[/]", 1);
+            Output.Text("[white]RutCitrus - Made by psoloi[/]", 1);
+            Output.Text("[white]RutCitrusManager - https://github.com/psoloi/RutCitrusManager License:MIT [/]", 1);
 
             // 加载一些步骤
 
@@ -94,7 +95,7 @@ namespace RutCitrusManager
 
             #region 加载扩展
 
-            Output.Text_Time("[yellow]加载扩展(扩展包含插件、Shell与Python、预设配置文件、可执行程序)... [[当前扩展功能关闭]] [/]", 2);
+            Output.Text_Time("[white]加载扩展...(扩展包括但不限于Python、C#源代码文件、可执行程序)[/]", 1);
 
 
             #endregion
@@ -190,7 +191,7 @@ namespace RutCitrusManager
                         Console.Clear();
                         Output.Text_Time("[white]RCM 程序信息[/]", 1);
                         Output.Text("[white]版本: 2.0.2 作者: psoloi[/]", 1);
-                        AnsiConsole.Markup("[white][[[/][green]所有程序版本[/][white]]] [/]"+"[white on blue]RCM|2.0.2  RCAPI|1.0  RCInterface|1.0  RCWeb|1.0.1 [/] [white on blueviolet].NET(Core)|8.0[/]\n");
+                        AnsiConsole.Markup("[white][[[/][green]所有程序版本[/][white]]] [/]"+"[white on blue]RCM|2.0.2  RCInterface|1.0  RCWeb|1.0.1 [/] [white on blueviolet].NET(Core)|8.0[/]\n");
 
                         // 获取系统位数
                         bool is64BitOperatingSystem = Environment.Is64BitOperatingSystem;

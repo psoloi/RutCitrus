@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.Serialization;
+using System.Runtime.InteropServices;
 
 namespace RutCitrusManager.Modules
 {
@@ -17,6 +18,7 @@ namespace RutCitrusManager.Modules
         {
 
         }
+
         public static void CheckWindowsVersion()
         {
             int majorVersion = Environment.OSVersion.Version.Major;
@@ -29,6 +31,9 @@ namespace RutCitrusManager.Modules
                 Output.Text_Time("[yellow]当前系统版本可能不支持运行所有SDK功能![/]", 2);
             }
         }
+
+        #region 检查是否为虚拟机
+
         public static void CheckVM()
         {
             bool isVM = false;
@@ -45,16 +50,19 @@ namespace RutCitrusManager.Modules
 
                 if (checkVM)
                 {
-                    ManagementObjectSearcher searcher = new("SELECT * FROM Win32_ComputerSystem");
-                    foreach (ManagementObject mo in searcher.Get())
+                    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                     {
-                        string? model = mo["Model"] as string;
-                        if (model != null && (model.Contains("Virtual") || model.Contains("VMware") || model.Contains("Xen") || model.Contains("KVM") || model.Contains("Hyper")))
-                        {
-                            isVM = true;
-                            break;
-                        }
+                        isVM = CheckWindowsVM();
                     }
+                    else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                    {
+                        isVM = CheckLinuxVM();
+                    }
+                    else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                    {
+                        isVM = CheckMacVM();
+                    }
+
                     Output.Text_Time(isVM ? "程序运行于虚拟化环境中" : "[white]程序正在运行于物理机中[/]", 1);
                 }
             }
@@ -64,6 +72,94 @@ namespace RutCitrusManager.Modules
                 AnsiConsole.WriteException(ex);
             }
         }
+        
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:验证平台兼容性", Justification = "<挂起>")]
+        private static bool CheckWindowsVM()
+        {
+            // 方法1：检查注册表
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\BIOS");
+                var systemManufacturer = key?.GetValue("SystemManufacturer")?.ToString() ?? "";
+                var productName = key?.GetValue("SystemProductName")?.ToString() ?? "";
+
+                var vmKeywords = new[] { "vmware", "virtual", "qemu", "xen", "kvm", "hyper-v" };
+                return vmKeywords.Any(k =>
+                    systemManufacturer.Contains(k, StringComparison.OrdinalIgnoreCase) ||
+                    productName.Contains(k, StringComparison.OrdinalIgnoreCase));
+            }
+            catch { /* 忽略注册表访问错误 */ }
+
+            return false;
+        }
+
+        private static bool CheckLinuxVM()
+        {
+            // 方法1：检查 /sys/class/dmi/id 下的特征文件
+            try
+            {
+                var checkPaths = new[] {
+            "/sys/class/dmi/id/product_name",
+            "/sys/class/dmi/id/sys_vendor",
+            "/sys/class/dmi/id/board_vendor"
+        };
+
+                var vmKeywords = new[] { "vmware", "virtual", "qemu", "xen", "kvm", "amazon" };
+
+                foreach (var path in checkPaths.Where(File.Exists))
+                {
+                    var content = File.ReadAllText(path).ToLower();
+                    if (vmKeywords.Any(k => content.Contains(k)))
+                        return true;
+                }
+            }
+            catch { /* 忽略文件访问错误 */ }
+
+            // 方法2：检查 /proc/cpuinfo 的 hypervisor 标志
+            try
+            {
+                if (File.Exists("/proc/cpuinfo"))
+                {
+                    var cpuInfo = File.ReadAllText("/proc/cpuinfo");
+                    if (cpuInfo.Contains("hypervisor"))
+                        return true;
+                }
+            }
+            catch { /* 忽略文件访问错误 */ }
+
+            return false;
+        }
+
+        private static bool CheckMacVM()
+        {
+            // 方法1：检查系统信息
+            try
+            {
+                var process = new System.Diagnostics.Process()
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "sysctl",
+                        Arguments = "-n hw.model",
+                        RedirectStandardOutput = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                process.Start();
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+
+                return output.ToLower().Contains("vmware") ||
+                       output.ToLower().Contains("virtual");
+            }
+            catch { /* 忽略执行错误 */ }
+
+            return false;
+        }
+
+        #endregion
+
         public static void CheckFile()
         {
             string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
@@ -99,7 +195,7 @@ namespace RutCitrusManager.Modules
                         ["Extension"] = new JObject
                         {
                             ["Enable"] = true,
-                            ["Load_Lists"] = new JArray { "a.exe", "b.dll" }
+                            ["Load_Lists"] = new JArray { "a.cs", "b.exe", "c.py"  }
                         },
                         ["OnlyMode"] = "None"
                     };
