@@ -1,9 +1,8 @@
 <p align="center">
- <h2 align="center">RutCitrusManager</h2>
+ <h2 align="center">RutCitrusManager(Main)</h2>
  <p align="center">At present, the program is in the test stage, many functions have not been fully developed or even not developed, time is limited. I am still in high school, this project may not be developed for a long time, and my English is not very good, please understand.</p>
 </p>
 
-![GitHub Stars](https://img.shields.io/github/stars/psoloi/RutCitrus?logo=github)
 ![GitHub License](https://img.shields.io/github/license/psoloi/RutCitrus)
 ![GitHub Repo Size](https://img.shields.io/github/repo-size/psoloi/RutCitrus)
 ![GitHub Issues](https://img.shields.io/github/issues/psoloi/RutCitrus)
@@ -55,3 +54,5 @@ foreach (ManagementObject mo in searcher.Get())
 
 
 #### What better suggestions and features can be proposed, and thank you for your contribution.
+Your Star is the greatest motivation for me to carry out this project. If you like it, please give me a Star to show your appreciation. Thank you!
+![GitHub Stars](https://img.shields.io/github/stars/psoloi/RutCitrus?logo=github)
