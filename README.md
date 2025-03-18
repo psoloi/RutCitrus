@@ -1,5 +1,8 @@
-# RutCitrusManager(Main)
-At present, the program is in the test stage, many functions have not been fully developed or even not developed, time is limited. I am still in high school, this project may not be developed for a long time, and my English is not very good, please understand.
+<p align="center">
+ <h2 align="center">RutCitrusManager</h2>
+ <p align="center">At present, the program is in the test stage, many functions have not been fully developed or even not developed, time is limited. I am still in high school, this project may not be developed for a long time, and my English is not very good, please understand.</p>
+</p>
+
 ![GitHub Stars](https://img.shields.io/github/stars/psoloi/RutCitrus?logo=github)
 ![GitHub License](https://img.shields.io/github/license/psoloi/RutCitrus)
 ![GitHub Repo Size](https://img.shields.io/github/repo-size/psoloi/RutCitrus)
