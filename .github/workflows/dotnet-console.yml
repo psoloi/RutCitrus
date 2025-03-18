@@ -87,11 +87,18 @@ jobs:
             --self-contained true \
             -r ${{ matrix.runtime }}
 
+      # 调试步骤：列出目录内容
+      - name: List files after publish
+        run: |
+          echo "查看发布目录内容："
+          ls -R ./publish/${{ matrix.runtime }}
+
+      # 上传构建产物（使用 v4 和通配符）
       - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: app-${{ matrix.runtime }}
-          path: ./publish/${{ matrix.runtime }}
+          path: ${{ github.workspace }}/publish/${{ matrix.runtime }}/**/*
 
   create-release:
     name: Create Release
