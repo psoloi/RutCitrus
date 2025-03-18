@@ -3,10 +3,15 @@
  <p align="center">At present, the program is in the test stage, many functions have not been fully developed or even not developed, time is limited. I am still in high school, this project may not be developed for a long time, and my English is not very good, please understand.</p>
 </p>
 
-![GitHub License](https://img.shields.io/github/license/psoloi/RutCitrus)
+<div align="center">
+
+![Test Passed](https://img.shields.io/badge/Test-Passed-brightgreen)
 ![GitHub Repo Size](https://img.shields.io/github/repo-size/psoloi/RutCitrus)
+![GitHub License](https://img.shields.io/github/license/psoloi/RutCitrus)
 ![GitHub Issues](https://img.shields.io/github/issues/psoloi/RutCitrus)
 ![GitHub Workflow](https://img.shields.io/github/actions/workflow/status/psoloi/RutCitrus/workflow.yml)
+
+</div>
 
 When using or creating any of its affiliated plugins or branches in any way, it is sufficient to indicate the source, which is only [GitHub](https://github.com/psoloi/RutCitrusManager)
 
