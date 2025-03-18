@@ -41,25 +41,14 @@ name: .NET 8 Console RCM
 on:
   push:
     branches: [ "master" ]
-    tags: [ "v*" ]  # 打标签时触发 Release 发布
+    tags: [ "v*" ]
   pull_request:
     branches: [ "master" ]
 
 jobs:
   build-and-publish:
-    name: Build & Publish (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        include:
-          - os: ubuntu-latest
-            runtime: linux-x64
-          - os: windows-latest
-            runtime: win-x64
-          - os: macos-latest
-            runtime: osx-x64
-
+    name: Build & Publish (Windows)
+    runs-on: windows-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,28 +59,33 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore
+        run: dotnet restore ./RutCitrusManager/RutCitrusManager.csproj
 
       - name: Build
-        run: dotnet build --configuration Release --no-restore
+        run: dotnet build ./RutCitrusManager/RutCitrusManager.csproj --configuration Release --no-restore
 
-      # 删除 Coverlet 的测试步骤，替换为普通测试
       - name: Test
-        run: dotnet test --configuration Release --no-build --verbosity normal
+        run: dotnet test ./RutCitrusManager/RutCitrusManager.csproj --configuration Release --no-build --verbosity normal
 
       - name: Publish Application
         run: |
-          dotnet publish \
-            -c Release \
-            -o ./publish/${{ matrix.runtime }} \
-            --self-contained true \
-            -r ${{ matrix.runtime }}
+          dotnet publish `
+            ./RutCitrusManager/RutCitrusManager.csproj `
+            -c Release `
+            -o ./publish/win-x64 `
+            --self-contained true `
+            -r win-x64
+
+      - name: List files after publish
+        run: |
+          echo "查看发布目录内容："
+          Get-ChildItem -Path ./publish/win-x64 -Recurse
 
       - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: app-${{ matrix.runtime }}
-          path: ./publish/${{ matrix.runtime }}
+          name: app-win-x64
+          path: ${{ github.workspace }}/publish/win-x64/**/*
 
   create-release:
     name: Create Release
