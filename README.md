@@ -19,6 +19,7 @@ foreach (ManagementObject mo in searcher.Get())
     }
 }
 ```
+> [!WARNING]\
 > This project has already solved this problem. However, some Windows systems may encounter unknown errors. The most likely cause is the absence of certain runtime libraries.
 
 ## Update list
