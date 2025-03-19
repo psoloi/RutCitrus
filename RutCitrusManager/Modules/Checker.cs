@@ -243,7 +243,7 @@ namespace RutCitrusManager.Modules
             }
             Output.Text_Time("[white]所有文件检查完毕[/]", 1);
         }
-        // 临时代码
+        // 临时代码后面将会按情况删除
         public static string CheckDirectory()
         {
             string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;

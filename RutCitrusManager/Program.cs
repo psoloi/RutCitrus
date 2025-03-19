@@ -95,7 +95,8 @@ namespace RutCitrusManager
 
             #region 加载扩展
 
-            Output.Text_Time("[white]加载扩展...(扩展包括但不限于Python、C#源代码文件、可执行程序)[/]", 1);
+            Output.Text_Time("[white]加载扩展...(扩展包括但不限于Python、C#源代码文件、Java、可执行程序)[/]", 1);
+            Extension.Load();
 
 
             #endregion
@@ -166,7 +167,6 @@ namespace RutCitrusManager
             table.AddRow("4", "[white]网页部署[/]", "");
             table.AddRow("5", "[yellow]程序升级[/]", "");
             table.AddRow("6", "[white]程序信息[/]", "");
-            table.AddRow("7", "[white]极域管理[/]", "附加功能");
 
             AnsiConsole.Write(table);
             Console.WriteLine("输入模块编号或(EPid)或命令:");
@@ -190,7 +190,7 @@ namespace RutCitrusManager
                     {
                         Console.Clear();
                         Output.Text_Time("[white]RCM 程序信息[/]", 1);
-                        Output.Text("[white]版本: 2.0.2 作者: psoloi[/]", 1);
+                        Output.Text("[white]版本: 2.0.2a 作者: psoloi[/]", 1);
                         Output.Text("[white]项目: https://github.com/psoloi/RutCitrus [/]", 1);
                         AnsiConsole.Markup("[white][[[/][green]所有程序版本[/][white]]] [/]"+"[white on blue]RCM|2.0.2  RCInterface|1.0  RCWeb|1.0.1 [/] [white on blueviolet].NET(Core)|8.0[/]\n");
 
@@ -255,8 +255,8 @@ namespace RutCitrusManager
             List<string> fileNames = new List<string>
             {
                 "RutCitrusManager.exe",
-                "none2.txt",
-                "none3.txt"
+                "Config.json",
+                "UI_Settings.yaml"
             };
 
             foreach (string fileName in fileNames)

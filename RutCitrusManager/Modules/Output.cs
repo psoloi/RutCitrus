@@ -194,5 +194,10 @@ namespace RutCitrusManager.Modules
                 AnsiConsole.Markup($"[white]{time}[/] " + c_error_cn + msg + "\n");
             }
         }
+        //用于某些特殊情况的错误输出
+        public static void EX(Exception ex)
+        {
+            AnsiConsole.WriteException(ex);
+        }
     }
 }
