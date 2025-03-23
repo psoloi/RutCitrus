@@ -88,7 +88,7 @@ jobs:
           name: app-win-x64
           path: ${{ github.workspace }}/publish/win-x64/**/*
 
-      # 生成唯一标签（格式：release-日期-提交SHA）
+      # 生成唯一标签（PowerShell 语法）
       - name: Generate and push tag
         id: create-tag
         run: |
@@ -108,32 +108,25 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-publish
     permissions:
-      contents: write   # 需要创建 Release 的权限
-      actions: write    # 需要删除旧 Artifacts 的权限
+      contents: write  # 需要创建 Release 的权限
     steps:
-      # 下载构建产物（限定名称避免冲突）
+      # 下载构建产物
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           name: app-win-x64
           path: ./artifacts
 
-      # 删除旧的 Artifacts（按名称清理）
-      - name: Cleanup Old Artifacts
-        uses: geekyegret/delete-artifact@v1
-        with:
-          name: app-win-x64
-
-      # 使用最新生成的标签创建 Release
-      - name: Create Release with Latest Tag
+      # 直接创建 Release（不再清理旧 Artifacts）
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ needs.build-and-publish.outputs.release_tag }}  # 直接使用生成的标签
+          tag_name: ${{ needs.build-and-publish.outputs.release_tag }}
           name: "Release ${{ needs.build-and-publish.outputs.release_tag }}"
           body: |
             🚀 自动生成的 Release，包含最新构建产物。
             【English】Automatically generated Release, including the latest build products.
-            **标签【Tag】**: ${{ needs.build-and-publish.outputs.release_tag }}
-            **提交【Pull】**: ${{ github.sha }}
+            **标签**: ${{ needs.build-and-publish.outputs.release_tag }}
+            **提交**: ${{ github.sha }}
           files: |
             artifacts/**/*
