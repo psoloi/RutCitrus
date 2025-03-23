@@ -129,6 +129,5 @@ jobs:
           body: |
             # 🚀 自动生成的 Release
             此 Release 并非手动创建,其为测试版本通常已经完成测试,如果有Bug请及时帮忙提出
-            **构建时间**: ${{ steps.get-date.outputs.current_time }}
           files: |
             artifacts/rcm-win-x64.zip  # 明确指定 ZIP 文件路径
