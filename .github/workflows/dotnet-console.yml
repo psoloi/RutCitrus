@@ -77,18 +77,20 @@ jobs:
             --self-contained true `
             -r win-x64
 
-      - name: List files after publish
+      # 将所有文件打包为 ZIP (PowerShell 命令)
+      - name: Create ZIP Package
         run: |
-          echo "发布目录内容："
-          Get-ChildItem -Path ./publish/win-x64 -Recurse
+          $zipName = "rcm-win-x64.zip"
+          Compress-Archive -Path ./publish/win-x64/* -DestinationPath ./$zipName
+          echo "ZIP_PATH=$zipName" >> $env:GITHUB_ENV
 
-      - name: Upload Build Artifacts
+      - name: Upload ZIP Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-win-x64
-          path: ${{ github.workspace }}/publish/win-x64/**/*
+          name: rcm-win-x64
+          path: ${{ env.ZIP_PATH }}
 
-      # 生成唯一标签（PowerShell 语法）
+      # 生成唯一标签
       - name: Generate and push tag
         id: create-tag
         run: |
@@ -108,25 +110,23 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-publish
     permissions:
-      contents: write  # 需要创建 Release 的权限
+      contents: write
     steps:
-      # 下载构建产物
-      - name: Download Artifacts
+      - name: Download ZIP Artifact
         uses: actions/download-artifact@v4
         with:
-          name: app-win-x64
+          name: rcm-win-x64
           path: ./artifacts
 
-      # 直接创建 Release（不再清理旧 Artifacts）
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.build-and-publish.outputs.release_tag }}
           name: "Release ${{ needs.build-and-publish.outputs.release_tag }}"
           body: |
-            🚀 自动生成的 Release，包含最新构建产物。
-            【English】Automatically generated Release, including the latest build products.
-            **标签**: ${{ needs.build-and-publish.outputs.release_tag }}
-            **提交**: ${{ github.sha }}
+            🚀 自动生成的 Release，包含完整打包文件
+             > 此 Release 非手动创建,其为测试版本通常已经完成测试,如果有Bug请及时帮忙提出
+             【EN】Automatically generated Release, including the complete packaged file
+            **版本**: ${{ needs.build-and-publish.outputs.release_tag }}
           files: |
-            artifacts/**/*
+            artifacts/rcm-win-x64.zip  # 只上传单个 ZIP 文件
