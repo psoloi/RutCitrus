@@ -77,14 +77,15 @@ jobs:
             --self-contained true `
             -r win-x64
 
-      # 将所有文件打包为 ZIP (PowerShell 命令)
+      # 打包为 ZIP（保留原始文件结构）
       - name: Create ZIP Package
         run: |
           $zipName = "rcm-win-x64.zip"
-          Compress-Archive -Path ./publish/win-x64/* -DestinationPath ./$zipName
+          Compress-Archive -Path "./publish/win-x64/*" -DestinationPath $zipName
           echo "ZIP_PATH=$zipName" >> $env:GITHUB_ENV
 
-      - name: Upload ZIP Artifact
+      # 上传 ZIP 到 Actions Artifacts
+      - name: Upload ZIP to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rcm-win-x64
@@ -112,21 +113,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      # 下载 ZIP 文件（从 Artifacts）
       - name: Download ZIP Artifact
         uses: actions/download-artifact@v4
         with:
           name: rcm-win-x64
           path: ./artifacts
 
+      # 创建 Release 并上传 ZIP 到 Assets
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.build-and-publish.outputs.release_tag }}
           name: "Release ${{ needs.build-and-publish.outputs.release_tag }}"
           body: |
-            🚀 自动生成的 Release，包含完整打包文件
-             > 此 Release 非手动创建,其为测试版本通常已经完成测试,如果有Bug请及时帮忙提出
-             【EN】Automatically generated Release, including the complete packaged file
-            **版本**: ${{ needs.build-and-publish.outputs.release_tag }}
+            # 🚀 自动生成的 Release
+            此 Release 并非手动创建,其为测试版本通常已经完成测试,如果有Bug请及时帮忙提出
+            **构建时间**: ${{ steps.get-date.outputs.current_time }}
           files: |
-            artifacts/rcm-win-x64.zip  # 只上传单个 ZIP 文件
+            artifacts/rcm-win-x64.zip  # 明确指定 ZIP 文件路径
