@@ -71,14 +71,15 @@ jobs:
         run: dotnet test ./RutCitrusManager/RutCitrusManager.csproj --configuration Release --no-build --verbosity normal
 
       - name: Publish Application
-        run: |  # 关键修复点：合并属性参数
+        run: |
           dotnet publish `
             ./RutCitrusManager/RutCitrusManager.csproj `
             -c Release `
             -o ./publish/win-x64 `
-            --self-contained false `
+            --self-contained true `
             --runtime win-x64 `
-            /p:DebugType=None /p:DebugSymbols=false  # 合并到同一行
+            /p:DebugType=None `
+            /p:DebugSymbols=false
 
       - name: Generate build tag
         id: create-tag
@@ -106,7 +107,7 @@ jobs:
               Write-Error "EXE文件未生成: $exePath"
               exit 1
           }
-          Write-Output "生成的可执行文件："
+          Write-Output "生成的可执行文件大小："
           (Get-Item $exePath).Length / 1MB | ForEach-Object { $_.ToString("0.00") + " MB" }
 
       - name: Upload Artifact
@@ -127,15 +128,19 @@ jobs:
           name: app-win-x64
           path: ./release-assets
 
+      - name: Setup current time
+        id: set-time
+        run: echo "TIME=$(date)" >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.build-and-publish.outputs.release_tag }}
-          name: ${{ needs.build-and-publish.outputs.release_tag }}
+          name: Release ${{ needs.build-and-publish.outputs.release_tag }}
           body: |
             🚀 自动构建版本
             - 提交哈希: ${{ github.sha }}
-            - 构建时间: ${{ steps.publish.outputs.timestamp }}
+            - 构建时间: ${{ steps.set-time.outputs.TIME }}
             - 构建标签: ${{ needs.build-and-publish.outputs.release_tag }}
           files: |
             release-assets/RutCitrusManager.exe
