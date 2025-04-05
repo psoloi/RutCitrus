@@ -73,19 +73,26 @@ jobs:
             ./RutCitrusManager/RutCitrusManager.csproj `
             -c Release `
             -o ./publish/win-x64 `
-            --self-contained true `
-            -r win-x64
+            --self-contained false `  # 修改为框架依赖
+            -r win-x64 `
+            /p:DebugType=None `
+            /p:DebugSymbols=false
 
-      - name: List files after publish
+      - name: Verify EXE File
         run: |
-          echo "查看发布目录内容："
-          Get-ChildItem -Path ./publish/win-x64 -Recurse
+          $exePath = "./publish/win-x64/RutCitrusManager.exe"
+          if (-not (Test-Path $exePath)) {
+              Write-Error "EXE文件未生成: $exePath"
+              exit 1
+          }
+          Write-Output "生成的可执行文件："
+          Get-Item $exePath
 
-      - name: Upload Build Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-win-x64
-          path: ${{ github.workspace }}/publish/win-x64/**/*
+          path: ${{ github.workspace }}/publish/win-x64/RutCitrusManager.exe  # 直接上传EXE文件
 
   create-release:
     name: Create Release
@@ -93,16 +100,20 @@ jobs:
     needs: build-and-publish
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - name: Download All Artifacts
+      - name: Download Artifact
         uses: actions/download-artifact@v3
         with:
-          path: ./artifacts
+          name: app-win-x64
+          path: ./release-assets
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref }}
           name: Release ${{ github.ref }}
-          body: Auto-generated release for ${{ github.ref }}
+          body: |
+            🚀 自动生成发布包
+            - 构建时间: ${{ steps.get_timestamp.outputs.time }}
+            - 提交版本: ${{ github.sha }}
           files: |
-            artifacts/**/*
+            release-assets/RutCitrusManager.exe
