@@ -41,7 +41,6 @@ name: .NET 8 Console RCM
 on:
   push:
     branches: [ "master" ]
-    tags: [ "v*" ]
   pull_request:
     branches: [ "master" ]
 
@@ -52,6 +51,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v3
@@ -68,13 +69,13 @@ jobs:
         run: dotnet test ./RutCitrusManager/RutCitrusManager.csproj --configuration Release --no-build --verbosity normal
 
       - name: Publish Application
-        run: |
+        run: |  # 关键修正点：使用正确的PowerShell多行命令格式
           dotnet publish `
             ./RutCitrusManager/RutCitrusManager.csproj `
             -c Release `
             -o ./publish/win-x64 `
-            --self-contained false `  # 修改为框架依赖
-            -r win-x64 `
+            --self-contained false `
+            --runtime win-x64 `  # 使用完整参数名避免歧义
             /p:DebugType=None `
             /p:DebugSymbols=false
 
@@ -85,20 +86,22 @@ jobs:
               Write-Error "EXE文件未生成: $exePath"
               exit 1
           }
-          Write-Output "生成的可执行文件："
-          Get-Item $exePath
+          Write-Output "生成的可执行文件大小："
+          (Get-Item $exePath).Length / 1MB | ForEach-Object { $_.ToString("0.00") + " MB" }
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-win-x64
-          path: ${{ github.workspace }}/publish/win-x64/RutCitrusManager.exe  # 直接上传EXE文件
+          path: ${{ github.workspace }}/publish/win-x64/RutCitrusManager.exe
 
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
     needs: build-and-publish
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: |
+      needs.build-and-publish.outputs.create-tag.tag_created == 'true' &&
+      startsWith(needs.build-and-publish.outputs.create-tag.tag, 'release-')
     steps:
       - name: Download Artifact
         uses: actions/download-artifact@v3
@@ -109,11 +112,11 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
-          name: Release ${{ github.ref }}
+          tag_name: ${{ needs.build-and-publish.outputs.create-tag.tag }}
+          name: Release ${{ needs.build-and-publish.outputs.create-tag.tag }}
           body: |
-            🚀 自动生成发布包
-            - 构建时间: ${{ steps.get_timestamp.outputs.time }}
-            - 提交版本: ${{ github.sha }}
+            🚀 自动构建版本
+            - 提交哈希: ${{ github.sha }}
+            - 构建时间: ${{ steps.publish.outputs.timestamp }}
           files: |
             release-assets/RutCitrusManager.exe
