@@ -48,6 +48,8 @@ jobs:
   build-and-publish:
     name: Build & Publish (Windows)
     runs-on: windows-latest
+    outputs:
+      release_tag: ${{ steps.create-tag.outputs.tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -69,15 +71,33 @@ jobs:
         run: dotnet test ./RutCitrusManager/RutCitrusManager.csproj --configuration Release --no-build --verbosity normal
 
       - name: Publish Application
-        run: |  # 关键修正点：使用正确的PowerShell多行命令格式
+        run: |  # 关键修复点：合并属性参数
           dotnet publish `
             ./RutCitrusManager/RutCitrusManager.csproj `
             -c Release `
             -o ./publish/win-x64 `
             --self-contained false `
-            --runtime win-x64 `  # 使用完整参数名避免歧义
-            /p:DebugType=None `
-            /p:DebugSymbols=false
+            --runtime win-x64 `
+            /p:DebugType=None /p:DebugSymbols=false  # 合并到同一行
+
+      - name: Generate build tag
+        id: create-tag
+        if: github.ref == 'refs/heads/master'
+        run: |
+          $commitSha = git rev-parse --short HEAD
+          $dateStr = Get-Date -Format "yyyyMMdd-HHmmss"
+          $tagName = "release-$dateStr-$commitSha"
+          
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # 检查并推送标签
+          git tag -f $tagName
+          git push origin $tagName --force
+          
+          echo "tag=$tagName" >> $env:GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify EXE File
         run: |
@@ -86,7 +106,7 @@ jobs:
               Write-Error "EXE文件未生成: $exePath"
               exit 1
           }
-          Write-Output "生成的可执行文件大小："
+          Write-Output "生成的可执行文件："
           (Get-Item $exePath).Length / 1MB | ForEach-Object { $_.ToString("0.00") + " MB" }
 
       - name: Upload Artifact
@@ -99,9 +119,7 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: build-and-publish
-    if: |
-      needs.build-and-publish.outputs.create-tag.tag_created == 'true' &&
-      startsWith(needs.build-and-publish.outputs.create-tag.tag, 'release-')
+    if: ${{ needs.build-and-publish.outputs.release_tag != '' }}
     steps:
       - name: Download Artifact
         uses: actions/download-artifact@v3
@@ -112,11 +130,12 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ needs.build-and-publish.outputs.create-tag.tag }}
-          name: Release ${{ needs.build-and-publish.outputs.create-tag.tag }}
+          tag_name: ${{ needs.build-and-publish.outputs.release_tag }}
+          name: ${{ needs.build-and-publish.outputs.release_tag }}
           body: |
             🚀 自动构建版本
             - 提交哈希: ${{ github.sha }}
             - 构建时间: ${{ steps.publish.outputs.timestamp }}
+            - 构建标签: ${{ needs.build-and-publish.outputs.release_tag }}
           files: |
             release-assets/RutCitrusManager.exe
