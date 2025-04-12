@@ -141,7 +141,7 @@ namespace RutCitrusManager
             {
                 Console.Clear();
                 Output.Text("[white]程序重新加载...[/]", 1);
-                Reload.Rest();
+                Reload.Restart();
             }
             else
             {
@@ -169,7 +169,7 @@ namespace RutCitrusManager
             table.AddRow("6", "[white]程序信息[/]", "");
 
             AnsiConsole.Write(table);
-            Console.WriteLine("输入模块编号或(EPid)或命令:");
+            Console.WriteLine("输入模块编号或(EPid)或命令：");
             string? selInput = null;
             selInput = Console.ReadLine();
             // 选择模块输入
@@ -198,18 +198,18 @@ namespace RutCitrusManager
                         bool is64BitOperatingSystem = Environment.Is64BitOperatingSystem;
                         bool is64BitProcess = Environment.Is64BitProcess;
 
-                        Console.WriteLine("操作系统位数: " + (is64BitOperatingSystem ? "64位" : "32位"));
-                        Console.WriteLine("当前进程位数: " + (is64BitProcess ? "64位" : "32位"));
+                        Console.WriteLine("操作系统位数： " + (is64BitOperatingSystem ? "64位" : "32位"));
+                        Console.WriteLine("当前进程位数： " + (is64BitProcess ? "64位" : "32位"));
 
                         // 获取系统信息
                         string osVersion = Environment.OSVersion.VersionString;
                         string machineName = Environment.MachineName;
                         string frameworkDescription = Environment.Version.ToString();
 
-                        Console.WriteLine("操作系统版本: " + osVersion);
-                        Console.WriteLine("当前 .NET 版本: " + frameworkDescription);
+                        Console.WriteLine("操作系统版本： " + osVersion);
+                        Console.WriteLine("当前 .NET 版本： " + frameworkDescription);
 
-                        Console.WriteLine("语音结构: \n");
+                        Console.WriteLine("语音结构： \n");
                         AnsiConsole.Write(new BreakdownChart()
                             .Width(100)
                             .AddItem("C#", 80, Color.Green)
@@ -233,7 +233,7 @@ namespace RutCitrusManager
             {
                 Output.Text("[yellow]不存在的模块！[/]", 2);
                 Thread.Sleep(TimeSpan.FromSeconds(1));
-                Reload.Rest();
+                Reload.Restart();
             }
         }
 
@@ -250,7 +250,7 @@ namespace RutCitrusManager
 
         public static void GetInfo()
         {
-            Console.WriteLine("核心文件目录状态: \n");
+            Console.WriteLine("核心文件目录状态： \n");
             string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
             List<string> fileNames = new List<string>
             {

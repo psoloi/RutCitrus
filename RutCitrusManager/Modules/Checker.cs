@@ -28,7 +28,7 @@ namespace RutCitrusManager.Modules
             }
             else
             {
-                Output.Text_Time("[yellow]当前系统版本可能不支持运行所有SDK功能![/]", 2);
+                Output.Text_Time("[yellow]当前系统版本可能不支持运行所有SDK功能！[/]", 2);
             }
         }
 
@@ -166,7 +166,7 @@ namespace RutCitrusManager.Modules
             string dataDirectory = Path.Combine(baseDirectory, "Data");
             string extensionDirectory = Path.Combine(baseDirectory, "Extension");
             string configFilePath = Path.Combine(baseDirectory, "Config.json");
-            string exeFilePath = Path.Combine(baseDirectory, "RutCitrusManager.exe");
+            string dllFilePath = Path.Combine(baseDirectory, "RutCitrusManager.dll");
             string uiSettingsFilePath = Path.Combine(baseDirectory, "UI_Settings.yaml");
 
             try
@@ -222,10 +222,10 @@ namespace RutCitrusManager.Modules
                     Output.Text_Time("[white]UI_Settings配置文件已创建[/]", 1);
                 }
 
-                // 检查RutCitrusManager.exe文件
-                if (!File.Exists(exeFilePath))
+                // 检查RutCitrusManager.dll文件
+                if (!File.Exists(dllFilePath))
                 {
-                    Output.Text_Time("[red]核心文件不全![/]", 3);
+                    Output.Text_Time("[red]核心文件不全！[/]", 3);
                     throw new FileNotFoundException("核心文件缺失");
                 }
 
@@ -233,7 +233,7 @@ namespace RutCitrusManager.Modules
                 if (!File.Exists(Path.Combine(Environment.SystemDirectory, "user32.dll")) ||
                     !File.Exists(Path.Combine(Environment.SystemDirectory, "kernel32.dll")))
                 {
-                    Output.Text_Time("系统DLL文件缺失!", 3);
+                    Output.Text_Time("系统DLL文件缺失！", 3);
                     throw new FileNotFoundException("系统DLL文件缺失");
                 }
             }
@@ -303,7 +303,7 @@ namespace RutCitrusManager.Modules
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"创建 {item} 时发生错误: {ex.Message}");
+                        Console.WriteLine($"创建 {item} 时发生错误： {ex.Message}");
                     }
                 }
             }
@@ -329,7 +329,7 @@ namespace RutCitrusManager.Modules
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"删除 {item} 时发生错误: {ex.Message}");
+                        Console.WriteLine($"删除 {item} 时发生错误： {ex.Message}");
                     }
                 }
                 else if (Directory.Exists(fullPath))
@@ -341,7 +341,7 @@ namespace RutCitrusManager.Modules
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"删除 {item} 时发生错误: {ex.Message}");
+                        Console.WriteLine($"删除 {item} 时发生错误： {ex.Message}");
                     }
                 }
                 else

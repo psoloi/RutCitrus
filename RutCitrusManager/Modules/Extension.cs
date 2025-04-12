@@ -20,7 +20,7 @@ namespace RutCitrusManager.Modules
 
                 if (!File.Exists(configPath))
                 {
-                    Output.Text_Time("[[Extension]][red]配置文件不存在![/]", 3);
+                    Output.Text_Time("[[Extension]][red]配置文件不存在！[/]", 3);
                     return;
                 }
 
@@ -32,7 +32,7 @@ namespace RutCitrusManager.Modules
                 var enable = json["Extension"]?["Enable"]?.Value<bool>();
                 if (enable != true)
                 {
-                    Output.Text_Time("[[Extension]][yellow]扩展功能未启用![/]", 2);
+                    Output.Text_Time("[[Extension]][yellow]扩展功能未启用！[/]", 2);
                     return;
                 }
 
@@ -44,7 +44,7 @@ namespace RutCitrusManager.Modules
 
                 if (exeFiles == null || !exeFiles.Any())
                 {
-                    Output.Text_Time("[[Extension]][white]未加载到任何插件.[/]", 1);
+                    Output.Text_Time("[[Extension]][white]未加载到任何插件。[/]", 1);
                     return;
                 }
 
@@ -52,7 +52,7 @@ namespace RutCitrusManager.Modules
                 var extensionPath = Path.Combine(baseDirectory, "Extension");
                 if (!Directory.Exists(extensionPath))
                 {
-                    Output.Text_Time("[[Extension]][red]扩展目录不存在![/]", 3);
+                    Output.Text_Time("[[Extension]][red]扩展目录不存在！[/]", 3);
                     return;
                 }
 
@@ -63,11 +63,11 @@ namespace RutCitrusManager.Modules
 
                     if (!File.Exists(fullPath))
                     {
-                        Output.Text_Time($"[[Extension]][red]找不到文件:[/] [yellow]{exe}[/]", 3);
+                        Output.Text_Time($"[[Extension]][red]找不到文件：[/] [yellow]{exe}[/]", 3);
                         continue;
                     }
 
-                    Output.Text_Time($"[[Extension]][white]正在加载插件:[/] [green]{exe}[/]", 1);
+                    Output.Text_Time($"[[Extension]][white]正在加载插件：[/] [green]{exe}[/]", 1);
 
                     try
                     {
@@ -81,13 +81,13 @@ namespace RutCitrusManager.Modules
                     }
                     catch (Exception ex)
                     {
-                        Output.Text_Time($"[[Extension-{exe}]][white]加载插件失败:[/] [red]{ex.Message}[/]", 3);
+                        Output.Text_Time($"[[Extension-{exe}]][white]加载插件失败：[/] [red]{ex.Message}[/]", 3);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Output.Text_Time($"[[Extension]][red]加载插件时发生错误: [/]", 3);
+                Output.Text_Time($"[[Extension]][red]加载插件时发生错误： [/]", 3);
                 Output.EX(ex);
 
             }
@@ -102,7 +102,7 @@ namespace RutCitrusManager.Modules
 
                 if (!File.Exists(configPath))
                 {
-                    Output.Text_Time("[[Extension]][red]配置文件不存在![/]", 3);
+                    Output.Text_Time("[[Extension]][red]配置文件不存在！[/]", 3);
                     return;
                 }
 
@@ -114,7 +114,7 @@ namespace RutCitrusManager.Modules
                 var enable = json["Extension"]?["Enable"]?.Value<bool>();
                 if (enable != true)
                 {
-                    Output.Text_Time("[[Extension]][yellow]扩展功能未启用![/]", 2);
+                    Output.Text_Time("[[Extension]][yellow]扩展功能未启用！[/]", 2);
                     return;
                 }
 
@@ -126,7 +126,7 @@ namespace RutCitrusManager.Modules
 
                 if (exeFiles == null || !exeFiles.Any())
                 {
-                    Output.Text_Time("[[Extension]][white]未加载到任何插件.[/]", 1);
+                    Output.Text_Time("[[Extension]][white]未加载到任何插件。[/]", 1);
                     return;
                 }
 
@@ -134,7 +134,7 @@ namespace RutCitrusManager.Modules
                 var extensionPath = Path.Combine(baseDirectory, "Extension");
                 if (!Directory.Exists(extensionPath))
                 {
-                    Output.Text_Time("[[Extension]][red]扩展目录不存在![/]", 3);
+                    Output.Text_Time("[[Extension]][red]扩展目录不存在！[/]", 3);
                     return;
                 }
 
@@ -145,11 +145,11 @@ namespace RutCitrusManager.Modules
 
                     if (!File.Exists(fullPath))
                     {
-                        Output.Text_Time($"[[Extension]][red]找不到文件:[/] [yellow]{exe}[/]", 3);
+                        Output.Text_Time($"[[Extension]][red]找不到文件：[/] [yellow]{exe}[/]", 3);
                         continue;
                     }
 
-                    Output.Text_Time($"[[Extension]][white]正在加载插件:[/] [green]{exe}[/]", 1);
+                    Output.Text_Time($"[[Extension]][white]正在加载插件：[/] [green]{exe}[/]", 1);
 
                     try
                     {
@@ -163,13 +163,13 @@ namespace RutCitrusManager.Modules
                     }
                     catch (Exception ex)
                     {
-                        Output.Text_Time($"[[Extension-{exe}]][white]加载插件失败:[/] [red]{ex.Message}[/]", 3);
+                        Output.Text_Time($"[[Extension-{exe}]][white]加载插件失败：[/] [red]{ex.Message}[/]", 3);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Output.Text_Time($"[[Extension]][red]加载插件时发生错误: [/]", 3);
+                Output.Text_Time($"[[Extension]][red]加载插件时发生错误： [/]", 3);
                 Output.EX(ex);
 
             }

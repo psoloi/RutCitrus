@@ -77,9 +77,9 @@ namespace RutCitrusManager.Modules
         public static void TextBlock(string msg, int msg_type)
         {
             string time = DateTime.Now.ToString("HH:mm:ss");
-            string info = $"[white on dodgerblue2]{time}[/]" + "[black on green]信息:[/] ";
-            string error = $"[white on dodgerblue2]{time}[/]" + "[black on red]错误:[/] ";
-            string warn = $"[white on dodgerblue2]{time}[/]" + "[black on gold1]警告:[/] ";
+            string info = $"[white on dodgerblue2]{time}[/]" + "[black on green]信息：[/] ";
+            string error = $"[white on dodgerblue2]{time}[/]" + "[black on red]错误：[/] ";
+            string warn = $"[white on dodgerblue2]{time}[/]" + "[black on gold1]警告：[/] ";
             if (msg_type == 1)
             {
                 AnsiConsole.Markup(info + msg + "\n");
