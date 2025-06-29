@@ -48,4 +48,8 @@
     <Folder Include="Modules\Unit\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Rt\Rt.csproj" />
+  </ItemGroup>
+
 </Project>

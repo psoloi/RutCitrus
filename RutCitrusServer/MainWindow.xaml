@@ -1,0 +1,69 @@
+﻿<Window
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:RutCitrusServer"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        x:Class="RutCitrusServer.MainWindow"
+        mc:Ignorable="d"
+        Title="RutCitrusServer" Height="650" Width="950"
+        WindowStartupLocation="CenterScreen">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <!-- 汉堡栏宽度，通常为60px（收起）或200-240px（展开），这里用240px -->
+            <ColumnDefinition Width="240" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- 左侧汉堡栏（用标准WPF控件实现） -->
+        <StackPanel Grid.Column="0" Background="#FF2D2D30">
+            <TextBlock Text="菜单" Foreground="White" FontWeight="Bold" FontSize="18" Margin="16,16,0,24"/>
+            <ui:Button Margin="8" Height="40" HorizontalAlignment="Stretch" Click="HomeButton_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="🏠" FontSize="16" Margin="0,0,8,0"/>
+                    <TextBlock Text="主页" FontSize="16"/>
+                </StackPanel>
+            </ui:Button>
+            <ui:Button Margin="8" Height="40" HorizontalAlignment="Stretch" Click="FeatureButton_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="🛠️" FontSize="16" Margin="0,0,8,0"/>
+                    <TextBlock Text="功能" FontSize="16"/>
+                </StackPanel>
+            </ui:Button>
+            <ui:Button Margin="8" Height="40" HorizontalAlignment="Stretch" Click="ExtensionButton_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="🧩" FontSize="16" Margin="0,0,8,0"/>
+                    <TextBlock Text="扩展" FontSize="16"/>
+                </StackPanel>
+            </ui:Button>
+            <ui:Button Margin="8" Height="40" HorizontalAlignment="Stretch" Click="SettingButton_Click">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="⚙️" FontSize="16" Margin="0,0,8,0"/>
+                    <TextBlock Text="设置" FontSize="16"/>
+                </StackPanel>
+            </ui:Button>
+        </StackPanel>
+
+        <!-- 主内容区 -->
+        <Grid Grid.Column="1">
+            <StackPanel x:Name="HomePanel" Visibility="Visible">
+                <TextBlock Text="主页" FontSize="12" FontWeight="Bold" Margin="16,16,0,0"/>
+                <!-- 主页内容 -->
+            </StackPanel>
+            <StackPanel x:Name="FeaturePanel" Visibility="Collapsed">
+                <TextBlock Text="功能" FontSize="12" FontWeight="Bold" Margin="16,16,0,0"/>
+                <!-- 功能内容 -->
+            </StackPanel>
+            <StackPanel x:Name="ExtensionPanel" Visibility="Collapsed">
+                <TextBlock Text="扩展" FontSize="12" FontWeight="Bold" Margin="16,16,0,0"/>
+                <!-- 扩展内容 -->
+            </StackPanel>
+            <StackPanel x:Name="SettingPanel" Visibility="Collapsed">
+                <TextBlock Text="设置" FontSize="12" FontWeight="Bold" Margin="16,16,0,0"/>
+                <!-- 设置内容 -->
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>
+
