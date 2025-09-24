@@ -28,7 +28,7 @@ namespace Rt
             Console.WriteLine("ArpSpoofer.Start: 开始初始化...");
             targetIp = target;
             gatewayIp = gateway;
-            
+
             // 选择合适的网络设备
             selectedDevice = SelectProperDevice(gateway);
             if (selectedDevice == null)
@@ -191,7 +191,7 @@ namespace Rt
                     
                     // 使用ArpLookup获取MAC地址
                     Console.WriteLine($"GetGatewayMacAddress: 使用ArpLookup获取网关 {gateway} 的MAC地址...");
-                    string? macAddress = ArpLookup.Arp.Lookup(gateway);
+                    string? macAddress = ArpLookup.Arp.Lookup(gateway)?.ToString();
                     
                     if (!string.IsNullOrEmpty(macAddress))
                     {
@@ -396,7 +396,7 @@ namespace Rt
                     string? targetMacStr = null;
                     if (targetIp != null)
                     {
-                        targetMacStr = Arp.Lookup(targetIp);
+                        targetMacStr = Arp.Lookup(targetIp)?.ToString();
                     }
                     
                     if (!string.IsNullOrEmpty(targetMacStr))
