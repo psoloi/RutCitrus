@@ -1,6 +1,7 @@
 ﻿using Spectre.Console;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -36,6 +37,9 @@ namespace RtCli.Modules
         }
 
         // 为基础输出 格式[时;分;秒] |信息| [线程Main/XXX - Task] (调用程序名称) 消息
+        /// <summary>
+        /// 该方法用于所有的非错误日志输出
+        /// </summary>
         public static void Log(string msg, int msg_type, string name)
         {
             string time = DateTime.Now.ToString("HH:mm:ss");
@@ -55,9 +59,10 @@ namespace RtCli.Modules
 
 
         //用于某些特殊情况的错误输出
-        //public static void EX(Exception ex)
-        //{
-        //    AnsiConsole.WriteException(ex);
-        //}
+        [RequiresDynamicCode("Calls RtCli.Modules.Output.EX(Exception)")]
+        public static void EX(Exception ex)
+        {
+            AnsiConsole.WriteException(ex);
+        }
     }
 }

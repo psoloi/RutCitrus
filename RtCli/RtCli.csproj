@@ -7,7 +7,12 @@
     <Nullable>enable</Nullable>
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationIcon>rc.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="rc.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
@@ -24,7 +29,6 @@
     <Folder Include="Content\Data\" />
     <Folder Include="Content\Extension\" />
     <Folder Include="Modules\Function\" />
-    <Folder Include="Modules\Mode\" />
     <Folder Include="Modules\Unit\" />
   </ItemGroup>
 
