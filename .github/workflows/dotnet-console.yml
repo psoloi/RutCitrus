@@ -62,18 +62,18 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore ./RutCitrusManager/RutCitrusManager.csproj
+        run: dotnet restore ./RutCitrus/RtCli.csproj
 
       - name: Build
-        run: dotnet build ./RutCitrusManager/RutCitrusManager.csproj --configuration Release --no-restore
+        run: dotnet build ./RutCitrus/RtCli.csproj --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test ./RutCitrusManager/RutCitrusManager.csproj --configuration Release --no-build --verbosity normal
+        run: dotnet test ./RutCitrus/RtCli.csproj --configuration Release --no-build --verbosity normal
 
       - name: Publish Application
         run: |
           dotnet publish `
-            ./RutCitrusManager/RutCitrusManager.csproj `
+            ./RutCitrus/RtCli.csproj `
             -c Release `
             -o ./publish/win-x64 `
             --self-contained true `
@@ -102,7 +102,7 @@ jobs:
 
       - name: Verify EXE File
         run: |
-          $exePath = "./publish/win-x64/RutCitrusManager.exe"
+          $exePath = "./publish/win-x64/RtCli.exe"
           if (-not (Test-Path $exePath)) {
               Write-Error "EXE文件未生成: $exePath"
               exit 1
@@ -114,7 +114,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-win-x64
-          path: ./publish/win-x64/RutCitrusManager.exe
+          path: ./publish/win-x64/RtCli.exe
 
   create-release:
     name: Create Release
@@ -143,4 +143,5 @@ jobs:
             - 构建时间: ${{ steps.set-time.outputs.TIME }}
             - 构建标签: ${{ needs.build-and-publish.outputs.release_tag }}
           files: |
-            release-assets/RutCitrusManager.exe
+            release-assets/RtCli.exe
+            release-assets/RtCli.dll

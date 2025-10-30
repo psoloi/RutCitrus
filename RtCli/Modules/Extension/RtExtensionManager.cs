@@ -137,8 +137,7 @@ namespace RtExtensionManager
                             Info = info
                         };
 
-                        Output.Log($"加载扩展成功: {extension.Name} v{extension.Version}", 1, "RtExtensionManager");
-                        Output.Log($"✅ 加载扩展成功: {extension.Name} v{extension.Version}", 1, "RtExtensionManager");
+                        Output.Log($"[green]√[/] 加载扩展成功: {extension.Name} Ver:{extension.Version}", 1, "RtExtensionManager");
                         Output.Log($"   描述: {extension.Description}", 1, "RtExtensionManager");
                         return true;
                     }
@@ -177,12 +176,12 @@ namespace RtExtensionManager
                 var context = kvp.Value;
                 try
                 {
-                    Output.Log($"🚀 运行扩展: {context.Info.Name}", 1, "RtExtensionManager");
+                    Output.Log($"》 运行扩展: {context.Info.Name}", 1, "RtExtensionManager");
                     context.Extension.Run();
                 }
                 catch (Exception ex)
                 {
-                    Output.Log($"❌ 运行扩展失败 {context.Info.Name}: {ex.Message}", 1, "RtExtensionManager");
+                    Output.Log($"× 运行扩展失败 {context.Info.Name}: {ex.Message}", 1, "RtExtensionManager");
                 }
             }
 
@@ -239,12 +238,12 @@ namespace RtExtensionManager
                     GC.Collect();
                     GC.WaitForPendingFinalizers();
 
-                    Output.Log($"✅ 卸载扩展成功: {context.Info.Name}", 1, "RtExtensionManager");
+                    Output.Log($"√ 卸载扩展成功: {context.Info.Name}", 1, "RtExtensionManager");
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    Output.Log($"❌ 卸载扩展失败 {context.Info.Name}: {ex.Message}", 1, "RtExtensionManager");
+                    Output.Log($"× 卸载扩展失败 {context.Info.Name}: {ex.Message}", 1, "RtExtensionManager");
                     return false;
                 }
             }
@@ -272,13 +271,13 @@ namespace RtExtensionManager
                 return;
             }
 
-            Output.Log($"\n📊 已加载的扩展 ({_loadedExtensions.Count} 个):", 1, "RtExtensionManager");
+            Output.Log($"\n* - 已加载的扩展 ({_loadedExtensions.Count} 个):", 1, "RtExtensionManager");
             Output.Log(new string('=', 60), 1, "RtExtensionManager");
 
             foreach (var kvp in _loadedExtensions)
             {
                 var info = kvp.Value.Info;
-                Output.Log($"🔹 {info.Name} v{info.Version}", 1, "RtExtensionManager");
+                Output.Log($"[[]] {info.Name} Ver:{info.Version}", 1, "RtExtensionManager");
                 Output.Log($"   描述: {info.Description}", 1, "RtExtensionManager");
                 Output.Log($"   程序集: {Path.GetFileName(info.AssemblyPath)}", 1, "RtExtensionManager");
                 Output.Log($"   加载时间: {info.LoadTime:yyyy-MM-dd HH:mm:ss}", 1, "RtExtensionManager");
@@ -291,7 +290,7 @@ namespace RtExtensionManager
         /// </summary>
         private class ExtensionContext
         {
-            public ExtensionLoadContext Context { get; set; }
+            public ExtensionLoadContext? Context { get; set; }
             public IExtension Extension { get; set; }
             public ExtensionInfo Info { get; set; }
         }

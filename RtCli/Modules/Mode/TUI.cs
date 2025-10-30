@@ -1,324 +1,225 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Terminal.Gui;
 
-
 namespace RtCli.Modules.Mode
 {
     class TUI
     {
+        private static Process currentProcess;
+        private static Label memoryLabel;
+        private static ProgressBar memoryProgressBar;
+        private static FrameView mainContent;
+
         public static void Run()
         {
-            // 初始化全局异常处理
-            BiosExceptionHandler.Initialize();
+            currentProcess = Process.GetCurrentProcess();
 
-            // 启动Terminal.Gui应用
+            // 初始化Terminal.Gui应用
             Application.Init();
 
-            // 设置BIOS风格主题
-            SetBiosTheme();
-
             // 创建主窗口
-            var mainWindow = CreateMainWindow();
+            var top = Application.Top;
+
+            // 创建菜单栏
+            var menu = CreateMenuBar();
+            top.Add(menu);
+
+            // 创建主内容区域
+            mainContent = new FrameView("Main")
+            {
+                X = 0,
+                Y = 1, // 位于菜单栏下方
+                Width = Dim.Fill(),
+                Height = Dim.Fill()
+            };
+
+            // 初始化主页内容
+            UpdateMainPage();
+            top.Add(mainContent);
+
+            // 启动定时更新性能数据的任务
+            StartPerformanceMonitoring();
 
             // 运行应用
-            Application.Run(mainWindow);
-
+            Application.Run();
             Application.Shutdown();
         }
 
-        static void SetBiosTheme()
+        private static MenuBar CreateMenuBar()
         {
-            // BIOS经典蓝底白字配色
-            var biosScheme = new ColorScheme()
+            var menuItems = new MenuBarItem[]
             {
-                Normal = Application.Driver.MakeAttribute(Color.White, Color.Blue),
-                Focus = Application.Driver.MakeAttribute(Color.BrightYellow, Color.DarkGray),
-                HotNormal = Application.Driver.MakeAttribute(Color.BrightCyan, Color.Blue),
-                HotFocus = Application.Driver.MakeAttribute(Color.BrightYellow, Color.DarkGray),
-                Disabled = Application.Driver.MakeAttribute(Color.Gray, Color.Blue)
+                new MenuBarItem ("_Main", new MenuItem[]
+                {
+                    new MenuItem ("_View Main", "F1", () => ShowMainPage())
+                }),
+                new MenuBarItem ("_Menu", new MenuItem[]
+                {
+                    new MenuItem ("_Item 1", "", () => ShowMenuItem("Menu Item 1")),
+                    new MenuItem ("_Item 2", "", () => ShowMenuItem("Menu Item 2")),
+                    new MenuItem ("_Exit", "Ctrl+Q", () => Application.RequestStop())
+                }),
+                new MenuBarItem ("_Plugins", new MenuItem[]
+                {
+                    new MenuItem ("_Plugin Manager", "", () => ShowMenuItem("Plugin Manager")),
+                    new MenuItem ("_Install Plugin", "", () => ShowMenuItem("Install Plugin"))
+                }),
+                new MenuBarItem ("_Settings", new MenuItem[]
+                {
+                    new MenuItem ("_Basic Settings", "", () => ShowMenuItem("Basic Settings")),
+                    new MenuItem ("_Advanced Settings", "", () => ShowMenuItem("Advanced Settings"))
+                }),
+                new MenuBarItem ("_About", new MenuItem[]
+                {
+                    new MenuItem ("_About RtCli", "", () => ShowMenuItem("About RtCli"))
+                })
             };
 
-            // 应用到各种控件
-            Colors.Base = biosScheme;
-            Colors.Dialog = biosScheme;
-            Colors.Menu = biosScheme;
-            Colors.Error = biosScheme;
-
-            // 对话框颜色
-            Colors.Dialog.Normal = Application.Driver.MakeAttribute(Color.White, Color.Blue);
-            Colors.TopLevel.Normal = Application.Driver.MakeAttribute(Color.White, Color.Blue);
+            return new MenuBar(menuItems);
         }
 
-        static Window CreateMainWindow()
+        private static void ShowMainPage()
         {
-            var window = new Window("BIOS风格异常处理器 v1.0")
-            {
-                X = 0,
-                Y = 1,
-                Width = Dim.Fill(),
-                Height = Dim.Fill(),
-                ColorScheme = Colors.Base
-            };
+            mainContent.Title = "Main";
+            UpdateMainPage();
+        }
 
-            // 标题栏
-            var title = new Label("┌────────────────────────────────────────────────────────┐")
-            {
-                X = 0,
-                Y = 0
-            };
-            var title2 = new Label("│             全局异常监控系统 - 运行中                │")
-            {
-                X = 0,
-                Y = 1
-            };
-            var title3 = new Label("└────────────────────────────────────────────────────────┘")
-            {
-                X = 0,
-                Y = 2
-            };
+        private static void ShowMenuItem(string title)
+        {
+            mainContent.Title = title;
+            // 为About页面添加特殊内容
+            mainContent.RemoveAll();
 
-            // 状态信息
-            var status = new Label("系统状态: 正常监控中...")
+            if (title == "About RtCli")
+            {
+                var authorLabel = new Label("Author: psoloi")
+                {
+                    X = Pos.Center(),
+                    Y = Pos.Center() - 2
+                };
+                
+                var descriptionLabel = new Label("RtCli is a sub-project of RutCitrus")
+                {
+                    X = Pos.Center(),
+                    Y = Pos.Center()
+                };
+                
+                var descriptionLabel2 = new Label("providing framework for other projects")
+                {
+                    X = Pos.Center(),
+                    Y = Pos.Center() + 1
+                };
+                
+                var versionLabel = new Label("Version: 1.2510.26.11")
+                {
+                    X = Pos.Center(),
+                    Y = Pos.Center() + 3
+                };
+                
+                mainContent.Add(authorLabel, descriptionLabel, descriptionLabel2, versionLabel);
+            }
+            else
+            {
+                // Add placeholder text for other menu items
+                var label = new Label($"You selected: {title}")
+                {
+                    X = Pos.Center(),
+                    Y = Pos.Center()
+                };
+                mainContent.Add(label);
+            }
+            
+            mainContent.SetNeedsDisplay();
+        }
+
+        private static void UpdateMainPage()
+        {
+            // 清空当前内容
+            mainContent.RemoveAll();
+
+            // 创建性能信息标签
+            memoryLabel = new Label("Memory Usage: Calculating...") { X = 2, Y = 2 };
+
+            memoryProgressBar = new ProgressBar()
             {
                 X = 2,
-                Y = 4
+                Y = 3,
+                Width = 40,
+                Fraction = 0
             };
 
-            // 测试按钮
-            var btnAppDomainException = new Button("触发 AppDomain 异常")
+            // 添加到主内容区域
+            mainContent.Add(memoryLabel, memoryProgressBar);
+
+            // 添加一些额外信息
+            var appInfoLabel = new Label($"Application: {currentProcess.ProcessName}") { X = 2, Y = 7 };
+            var pidLabel = new Label($"Process ID: {currentProcess.Id}") { X = 2, Y = 8 };
+            var startTimeLabel = new Label($"Start Time: {currentProcess.StartTime}") { X = 2, Y = 9 };
+
+            mainContent.Add(appInfoLabel, pidLabel, startTimeLabel);
+            mainContent.SetNeedsDisplay();
+
+            // 立即更新一次性能数据
+            UpdatePerformanceData();
+        }
+
+        private static void StartPerformanceMonitoring()
+        {
+            Task.Run(async () =>
             {
-                X = 2,
-                Y = 6
-            };
+                while (Application.Top.Running)
+                {
+                    UpdatePerformanceData();
+                    await Task.Delay(1000); // 每秒更新一次
+                }
+            });
+        }
 
-            var btnTaskException = new Button("触发 Task 异常")
+        private static void UpdatePerformanceData()
+        {
+            try
             {
-                X = 25,
-                Y = 6
-            };
+                currentProcess.Refresh();
 
-            var btnUnobservedTaskException = new Button("触发未观察Task异常")
-            {
-                X = 2,
-                Y = 8
-            };
+                // 获取内存使用情况
+                long memoryUsage = currentProcess.WorkingSet64;
+                string memoryText = $"Memory Usage: {FormatBytes(memoryUsage)}";
+                
+                // 估计系统总内存（简化版本，实际应用可能需要更准确的方法）
+                long totalMemory = Environment.WorkingSet * 10; // 简化估计
+                double memoryPercentage = (double)memoryUsage / totalMemory;
 
-            var btnExit = new Button("退出系统")
-            {
-                X = 25,
-                Y = 8
-            };
-
-            // 日志区域
-            var logFrame = new FrameView("异常日志")
-            {
-                X = 2,
-                Y = 10,
-                Width = Dim.Fill() - 2,
-                Height = Dim.Fill() - 2
-            };
-
-            var logView = new TextView()
-            {
-                X = 0,
-                Y = 0,
-                Width = Dim.Fill(),
-                Height = Dim.Fill(),
-                ReadOnly = true
-            };
-
-            logFrame.Add(logView);
-
-            // 按钮事件
-            btnAppDomainException.Clicked += () =>
-            {
-                BiosExceptionHandler.TestAppDomainException();
-            };
-
-            btnTaskException.Clicked += () =>
-            {
-                BiosExceptionHandler.TestTaskException();
-            };
-
-            btnUnobservedTaskException.Clicked += () =>
-            {
-                BiosExceptionHandler.TestUnobservedTaskException();
-            };
-
-            btnExit.Clicked += () =>
-            {
-                Application.RequestStop();
-            };
-
-            // 添加到窗口
-            window.Add(title, title2, title3, status,
-                      btnAppDomainException, btnTaskException,
-                      btnUnobservedTaskException, btnExit, logFrame);
-
-            // 设置日志回调
-            BiosExceptionHandler.SetLogCallback((msg) =>
-            {
+                // 更新UI（需要在主线程中）
                 Application.MainLoop.Invoke(() =>
                 {
-                    logView.Text += $"{DateTime.Now:HH:mm:ss} {msg}\n";
-                    logView.ScrollTo(1);
+                    memoryLabel.Text = memoryText;
+                    memoryProgressBar.Fraction = (float)Math.Min(memoryPercentage, 1.0);
                 });
-            });
 
-            return window;
-        }
-    }
-
-    public static class BiosExceptionHandler
-    {
-        private static Action<string> _logCallback;
-
-        public static void Initialize()
-        {
-            // 注册全局异常处理
-            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+            }
+            catch (Exception ex)
             {
-                var ex = e.ExceptionObject as Exception;
-                HandleException("AppDomain异常", ex, e.IsTerminating);
-            };
-
-            TaskScheduler.UnobservedTaskException += (sender, e) =>
-            {
-                HandleException("未观察Task异常", e.Exception, false);
-                e.SetObserved(); // 阻止应用崩溃
-            };
-
-            Log("全局异常处理器已初始化 - BIOS风格界面");
+                Console.WriteLine($"Error updating performance data: {ex.Message}");
+            }
         }
 
-        public static void SetLogCallback(Action<string> callback)
+        private static string FormatBytes(long bytes)
         {
-            _logCallback = callback;
-        }
+            string[] suffix = { "B", "KB", "MB", "GB", "TB" };
+            int i;
+            double dblBytes = bytes;
 
-        private static void HandleException(string source, Exception exception, bool isTerminating)
-        {
-            Log($"[{source}] 检测到异常: {exception?.GetType().Name} - {exception?.Message}");
-
-            // 在UI线程中显示异常对话框
-            Application.MainLoop.Invoke(() =>
+            for (i = 0; i < suffix.Length && bytes >= 1024; i++, bytes /= 1024)
             {
-                ShowExceptionDialog(source, exception, isTerminating);
-            });
-        }
+                dblBytes = bytes / 1024.0;
+            }
 
-        private static void ShowExceptionDialog(string source, Exception exception, bool isTerminating)
-        {
-            var dialog = new Dialog($"异常报告 - {source}", 60, 20)
-            {
-                ColorScheme = Colors.Dialog
-            };
-
-            // 创建BIOS风格的边框
-            var frame = new FrameView("")
-            {
-                X = 0,
-                Y = 0,
-                Width = Dim.Fill(),
-                Height = Dim.Fill(),
-                Border = new Terminal.Gui.Border()
-                {
-                    BorderStyle = Terminal.Gui.BorderStyle.Double
-                }
-            };
-
-            var exceptionType = new Label($"异常类型: {exception?.GetType().Name}")
-            {
-                X = 1,
-                Y = 1
-            };
-
-            var exceptionMessage = new Label($"异常信息: {exception?.Message}")
-            {
-                X = 1,
-                Y = 2
-            };
-
-            var stackTrace = new TextView()
-            {
-                X = 1,
-                Y = 4,
-                Width = Dim.Fill() - 2,
-                Height = 8,
-                Text = exception?.StackTrace ?? "无堆栈跟踪信息",
-                ReadOnly = true
-            };
-
-            var status = new Label(isTerminating ? "状态: 严重 - 应用将终止" : "状态: 已处理 - 应用继续运行")
-            {
-                X = 1,
-                Y = 13
-            };
-
-            var okButton = new Button("确定")
-            {
-                X = Pos.Center(),
-                Y = 15
-            };
-
-            okButton.Clicked += () =>
-            {
-                Application.RequestStop(dialog);
-
-                if (isTerminating)
-                {
-                    Application.Shutdown();
-                    Environment.Exit(1);
-                }
-            };
-
-            frame.Add(exceptionType, exceptionMessage, stackTrace, status);
-            dialog.Add(frame, okButton);
-
-            Application.Run(dialog);
-        }
-
-        // 测试方法
-        public static void TestAppDomainException()
-        {
-            Log("触发AppDomain异常测试...");
-            throw new InvalidOperationException("这是测试的AppDomain异常");
-        }
-
-        public static void TestTaskException()
-        {
-            Log("触发Task异常测试...");
-            Task.Run(() =>
-            {
-                throw new ArgumentException("这是测试的Task异常");
-            });
-        }
-
-        public static void TestUnobservedTaskException()
-        {
-            Log("触发未观察Task异常测试...");
-
-            // 创建一个会抛出异常但不会被等待的Task
-            var task = Task.Run(() =>
-            {
-                throw new NotImplementedException("这是未观察的Task异常");
-            });
-
-            // 不等待task，让其变成未观察状态
-            task = null;
-
-            // 强制垃圾回收来触发UnobservedTaskException
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-        }
-
-        private static void Log(string message)
-        {
-            _logCallback?.Invoke(message);
+            return $"{dblBytes:F2} {suffix[i]}";
         }
     }
 }

@@ -8,6 +8,11 @@
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationIcon>rc.ico</ApplicationIcon>
+    <AssemblyVersion>1.2510.26.11</AssemblyVersion>
+    <FileVersion>1.2510.26.11</FileVersion>
+    <PackageProjectUrl>https://github.com/psoloi/RutCitrus</PackageProjectUrl>
+    <Company>RutCitrus</Company>
+    <Authors>psoloi</Authors>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,8 +24,8 @@
     <PackageReference Include="OpenTK" Version="4.9.4" />
     <PackageReference Include="RestSharp" Version="112.1.0" />
     <PackageReference Include="Serilog" Version="4.3.0" />
-    <PackageReference Include="Spectre.Console" Version="0.51.1" />
-    <PackageReference Include="Spectre.Console.Cli" Version="0.51.1" />
+    <PackageReference Include="Spectre.Console" Version="0.52.0" />
+    <PackageReference Include="Spectre.Console.Cli" Version="0.52.0" />
     <PackageReference Include="Terminal.Gui" Version="1.19.0" />
     <PackageReference Include="YamlDotNet" Version="16.3.0" />
   </ItemGroup>
@@ -29,7 +34,6 @@
     <Folder Include="Content\Data\" />
     <Folder Include="Content\Extension\" />
     <Folder Include="Modules\Function\" />
-    <Folder Include="Modules\Unit\" />
   </ItemGroup>
 
 </Project>
