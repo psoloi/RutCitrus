@@ -16,23 +16,62 @@
 When using or creating any of its affiliated plugins or branches in any way, it is sufficient to indicate the source, which is only [GitHub](https://github.com/psoloi/RutCitrusManager)
 
 ## The overall plan for the future
-This project is a combination of server + client, and there should be a client made using Winform in the future.
+This project is a combination of server + client, and there should be a client made using WPF in the future.
 
-## Project all warnings
+## RtCli Extension
 ```csharp
-ManagementObjectSearcher searcher = new("SELECT * FROM Win32_ComputerSystem");
-foreach (ManagementObject mo in searcher.Get())
-{
-    string? model = mo["Model"] as string;
-    if (model != null && (model.Contains("Virtual") || model.Contains("VMware") || model.Contains("Xen") || model.Contains("KVM") || model.Contains("Hyper")))
+    /// <summary>
+    /// 插件接口定义
+    /// </summary>
+    public interface IExtension
     {
-        isVM = true;
-        break;
+        /// <summary>
+        /// 插件名称
+        /// </summary>
+        string Name { get; }
+
+        /// <summary>
+        /// 插件版本
+        /// </summary>
+        string Version { get; }
+
+        /// <summary>
+        /// 插件描述
+        /// </summary>
+        string Description { get; }
+
+        /// <summary>
+        /// 加载插件
+        /// </summary>
+        void Load();
+
+        /// <summary>
+        /// 运行插件
+        /// </summary>
+        void Run();
+
+        /// <summary>
+        /// 卸载插件
+        /// </summary>
+        void Unload();
     }
-}
+
+    /// <summary>
+    /// 插件信息
+    /// </summary>
+    public class ExtensionInfo
+    {
+        public string? Name { get; set; }
+        public string? Version { get; set; }
+        public string? Description { get; set; }
+        public string? AssemblyPath { get; set; }
+        public string? TypeName { get; set; }
+        public bool IsLoaded { get; set; }
+        public DateTime LoadTime { get; set; }
+    }
 ```
 > [!WARNING]\
-> This project has already solved this problem. However, some Windows systems may encounter unknown errors. The most likely cause is the absence of certain runtime libraries.
+> This plugin interface is applicable to the environments of Rt, RtCli and the superior RutCitrus Toolkit. It is currently in the testing stage and APIs will be added in the future.
 
 ## Update list
 1. Add server and client LAN chat functionality.
