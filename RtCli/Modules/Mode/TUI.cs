@@ -115,7 +115,7 @@ namespace RtCli.Modules.Mode
                     Y = Pos.Center() + 1
                 };
                 
-                var versionLabel = new Label("Version: 1.2510.26.11")
+                var versionLabel = new Label($"Ver: {Program.RtCliVersion}")
                 {
                     X = Pos.Center(),
                     Y = Pos.Center() + 3

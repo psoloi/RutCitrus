@@ -49,11 +49,11 @@ namespace RtCli.Modules
             }
             if (msg_type == 2)
             {
-                AnsiConsole.Markup($"[white][[{time}]][/] " + c_warn + msg + "\n");
+                AnsiConsole.Markup($"[white][[{time}]][/] " + c_warn + $"[white][[{Thread.CurrentThread.Name}]][/] " + $"[dodgerblue1]({name})[/] " + msg + "\n");
             }
             if (msg_type == 3)
             {
-                AnsiConsole.Markup($"[white][[{time}]][/] " + c_error + msg + "\n");
+                AnsiConsole.Markup($"[white][[{time}]][/] " + c_error + $"[white][[{Thread.CurrentThread.Name}]][/] " + $"[dodgerblue1]({name})[/] " + msg + "\n");
             }
         }
 

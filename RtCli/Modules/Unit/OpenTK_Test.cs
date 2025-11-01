@@ -82,7 +82,23 @@ namespace RtCli.Modules.Unit
                 }
             });
             
-            return Task.CompletedTask;
+            // 返回实际的窗口任务，而不是Task.CompletedTask
+            // 这样调用者可以正确等待窗口初始化完成
+            return Task.Run(async () =>
+            {
+                // 等待窗口初始化完成（最多等待2秒）
+                int attempts = 0;
+                while (_window == null && attempts < 20)
+                {
+                    await Task.Delay(100);
+                    attempts++;
+                }
+                
+                if (_window == null)
+                {
+                    throw new InvalidOperationException("窗口初始化超时");
+                }
+            });
         }
 
         public void UpdateProgress(string taskName, float progress)
@@ -124,7 +140,8 @@ namespace RtCli.Modules.Unit
         {
             ClientSize = (800, 600),
             Title = "Adobe Photoshop 2023 - Installation",
-            // 改用兼容模式，支持立即模式渲染
+            // 明确指定OpenGL 2.1版本，完全支持立即模式渲染
+            APIVersion = new Version(2, 1),
             Profile = ContextProfile.Compatability
         })
         {
@@ -225,6 +242,11 @@ namespace RtCli.Modules.Unit
             GL.MatrixMode(MatrixMode.Modelview);
             GL.LoadIdentity();
 
+            // 确保启用立即模式渲染所需的状态
+            GL.Disable(EnableCap.DepthTest);
+            GL.Disable(EnableCap.Texture2D);
+            GL.Color4(1.0f, 1.0f, 1.0f, 1.0f);
+
             // 绘制UI
             DrawBackground();
             DrawHeader();
@@ -233,6 +255,8 @@ namespace RtCli.Modules.Unit
             DrawFooter();
 
             SwapBuffers();
+            // 确保帧刷新
+            Context.SwapInterval = 1; // 启用垂直同步，防止撕裂
         }
 
         private void DrawBackground()
@@ -251,7 +275,7 @@ namespace RtCli.Modules.Unit
 
             // 关闭按钮
             DrawRect(ClientSize.X - 40, 5, 30, 30, new Color(70, 70, 75));
-            DrawText("×", ClientSize.X - 25, 5, Color.White, 20, true);
+            DrawText("x", ClientSize.X - 25, 5, Color.White, 20, true);
         }
 
         private void DrawProgressSection()
@@ -345,22 +369,25 @@ namespace RtCli.Modules.Unit
             GL.End();
         }
 
-        // 绘制文本（简化版本）
+        // 绘制文本（优化版，更明显的显示效果）
         private void DrawText(string text, float x, float y, Color color, int size, bool centered)
         {
             // 在实际应用中，这里应该使用纹理字体渲染
-            // 这里我们只是用矩形模拟文本
+            // 这里我们使用更明显的矩形模拟文本
             if (text.Length > 0)
             {
                 float textWidth = text.Length * size * 0.6f;
                 if (centered) x -= textWidth / 2;
 
-                // 模拟文本绘制 - 绘制小矩形代表字符
+                // 模拟文本绘制 - 绘制更宽更明显的矩形代表字符
                 for (int i = 0; i < text.Length; i++)
                 {
                     if (text[i] != ' ')
                     {
-                        DrawRect(x + i * size * 0.6f, y, size * 0.5f, size * 0.1f, color);
+                        // 增加矩形的高度和宽度，使文本更明显
+                        float charWidth = size * 0.5f;
+                        float charHeight = size * 0.8f; // 增加高度使字符更明显
+                        DrawRect(x + i * size * 0.6f, y, charWidth, charHeight, color);
                     }
                 }
             }
