@@ -64,22 +64,15 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore ./RtCli/RtCli.csproj
 
-      - name: Build Release
+      - name: Build
         run: dotnet build ./RtCli/RtCli.csproj --configuration Release --no-restore
-
-      - name: Build Debug
-        run: dotnet build ./RtCli/RtCli.csproj --configuration Debug --no-restore
 
       - name: Test
         run: dotnet test ./RtCli/RtCli.csproj --configuration Release --no-build --verbosity normal
 
-      - name: Locate Debug Output Directory
-        id: find-debug-dir
+      - name: Publish
         run: |
-          # 查找Debug输出目录
-          $debugDir = (Get-ChildItem -Path ./RtCli -Recurse -Directory -Include bin).FullName | Where-Object { $_ -like "*Debug*" } | Select-Object -First 1
-          echo "debug_dir=$debugDir" >> $env:GITHUB_OUTPUT
-          Write-Output "找到Debug目录: $debugDir"
+          dotnet publish ./RtCli/RtCli.csproj -c Release -o ./publish
 
       - name: Generate build tag
         id: create-tag
@@ -100,25 +93,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify Debug EXE File
+      - name: Verify EXE File
         run: |
-          $debugDir = "${{ steps.find-debug-dir.outputs.debug_dir }}"
-          $exePath = "$debugDir\RtCli.exe"
+          $exePath = "./publish/RtCli.exe"
           if (-not (Test-Path $exePath)) {
-              Write-Error "Debug EXE文件未生成: $exePath"
+              Write-Error "EXE文件未生成: $exePath"
               exit 1
           }
-          Write-Output "生成的Debug可执行文件大小："
+          Write-Output "生成的可执行文件大小："
           (Get-Item $exePath).Length / 1MB | ForEach-Object { $_.ToString("0.00") + " MB" }
 
-      - name: Create Debug Files Zip
+      - name: Create Zip Package
         run: |
-          $debugDir = "${{ steps.find-debug-dir.outputs.debug_dir }}"
           $zipPath = "./RtCli.zip"
           if (Test-Path $zipPath) {
               Remove-Item $zipPath
           }
-          Compress-Archive -Path "$debugDir\*" -DestinationPath $zipPath -Force
+          Compress-Archive -Path "./publish/*" -DestinationPath $zipPath -Force
           Write-Output "已创建压缩文件: $zipPath"
           Write-Output "压缩文件大小："
           (Get-Item $zipPath).Length / 1MB | ForEach-Object { $_.ToString("0.00") + " MB" }
@@ -126,7 +117,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RtCli-Debug-Files
+          name: RtCli-Package
           path: ./RtCli.zip
 
   create-release:
@@ -138,7 +129,7 @@ jobs:
       - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
-          name: app-win-x64
+          name: RtCli-Package
           path: ./release-assets
 
       - name: Setup current time
