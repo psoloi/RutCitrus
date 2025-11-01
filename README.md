@@ -1,5 +1,5 @@
 <p align="center">
- <h2 align="center">RutCitrusManager(Main)</h2>
+ <h2 align="center">RutCitrus Toolkit</h2>
  <p align="center">At present, the program is in the test stage, many functions have not been fully developed or even not developed, time is limited. I am still in high school, this project may not be developed for a long time, and my English is not very good, please understand.</p>
 </p>
 
