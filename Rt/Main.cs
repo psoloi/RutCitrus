@@ -8,15 +8,7 @@ namespace Rt
 {
     internal class Main
     {
-        // Rt Test Translate Toolkit Target
-        public static void Test()
-        {
-
-        }
-        public static void Translate()
-        {
-
-        }
+        // Rt Toolkit、Target
         public static void Toolkit()
         {
 

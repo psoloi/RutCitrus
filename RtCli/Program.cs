@@ -13,8 +13,8 @@ namespace RtCli
 {
     internal class Program
     {
-
-        public static string RtCliVersion { get; } = "1.2510.26.11";
+        // 程序版本号规则：主版本号.日期yy/mm.次版本号.编译号
+        public static string RtCliVersion { get; } = "1.2602.26.3";
         public static string ThisProgramName { get; } = "RtCli";
 
         /// <summary>
@@ -22,7 +22,7 @@ namespace RtCli
         /// </summary>
         /// <param name="args"></param>
         [STAThread]
-        static async Task Main(string[] args)
+        public static Task Main(string[] args)
         {
 
             Console.OutputEncoding = System.Text.Encoding.UTF8;
@@ -38,7 +38,7 @@ namespace RtCli
             if (processes.Length > 1)
             {
                 Output.TextBlock("重复的线程!", 2, "Task#End");
-                return;
+                return Task.CompletedTask;
             }
 
 
@@ -62,114 +62,43 @@ namespace RtCli
             // 处理命令行参数
             if (Modules.Mode.Commands.Cli(args))
             {
-                return; // 如果参数已处理，直接返回
+                return Task.CompletedTask;
             }
 
-            Output.Log("按下  （C）打开命令  （G）打开TUI  （R）重新加载  （Esc）退出", 1, ThisProgramName);
-            ConsoleKeyInfo keyInfo = Console.ReadKey(true);
-            if (keyInfo.Key == ConsoleKey.Enter)
+
+            Output.Log("请选择接下来需要的加载项...", 1, ThisProgramName);
+            var selloaded = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                .Title("使用↑↓来选择按回车确定")
+                .AddChoices("命令行", "TUI", "重新加载", "关闭程序", "工程"));
+
+            if (selloaded == "工程")
             {
-                Console.Clear();
-                Output.Log("", 1, ThisProgramName);
-                var installer = new PhotoshopStyleInstaller();
-
-                try
-                {
-                    Console.WriteLine("启动安装界面...");
-
-                    // 方法1: 使用异步StartAsync方法（推荐）
-                    await installer.StartAsync();
-
-                    // 方法2: 使用同步Start方法（会阻塞当前线程）
-                    // installer.Start();
-
-                    // 步骤2: 等待UI初始化（给用户一些时间看到界面）
-                    await Task.Delay(1000);
-
-                    // 步骤3: 检查UI是否正在运行
-                    if (installer.IsRunning)
-                    {
-                        Console.WriteLine("开始安装过程...");
-
-                        // 步骤4: 更新各个安装任务的进度
-                        // 注意：任务名称必须与InstallerWindow.InitializeTasks()中定义的任务名称完全匹配
-
-                        // 更新第一个任务进度
-                        await Task.Delay(500); // 模拟安装过程
-                        installer.UpdateProgress("Extracting installation files", 50f);
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Extracting installation files", 100f); // 完成第一个任务
-                        await Task.Delay(500);
-
-                        // 更新第二个任务进度
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Installing core components", 30f);
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Installing core components", 70f);
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Installing core components", 100f); // 完成第二个任务
-                        await Task.Delay(500);
-
-                        // 更新第三个任务进度
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Configuring preferences", 50f);
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Configuring preferences", 100f);
-                        await Task.Delay(500);
-
-                        // 继续更新其他任务...
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Installing plugins", 100f);
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Registering application", 100f);
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Creating shortcuts", 100f);
-                        await Task.Delay(500);
-                        installer.UpdateProgress("Finalizing installation", 100f);
-
-                        // 步骤5: 完成所有安装任务
-                        installer.CompleteInstallation();
-
-                        Console.WriteLine("安装完成！");
-                        await Task.Delay(2000); // 给用户时间看到完成界面
-
-                        // 步骤6: 关闭安装界面
-                        await installer.StopAsync();
-                    }
-                    else
-                    {
-                        Console.WriteLine("安装界面未能成功启动");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"发生错误: {ex.Message}");
-                    // 确保在出错时关闭窗口
-                    if (installer.IsRunning)
-                    {
-                        await installer.StopAsync();
-                    }
-                }
+                Output.Log("", 1, ThisProgramName);      
             }
-            if (keyInfo.Key == ConsoleKey.Escape)
+            if (selloaded == "关闭程序")
             {
                 RtExtensionManager.RtExtensionManager.UnloadAll();
                 Output.Log("关闭！", 1, ThisProgramName);
                 Environment.Exit(0);
             }
-            if (keyInfo.Key == ConsoleKey.R)
+            if (selloaded == "重新加载")
             {
                 Output.Log("重新加载中...", 1, ThisProgramName);
                 Reload.Restart();
             }
-            if (keyInfo.Key == ConsoleKey.G)
+            if (selloaded == "TUI")
             {
                 Modules.Mode.TUI.Run();
             }
             else
             {
-                return;
+                RtExtensionManager.RtExtensionManager.UnloadAll();
+                return Task.CompletedTask;
             }
+
+            RtExtensionManager.RtExtensionManager.UnloadAll();
+            return Task.CompletedTask;
         }
 
         // Windows最大化控制台窗口

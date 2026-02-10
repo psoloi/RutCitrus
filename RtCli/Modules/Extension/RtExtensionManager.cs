@@ -137,7 +137,7 @@ namespace RtExtensionManager
                             Info = info
                         };
 
-                        Output.Log($"[green]√[/] 加载扩展成功: {extension.Name} Ver:{extension.Version}", 1, "RtExtensionManager");
+                        Output.Log($"[green]+[/] 加载扩展成功: {extension.Name} Ver:{extension.Version}", 1, "RtExtensionManager");
                         Output.Log($"   描述: {extension.Description}", 1, "RtExtensionManager");
                         return true;
                     }
@@ -212,7 +212,7 @@ namespace RtExtensionManager
                 }
             }
 
-            Output.Log($"扩展卸载完成。成功: {unloadedCount}, 总数: {keys.Count}", 1, "RtExtensionManager");
+            Output.Log($"扩展卸载成功: {unloadedCount}, 总数: {keys.Count}", 1, "RtExtensionManager");
         }
 
         /// <summary>
@@ -238,7 +238,7 @@ namespace RtExtensionManager
                     GC.Collect();
                     GC.WaitForPendingFinalizers();
 
-                    Output.Log($"√ 卸载扩展成功: {context.Info.Name}", 1, "RtExtensionManager");
+                    Output.Log($"- 卸载扩展成功: {context.Info.Name}", 1, "RtExtensionManager");
                     return true;
                 }
                 catch (Exception ex)

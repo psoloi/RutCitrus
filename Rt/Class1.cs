@@ -10,7 +10,7 @@ namespace Rt
 
         public static void Main(string[] args)
         {
-            Console.WriteLine("ARP欺骗与HTTP重定向工具启动");
+            Console.WriteLine("HTTP重定向工具");
 
             try
             {

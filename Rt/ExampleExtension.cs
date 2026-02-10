@@ -28,7 +28,6 @@ namespace Rt
                 return;
             }
 
-            // 模拟加载过程
             Output.Log("扩展正在加载...", 1, Name);
 
             // 初始化资源
@@ -48,14 +47,12 @@ namespace Rt
 
             Output.Log("扩展正在运行...", 1, Name);
 
-            // 模拟业务逻辑
             for (int i = 1; i <= 3; i++)
             {
                 Output.Log($"扩展执行任务 {i}/3", 1, Name);
                 Thread.Sleep(300);
             }
 
-            // 启动定时器
             _timer.Change(0, 2000);
 
             Output.Log("扩展运行完成", 1, Name);
@@ -71,13 +68,10 @@ namespace Rt
 
             Output.Log("扩展正在卸载...", 1, Name);
 
-            // 停止定时器
             _timer?.Change(Timeout.Infinite, Timeout.Infinite);
             _timer?.Dispose();
             _timer = null;
 
-            // 模拟清理资源
-            Thread.Sleep(300);
 
             _isLoaded = false;
             Output.Log("扩展卸载完成", 1, Name);

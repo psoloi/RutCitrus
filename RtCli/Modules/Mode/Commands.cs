@@ -63,14 +63,6 @@ namespace RtCli.Modules.Mode
                 return true;
             }
 
-            // 检查是否包含--installer参数
-            if (args.Contains("--installer", StringComparer.OrdinalIgnoreCase))
-            {
-                Output.Log("启动安装界面...", 1, "RtCli");
-                RunInstaller();
-                return true;
-            }
-
             // 检查是否包含--reload参数
             if (args.Contains("--reload", StringComparer.OrdinalIgnoreCase))
             {
@@ -88,22 +80,6 @@ namespace RtCli.Modules.Mode
             }
 
             return false;
-        }
-
-        /// <summary>
-        /// 运行安装界面
-        /// </summary>
-        private static void RunInstaller()
-        {
-            var installer = new Modules.Unit.PhotoshopStyleInstaller();
-            try
-            {
-                installer.Start(); // 使用同步方法以阻塞当前线程
-            }
-            catch (Exception ex)
-            {
-                AnsiConsole.WriteLine($"安装界面启动失败: {ex.Message}");
-            }
         }
 
         /// <summary>
