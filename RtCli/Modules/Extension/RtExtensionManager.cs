@@ -35,7 +35,6 @@ namespace RtExtensionManager
         {
             if (_isInitialized) return;
 
-            // 创建扩展目录（如果不存在）
             if (!Directory.Exists(absoluteExtensionsPath))
             {
                 Directory.CreateDirectory(absoluteExtensionsPath);
@@ -53,10 +52,10 @@ namespace RtExtensionManager
             Initialize();
             Output.Log("开始加载所有扩展...", 1, "RtExtensionManager");
 
-            // 清空已加载的扩展
+            // 防止神秘小漏洞的初始化-清空已加载的扩展
             UnloadAll();
 
-            // 查找扩展目录中的所有DLL文件
+            // DLL
             var dllFiles = Directory.GetFiles(absoluteExtensionsPath, "*.dll", SearchOption.AllDirectories);
 
             if (dllFiles.Length == 0)
@@ -271,17 +270,17 @@ namespace RtExtensionManager
                 return;
             }
 
-            Output.Log($"\n* - 已加载的扩展 ({_loadedExtensions.Count} 个):", 1, "RtExtensionManager");
+            Output.Log($"* - 已加载的扩展 ({_loadedExtensions.Count} 个):", 1, "RtExtensionManager");
             Output.Log(new string('=', 60), 1, "RtExtensionManager");
 
             foreach (var kvp in _loadedExtensions)
             {
                 var info = kvp.Value.Info;
-                Output.Log($"[[]] {info.Name} Ver:{info.Version}", 1, "RtExtensionManager");
-                Output.Log($"   描述: {info.Description}", 1, "RtExtensionManager");
-                Output.Log($"   程序集: {Path.GetFileName(info.AssemblyPath)}", 1, "RtExtensionManager");
-                Output.Log($"   加载时间: {info.LoadTime:yyyy-MM-dd HH:mm:ss}", 1, "RtExtensionManager");
-                Console.WriteLine();
+                Output.Log($"[[#]] {info.Name} Ver:{info.Version}", 1, "RtExtensionManager");
+                Output.Log($"     描述: {info.Description}", 1, "RtExtensionManager");
+                Output.Log($"     程序集: {Path.GetFileName(info.AssemblyPath)}", 1, "RtExtensionManager");
+                Output.Log($"     加载时间: {info.LoadTime:yyyy-MM-dd HH:mm:ss}\n", 1, "RtExtensionManager");
+
             }
         }
 

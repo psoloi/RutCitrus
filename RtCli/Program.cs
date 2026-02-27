@@ -28,19 +28,17 @@ namespace RtCli
             Console.OutputEncoding = System.Text.Encoding.UTF8;
             Console.Title = "RtCli";
             Console.Clear();
-            Output.TextBlock("启动主线程...", 1, "Task#0");
+            Output.TextBlock("启动主线程", 1, "Task#0");
 
             Process currentProcess = Process.GetCurrentProcess();
             string currentProcessName = currentProcess.ProcessName;
 
-            // 查找同名的进程
             Process[] processes = Process.GetProcessesByName(currentProcessName);
             if (processes.Length > 1)
             {
                 Output.TextBlock("重复的线程!", 2, "Task#End");
                 return Task.CompletedTask;
             }
-
 
             Thread.CurrentThread.Name = "Main";
             AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
@@ -50,7 +48,7 @@ namespace RtCli
 
             Output.Log("启动中...", 1, currentProcessName);
 
-            #region 启动线程
+            #region 启动任务
 
             RtExtensionManager.RtExtensionManager.LoadAll();
 
@@ -65,39 +63,50 @@ namespace RtCli
                 return Task.CompletedTask;
             }
 
-
+            // 设置位点的暂停
             Output.Log("请选择接下来需要的加载项...", 1, ThisProgramName);
             var selloaded = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                 .Title("使用↑↓来选择按回车确定")
-                .AddChoices("命令行", "TUI", "重新加载", "关闭程序", "工程"));
+                .AddChoices("命令行", "TUI", "重新加载", "关闭程序", "运行扩展以继续"));
 
-            if (selloaded == "工程")
+
+            switch (selloaded)
             {
-                Output.Log("", 1, ThisProgramName);      
-            }
-            if (selloaded == "关闭程序")
-            {
-                RtExtensionManager.RtExtensionManager.UnloadAll();
-                Output.Log("关闭！", 1, ThisProgramName);
-                Environment.Exit(0);
-            }
-            if (selloaded == "重新加载")
-            {
-                Output.Log("重新加载中...", 1, ThisProgramName);
-                Reload.Restart();
-            }
-            if (selloaded == "TUI")
-            {
-                Modules.Mode.TUI.Run();
-            }
-            else
-            {
-                RtExtensionManager.RtExtensionManager.UnloadAll();
-                return Task.CompletedTask;
+                case "运行扩展以继续":
+                    Output.Log("正在运行扩展内容...", 1, ThisProgramName);
+                    RtExtensionManager.RtExtensionManager.DisplayLoadedExtensions();
+                    RtExtensionManager.RtExtensionManager.Run();
+                    Continued();
+                    break;
+
+                case "关闭程序":
+                    RtExtensionManager.RtExtensionManager.UnloadAll();
+                    break;
+
+                case "重新加载":
+                    Output.Log("重新加载中...", 1, ThisProgramName);
+                    Reload.Restart();
+                    break;
+
+                case "TUI":
+                    Modules.Mode.TUI.Run();
+                    break;
+
+                case "命令行":
+                    
+                    break;
+
+                default:
+                    RtExtensionManager.RtExtensionManager.UnloadAll();
+                    Output.TextBlock("主线程结束", 2, "Task#0");
+                    return Task.CompletedTask;
+
             }
 
             RtExtensionManager.RtExtensionManager.UnloadAll();
+            Output.TextBlock("主线程结束", 1, "Task#0");
+            // Environment.Exit(0);
             return Task.CompletedTask;
         }
 
@@ -119,13 +128,12 @@ namespace RtCli
             Console.ReadKey();
         }
 
-
         private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
         {
             Exception ex = (Exception)e.ExceptionObject;
 
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("===== [CrashReport]发生未处理异常 =====");
+            Console.WriteLine("===== [CrashAssistant]发生未处理异常 =====");
             Console.WriteLine($" - 异常类型: {ex.GetType().Name}");
             Console.WriteLine($" - 异常消息: {ex.Message}");
             Console.WriteLine($" - 堆栈跟踪: {ex.StackTrace}");
@@ -134,6 +142,13 @@ namespace RtCli
             Console.ReadKey();
 
             Environment.Exit(1);
+        }
+
+
+
+        public static void Continued()
+        {
+
         }
     }
 }

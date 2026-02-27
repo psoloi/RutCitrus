@@ -23,10 +23,10 @@ namespace RtCli.Modules.Mode
                     { "SetMode", () => { 
                         Output.Log("设置模式中...", 1, ThisProgramName);
                     } },
-                    { "2", () => { /* Add functionality for option 2 */ } },
-                    { "3", () => { /* Add functionality for option 3 */ } },
-                    { "4", () => { /* Add functionality for option 4 */ } },
-                    { "5", () => { /* Add functionality for option 5 */ } },
+                    { "2", () => { /* F 2 */ } },
+                    { "3", () => { /* F 3 */ } },
+                    { "4", () => { /* F 4 */ } },
+                    { "5", () => { /* F 5 */ } },
                     { "6", () => { } },
                     { "7", () => { } }
                 };
