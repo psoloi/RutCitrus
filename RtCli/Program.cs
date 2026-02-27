@@ -14,7 +14,7 @@ namespace RtCli
     internal class Program
     {
         // 程序版本号规则：主版本号.日期yy/mm.次版本号.编译号
-        public static string RtCliVersion { get; } = "1.2602.26.3";
+        public static string RtCliVersion { get; } = "1.2602.27.1";
         public static string ThisProgramName { get; } = "RtCli";
 
         /// <summary>
