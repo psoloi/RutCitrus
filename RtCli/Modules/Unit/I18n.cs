@@ -11,7 +11,7 @@ namespace RtCli.Modules.Unit
 
         private static readonly JObject DefaultLangData = new JObject(
             new JProperty("selectLang", "zh_CN"),
-            new JProperty("zh", new JObject(
+            new JProperty("zh_CN", new JObject(
                 new JProperty("main_loadfinsih", "加载完毕！用时"),
                 new JProperty("main_seltip_1", "请选择接下来需要的加载项..."),
                 new JProperty("mian_seltip_2", "使用↑↓来选择按回车确定"),
