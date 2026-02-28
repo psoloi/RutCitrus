@@ -52,10 +52,19 @@ namespace RtCli
 
             RtExtensionManager.RtExtensionManager.LoadAll();
 
+            // i18n 初始化
+            Modules.Unit.I18n.Init();
+
+            // 大于1.16.5服务端要求Java 17以上，检测系统是否支持Java 17
+            //bool is64BitOperatingSystem = Environment.Is64BitOperatingSystem;
+            //Console.WriteLine("操作系统位数： " + (is64BitOperatingSystem ? "64位" : "32位"));
+            //环境版本检测
+            //string frameworkDescription = Environment.Version.ToString();
+
             #endregion
 
             stopwatch.Stop();
-            Output.Log($"加载完毕！用时（{stopwatch.ElapsedMilliseconds}ms）", 1, ThisProgramName);
+            Output.Log($"{Modules.Unit.I18n.Get("main_loadfinsih")}（{stopwatch.ElapsedMilliseconds}ms）", 1, ThisProgramName);
 
             // 处理命令行参数
             if (Modules.Mode.Commands.Cli(args))
@@ -64,10 +73,10 @@ namespace RtCli
             }
 
             // 设置位点的暂停
-            Output.Log("请选择接下来需要的加载项...", 1, ThisProgramName);
+            Output.Log(Modules.Unit.I18n.Get("main_seltip_1"), 1, ThisProgramName);
             var selloaded = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                .Title("使用↑↓来选择按回车确定")
+                .Title(Modules.Unit.I18n.Get("mian_seltip_2"))
                 .AddChoices("命令行", "TUI", "重新加载", "关闭程序", "运行扩展以继续"));
 
 
@@ -99,13 +108,13 @@ namespace RtCli
 
                 default:
                     RtExtensionManager.RtExtensionManager.UnloadAll();
-                    Output.TextBlock("主线程结束", 2, "Task#0");
+                    Output.TextBlock(Modules.Unit.I18n.Get("main_end"), 2, "Task#0");
                     return Task.CompletedTask;
 
             }
 
             RtExtensionManager.RtExtensionManager.UnloadAll();
-            Output.TextBlock("主线程结束", 1, "Task#0");
+            Output.TextBlock(Modules.Unit.I18n.Get("main_end"), 1, "Task#0");
             // Environment.Exit(0);
             return Task.CompletedTask;
         }

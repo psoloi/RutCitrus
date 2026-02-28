@@ -30,9 +30,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Content\Data\" />
     <Folder Include="Content\Extension\" />
     <Folder Include="Modules\Function\" />
   </ItemGroup>
+
+  <ProjectExtensions><VisualStudio><UserProperties /></VisualStudio></ProjectExtensions>
 
 </Project>
