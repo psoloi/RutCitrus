@@ -14,8 +14,8 @@ namespace Rt
     public class ExampleExtension : IExtension
     {
         public string Name => "Rt";
-        public string Version => "1.0.0";
-        public string Description => "这是一个示例扩展插件，演示插件的基本功能";
+        public string Version => "1.0.2";
+        public string Description => "这是一个示例扩展插件，实现了MC服务器状态方面扩展";
 
         private bool _isLoaded = false;
         private Timer _timer;
@@ -54,6 +54,8 @@ namespace Rt
             }
 
             _timer.Change(0, 2000);
+
+            Rt.Program.Main(null);
 
             Output.Log("扩展运行完成", 1, Name);
         }

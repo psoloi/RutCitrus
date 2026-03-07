@@ -1,6 +1,5 @@
 using RtCli.Modules;
 using RtCli.Modules.Unit;
-using RtExtensionManager;
 using Spectre.Console;
 using System;
 using System.Diagnostics;
@@ -55,11 +54,26 @@ namespace RtCli
             // i18n 初始化
             Modules.Unit.I18n.Init();
 
-            // 大于1.16.5服务端要求Java 17以上，检测系统是否支持Java 17
-            //bool is64BitOperatingSystem = Environment.Is64BitOperatingSystem;
-            //Console.WriteLine("操作系统位数： " + (is64BitOperatingSystem ? "64位" : "32位"));
-            //net环境版本检测
-            //string frameworkDescription = Environment.Version.ToString();
+            // 环境检测
+            if (Config.App.CheckJava)
+            {
+                string result = Checker.CheckJava();
+                Output.Log(result, 1, "Checker");
+            }
+            if (Config.App.CheckDotNet)
+            {
+                string result2 = Checker.CheckDotNet();
+                Output.Log(result2, 1, "Checker");
+            }
+            if (Config.App.CheckOSBit)
+            {
+                bool is64BitOperatingSystem = Environment.Is64BitOperatingSystem;
+                if (!is64BitOperatingSystem)
+                {
+                    Output.Log("[yellow]当前操作系统环境为32位可能多数功能不支持![/]", 2, "Checker");
+                }
+            }
+
 
             #endregion
 

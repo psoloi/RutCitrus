@@ -1,1 +1,3 @@
-﻿
+check_java: true
+check_dot_net: true
+check_o_s_bit: true

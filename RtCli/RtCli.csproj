@@ -32,7 +32,7 @@
 
   <ItemGroup>
     <Folder Include="Content\Extension\" />
-    <Folder Include="Modules\Function\" />
+    <Folder Include="Modules\API\" />
   </ItemGroup>
 
   <ProjectExtensions><VisualStudio><UserProperties /></VisualStudio></ProjectExtensions>
