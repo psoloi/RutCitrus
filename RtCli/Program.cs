@@ -58,7 +58,7 @@ namespace RtCli
             // 大于1.16.5服务端要求Java 17以上，检测系统是否支持Java 17
             //bool is64BitOperatingSystem = Environment.Is64BitOperatingSystem;
             //Console.WriteLine("操作系统位数： " + (is64BitOperatingSystem ? "64位" : "32位"));
-            //环境版本检测
+            //net环境版本检测
             //string frameworkDescription = Environment.Version.ToString();
 
             #endregion
@@ -77,7 +77,7 @@ namespace RtCli
             var selloaded = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                 .Title(Modules.Unit.I18n.Get("mian_seltip_2"))
-                .AddChoices("命令行", "TUI", "重新加载", "关闭程序", "运行扩展以继续"));
+                .AddChoices("命令行", "服务管理", "重新加载", "关闭程序", "运行扩展以继续"));
 
 
             switch (selloaded)
@@ -157,7 +157,19 @@ namespace RtCli
 
         public static void Continued()
         {
-
+            Output.Log("[yellow]注意：RtService服务仅能在本机或局域网运行，如果在其他网络环境下运行安全目前无法保障，本机要使用该服务你需要在该程序继续配置Config选项后将会帮你安装该服务[/]", 2, ThisProgramName);
+            var table = new Table()
+              .AddColumn("选项")
+              .AddColumn("按键")
+              .AddColumn("描述")
+              .AddRow("[green]安装RtService服务[/]", "I", "该服务为Minecraft服务器管理分支后端，服务管理用前端通过局域网等连接")
+              .AddRow("[red]删除RtService服务[/]", "U", "将服务从当前设备移除并删除服务的配置文件，但会保留数据按需要手动删除")
+              .AddRow("[yellow]模块[/]", "E", "no");
+            AnsiConsole.Write(table);
+            if (Console.ReadKey().Key != ConsoleKey.I)
+            {
+                Output.Log("正在安装RtService服务...", 1, ThisProgramName);
+            }
         }
     }
 }

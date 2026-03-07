@@ -19,17 +19,12 @@ namespace RtCli.Modules.Mode
         {
             currentProcess = Process.GetCurrentProcess();
 
-            // 初始化Terminal.Gui应用
             Application.Init();
-
-            // 创建主窗口
             var top = Application.Top;
 
-            // 创建菜单栏
             var menu = CreateMenuBar();
             top.Add(menu);
 
-            // 创建主内容区域
             mainContent = new FrameView("Main")
             {
                 X = 0,
@@ -38,14 +33,11 @@ namespace RtCli.Modules.Mode
                 Height = Dim.Fill()
             };
 
-            // 初始化主页内容
             UpdateMainPage();
             top.Add(mainContent);
 
-            // 启动定时更新性能数据的任务
             StartPerformanceMonitoring();
 
-            // 运行应用
             Application.Run();
             Application.Shutdown();
         }
@@ -120,8 +112,15 @@ namespace RtCli.Modules.Mode
                     X = Pos.Center(),
                     Y = Pos.Center() + 3
                 };
-                
-                mainContent.Add(authorLabel, descriptionLabel, descriptionLabel2, versionLabel);
+
+                // 对那些包的作者表示感谢和尊敬，如果有遗漏请在Github发表问题
+                var nugetLabel = new Label("Used Nuget Packets: Newtonsoft.Json, RestSharp, Serilog, Spectre.Console, Spectre.Console.Cli, Terminal.Gui, TouchSocket, YamlDotNet, MineStat")
+                {
+                    X = Pos.Center(),
+                    Y = Pos.Center() + 5
+                };
+
+                mainContent.Add(authorLabel, descriptionLabel, descriptionLabel2, versionLabel, nugetLabel);
             }
             else
             {
