@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Spectre.Console.Cli;
 using Spectre.Console;
 
-namespace RtCli.Modules.Mode
+namespace RtCli.Modules.Function
 {
     internal class Commands
     {
@@ -52,15 +52,6 @@ namespace RtCli.Modules.Mode
             if (args.Length == 0)
             {
                 return false;
-            }
-
-            // 简单的参数处理方式
-            // 检查是否包含--TUI参数
-            if (args.Contains("--TUI", StringComparer.OrdinalIgnoreCase))
-            {
-                Output.Log("启动TUI模式...", 1, "RtCli");
-                Modules.Mode.TUI.Run();
-                return true;
             }
 
             // 检查是否包含--reload参数

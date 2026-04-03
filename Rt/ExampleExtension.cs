@@ -14,11 +14,10 @@ namespace Rt
     public class ExampleExtension : IExtension
     {
         public string Name => "Rt";
-        public string Version => "1.0.2";
-        public string Description => "这是一个示例扩展插件，实现了MC服务器状态方面扩展";
+        public string Version => "1.0.3";
+        public string Description => "示例扩展插件，实现了MC服务器状态监测及安全方面扩展";
 
         private bool _isLoaded = false;
-        private Timer _timer;
 
         public void Load()
         {
@@ -30,8 +29,6 @@ namespace Rt
 
             Output.Log("扩展正在加载...", 1, Name);
 
-            // 初始化资源
-            _timer = new Timer(OnTimerTick, null, Timeout.Infinite, Timeout.Infinite);
 
             _isLoaded = true;
             Output.Log("扩展加载完成", 1, Name);
@@ -47,17 +44,10 @@ namespace Rt
 
             Output.Log("扩展正在运行...", 1, Name);
 
-            for (int i = 1; i <= 3; i++)
-            {
-                Output.Log($"扩展执行任务 {i}/3", 1, Name);
-                Thread.Sleep(300);
-            }
 
-            _timer.Change(0, 2000);
+            //
+            throw new NotImplementedException("示例扩展的Run方法尚未实现");
 
-            Rt.Program.Main(null);
-
-            Output.Log("扩展运行完成", 1, Name);
         }
 
         public void Unload()
@@ -70,18 +60,10 @@ namespace Rt
 
             Output.Log("扩展正在卸载...", 1, Name);
 
-            _timer?.Change(Timeout.Infinite, Timeout.Infinite);
-            _timer?.Dispose();
-            _timer = null;
-
 
             _isLoaded = false;
             Output.Log("扩展卸载完成", 1, Name);
         }
 
-        private void OnTimerTick(object state)
-        {
-            Output.Log($"扩展定时任务执行{DateTime.Now:HH:mm:ss}", 1, Name);
-        }
     }
 }

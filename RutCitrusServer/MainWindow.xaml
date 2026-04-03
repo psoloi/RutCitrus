@@ -11,8 +11,8 @@
         WindowStartupLocation="CenterScreen">
     <Grid>
         <Grid.ColumnDefinitions>
-            <!-- 汉堡栏宽度，通常为60px（收起）或200-240px（展开），这里用240px -->
-            <ColumnDefinition Width="240" />
+            <!-- 汉堡栏宽度，通常为60px（收起）或200px（展开） -->
+            <ColumnDefinition Width="200" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 

@@ -4,9 +4,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Rt
+namespace RutCitrusServer
 {
-    internal class RutTarget
+    internal class Connector
     {
     }
 }

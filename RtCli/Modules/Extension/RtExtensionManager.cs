@@ -1,4 +1,4 @@
-﻿// using global::RtExtensionManager;
+// using global::RtExtensionManager;
 using System;
 using System.Text;
 using System.Threading.Tasks;
@@ -173,18 +173,21 @@ namespace RtExtensionManager
             foreach (var kvp in _loadedExtensions)
             {
                 var context = kvp.Value;
-                try
+                Task.Run(() =>
                 {
-                    Output.Log($"》 运行扩展: {context.Info.Name}", 1, "RtExtensionManager");
-                    context.Extension.Run();
-                }
-                catch (Exception ex)
-                {
-                    Output.Log($"× 运行扩展失败 {context.Info.Name}: {ex.Message}", 1, "RtExtensionManager");
-                }
+                    try
+                    {
+                        Output.Log($"》 运行扩展: {context.Info.Name}", 1, "RtExtensionManager");
+                        context.Extension.Run();
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"× 运行扩展失败 {context.Info.Name}: {ex.Message}", 1, "RtExtensionManager");
+                    }
+                });
             }
 
-            Output.Log("扩展运行完成", 1, "RtExtensionManager");
+            Output.Log("所有扩展已启动", 1, "RtExtensionManager");
         }
 
         /// <summary>
@@ -279,7 +282,7 @@ namespace RtExtensionManager
                 Output.Log($"[[#]] {info.Name} Ver:{info.Version}", 1, "RtExtensionManager");
                 Output.Log($"     描述: {info.Description}", 1, "RtExtensionManager");
                 Output.Log($"     程序集: {Path.GetFileName(info.AssemblyPath)}", 1, "RtExtensionManager");
-                Output.Log($"     加载时间: {info.LoadTime:yyyy-MM-dd HH:mm:ss}\n", 1, "RtExtensionManager");
+                Output.Log($"     加载时间: {info.LoadTime:yyyy-MM-dd HH:mm:ss}", 1, "RtExtensionManager");
 
             }
         }

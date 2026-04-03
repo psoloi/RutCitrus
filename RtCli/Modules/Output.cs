@@ -1,4 +1,4 @@
-﻿using Spectre.Console;
+using Spectre.Console;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
@@ -58,11 +58,95 @@ namespace RtCli.Modules
         }
 
 
-        //用于某些特殊情况的错误输出
-        [RequiresDynamicCode("Calls RtCli.Modules.Output.EX(Exception)")]
-        public static void EX(Exception ex)
+        private static bool _crashAssistantRunning = false;
+        private static readonly object _crashLock = new object();
+
+        /// <summary>
+        /// 异步CrashAssistant
+        /// </summary>
+        public static async Task StartCrashAssistantAsync(Exception ex)
         {
-            AnsiConsole.WriteException(ex);
+            await Task.Run(() => CrashAssistant(ex));
+        }
+
+        /// <summary>
+        /// CrashAssistant错误处理
+        /// </summary>
+        public static void CrashAssistant(Exception ex)
+        {
+            lock (_crashLock)
+            {
+                if (_crashAssistantRunning)
+                    return;
+                _crashAssistantRunning = true;
+            }
+
+            try
+            {
+                Log("[red][[CrashAssistant]] 已捕获到一个未被处理异常[/]\n", 3, "CrashAssistant");
+                string time = DateTime.Now.ToString("HH:mm:ss");
+                AnsiConsole.Markup($"[white on red][[{time}]][/][white on darkred][[CrashAssistant]][/]\n\n");
+
+                var table = new Table()
+                  .Border(TableBorder.Heavy)
+                  .AddColumn("[yellow]属性[/]")
+                  .AddColumn("[yellow]值[/]");
+
+                table.AddRow("异常类型", ex.GetType().Name);
+                table.AddRow("异常消息", ex.Message);
+                table.AddRow("发生时间", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                table.AddRow("线程", Thread.CurrentThread.Name ?? "Unknown");
+                if (ex.InnerException != null)
+                {
+                    table.AddRow("内部异常类型", ex.InnerException.GetType().Name);
+                    table.AddRow("内部异常消息", ex.InnerException.Message);
+                }
+                AnsiConsole.Write(table);
+
+                if (ex.InnerException != null)
+                {
+                    AnsiConsole.Markup("[yellow]内部异常:[/]\n");
+                    AnsiConsole.Markup($"  [yellow]类型:[/] [white]{ex.InnerException.GetType().Name}[/]\n");
+                    AnsiConsole.Markup($"  [yellow]消息:[/] [white]{ex.InnerException.Message}[/]\n\n");
+                }
+
+                AnsiConsole.Markup("[yellow]堆栈跟踪:[/]\n");
+                AnsiConsole.Markup($"[grey]{Markup.Escape(ex.StackTrace ?? "无堆栈信息")}[/]\n\n");
+
+
+            }
+            catch (Exception innerEx)
+            {
+                AnsiConsole.Markup($"[red]CrashAssistant 自身发生错误: {innerEx.Message}[/]\n");
+            }
+            finally
+            {
+                lock (_crashLock)
+                {
+                    _crashAssistantRunning = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 根据条件判断输出错误报告
+        /// </summary>
+        public static void ReportError(Exception ex, bool critical = false, string additionalInfo = null)
+        {
+            Task.Run(() =>
+            {
+                string time = DateTime.Now.ToString("HH:mm:ss");
+                string severity = critical ? "[white on red]严重[/]" : "[white on yellow]一般[/]";
+
+                AnsiConsole.Markup($"[white on dodgerblue2][[{time}]][/][white on steelblue1][[ErrorReport]][/] {severity}\n");
+
+                if (!string.IsNullOrEmpty(additionalInfo))
+                {
+                    AnsiConsole.Markup($"[yellow]附加信息:[/] [white]{additionalInfo}[/]\n");
+                }
+
+                CrashAssistant(ex);
+            });
         }
     }
 }
