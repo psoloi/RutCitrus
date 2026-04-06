@@ -33,6 +33,7 @@ namespace RtExtensionManager
         /// </summary>
         private static void Initialize()
         {
+            Thread.CurrentThread.Name = "Main";
             if (_isInitialized) return;
 
             if (!Directory.Exists(absoluteExtensionsPath))
@@ -49,6 +50,7 @@ namespace RtExtensionManager
         /// </summary>
         public static void LoadAll()
         {
+            Thread.CurrentThread.Name = "Main";
             Initialize();
             Output.Log("开始加载所有扩展...", 1, "RtExtensionManager");
 
@@ -90,6 +92,7 @@ namespace RtExtensionManager
         /// <returns>是否加载成功</returns>
         private static bool LoadExtension(string assemblyPath)
         {
+            Thread.CurrentThread.Name = "Main";
             try
             {
                 // 创建可卸载的加载上下文
@@ -162,6 +165,7 @@ namespace RtExtensionManager
         /// </summary>
         public static void Run()
         {
+            Thread.CurrentThread.Name = "Main";
             if (_loadedExtensions.Count == 0)
             {
                 Output.Log("没有可运行的扩展", 1, "RtExtensionManager");
@@ -195,6 +199,7 @@ namespace RtExtensionManager
         /// </summary>
         public static void UnloadAll()
         {
+            Thread.CurrentThread.Name = "Main";
             if (_loadedExtensions.Count == 0)
             {
                 Output.Log("没有需要卸载的扩展", 1, "RtExtensionManager");
@@ -224,6 +229,7 @@ namespace RtExtensionManager
         /// <returns>是否卸载成功</returns>
         private static bool UnloadExtension(string extensionKey)
         {
+            Thread.CurrentThread.Name = "Main";
             if (_loadedExtensions.TryGetValue(extensionKey, out var context))
             {
                 try
@@ -257,6 +263,7 @@ namespace RtExtensionManager
         /// </summary>
         public static void Reload()
         {
+            Thread.CurrentThread.Name = "Main";
             Output.Log("开始重新加载所有扩展...", 1, "RtExtensionManager");
             UnloadAll();
             LoadAll();
@@ -267,6 +274,7 @@ namespace RtExtensionManager
         /// </summary>
         public static void DisplayLoadedExtensions()
         {
+            Thread.CurrentThread.Name = "Main";
             if (_loadedExtensions.Count == 0)
             {
                 Output.Log("没有已加载的扩展", 1, "RtExtensionManager");

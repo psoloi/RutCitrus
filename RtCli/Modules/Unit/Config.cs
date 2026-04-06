@@ -10,6 +10,10 @@ namespace RtCli.Modules.Unit
         public bool CheckJava { get; set; } = true;
         public bool CheckDotNet { get; set; } = true;
         public bool CheckOSBit { get; set; } = true;
+
+        public string ServerName { get; set; } = "myserver";
+        public int ServerPort { get; set; } = 7789;
+        public string ServerKey { get; set; } = "default_key";
     }
 
     public static class Config

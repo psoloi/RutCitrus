@@ -19,9 +19,9 @@ namespace RtCli.Modules
         protected internal static void TextBlock(string msg, int msg_type, string Task)
         {
             string time = DateTime.Now.ToString("HH:mm:ss");
-            string info = $"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[Main - {Task}]][/]" + "[black on green]信息[/] ";
-            string error = $"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[Main - {Task}]][/]" + "[black on red]错误[/] ";
-            string warn = $"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[Main - {Task}]][/]" + "[black on gold1]警告[/] ";
+            string info = $"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on green]信息[/] ";
+            string error = $"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on red]错误[/] ";
+            string warn = $"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on gold1]警告[/] ";
             if (msg_type == 1)
             {
                 AnsiConsole.Markup(info + msg + "\n");
@@ -45,15 +45,15 @@ namespace RtCli.Modules
             string time = DateTime.Now.ToString("HH:mm:ss");
             if (msg_type == 1)
             {
-                AnsiConsole.Markup($"[white][[{time}]][/] " + c_info + $"[white][[{Thread.CurrentThread.Name}]][/] " + $"[dodgerblue1]({name})[/] " + msg + "\n");
+                AnsiConsole.Markup($"[white][[{time}]][/] " + c_info + $"[white][[{Thread.CurrentThread.Name}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({name})[/] " + msg + "\n");
             }
             if (msg_type == 2)
             {
-                AnsiConsole.Markup($"[white][[{time}]][/] " + c_warn + $"[white][[{Thread.CurrentThread.Name}]][/] " + $"[dodgerblue1]({name})[/] " + msg + "\n");
+                AnsiConsole.Markup($"[white][[{time}]][/] " + c_warn + $"[white][[{Thread.CurrentThread.Name}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({name})[/] " + msg + "\n");
             }
             if (msg_type == 3)
             {
-                AnsiConsole.Markup($"[white][[{time}]][/] " + c_error + $"[white][[{Thread.CurrentThread.Name}]][/] " + $"[dodgerblue1]({name})[/] " + msg + "\n");
+                AnsiConsole.Markup($"[white][[{time}]][/] " + c_error + $"[white][[{Thread.CurrentThread.Name}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({name})[/] " + msg + "\n");
             }
         }
 
@@ -131,7 +131,7 @@ namespace RtCli.Modules
         /// <summary>
         /// 根据条件判断输出错误报告
         /// </summary>
-        public static void ReportError(Exception ex, bool critical = false, string additionalInfo = null)
+        public static void ReportError(Exception ex, bool critical = false, string? additionalInfo = null)
         {
             Task.Run(() =>
             {

@@ -82,7 +82,6 @@ namespace RtCli.Modules.Function
             table.AddColumn(new TableColumn("参数").Centered());
             table.AddColumn(new TableColumn("描述"));
 
-            table.AddRow("--TUI", "启动文本用户界面模式");
             table.AddRow("--installer", "启动安装界面演示");
             table.AddRow("--reload", "重新加载应用");
             table.AddRow("--help, -h", "显示此帮助信息");

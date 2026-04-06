@@ -1,0 +1,42 @@
+<ui:FluentWindow
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        x:Class="RutCitrusServer.AddServerDialog"
+        Title="添加服务器" Height="320" Width="350"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ExtendsContentIntoTitleBar="True">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="80"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <ui:TextBlock Grid.Row="0" Grid.Column="0" Text="名称:" VerticalAlignment="Center"/>
+        <ui:TextBox Grid.Row="0" Grid.Column="1" x:Name="NameTextBox" Margin="0,8"/>
+
+        <ui:TextBlock Grid.Row="1" Grid.Column="0" Text="IP地址:" VerticalAlignment="Center"/>
+        <ui:TextBox Grid.Row="1" Grid.Column="1" x:Name="IPTextBox" Margin="0,8" Text="127.0.0.1"/>
+
+        <ui:TextBlock Grid.Row="2" Grid.Column="0" Text="端口:" VerticalAlignment="Center"/>
+        <ui:TextBox Grid.Row="2" Grid.Column="1" x:Name="PortTextBox" Margin="0,8" Text="7789"/>
+
+        <ui:TextBlock Grid.Row="3" Grid.Column="0" Text="密钥:" VerticalAlignment="Center"/>
+        <ui:PasswordBox Grid.Row="3" Grid.Column="1" x:Name="KeyPasswordBox" Margin="0,8"/>
+
+        <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <ui:Button Content="确定" Width="80" Margin="0,0,8,0" Click="OkButton_Click" IsDefault="True" Appearance="Primary"/>
+            <ui:Button Content="取消" Width="80" Click="CancelButton_Click" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</ui:FluentWindow>

@@ -1,6 +1,6 @@
 <p align="center">
- <h2 align="center">RutCitrus Toolkit</h2>
- <p align="center">At present, the program is in the test stage, many functions have not been fully developed or even not developed, time is limited. I am still in high school, this project may not be developed for a long time, and my English is not very good, please understand.</p>
+ <h2 align="center">RtCli</h2>
+ <p align="center">一个基于C#控制台程序的Minecraft服务器后期的维护、监测、管理器</p>
 </p>
 
 <div align="center">
@@ -13,12 +13,15 @@
 
 </div>
 
-When using or creating any of its affiliated plugins or branches in any way, it is sufficient to indicate the source, which is only [GitHub](https://github.com/psoloi/RutCitrusManager)
+当您需要以任何方式使用或为此项目扩展时，只需要把原作者名称和项目原地址标出即可，谢谢你对作者的尊重！ [GitHub](https://github.com/psoloi/RutCitrus)
 
-## The overall plan for the future
-This project is a combination of server + client, and there should be a client made using WPF in the future.
+## 项目结构
+该项目为RtCli作为服务器来管理Minecraft服务器，RutCitrusServer为控制RtCli的面板，其次可选择Rt为扩展或自制扩展
 
-## RtCli Extension
+## 使用方法
+给RtCli设置服务器端口再打开RutCitrusServer连接就可以了
+
+## RtCli 扩展
 ```csharp
     /// <summary>
     /// 插件接口定义
@@ -71,32 +74,28 @@ This project is a combination of server + client, and there should be a client m
     }
 ```
 > [!WARNING]\
-> This plugin interface is applicable to the environments of Rt, RtCli and the superior RutCitrus Toolkit. It is currently in the testing stage and APIs will be added in the future.
+> 该程序目前不推荐在公网或危险的网络环境下使用！
+> 程序的扩展系统还不是很稳定！
 
-## Update list
-1. Add server and client LAN chat functionality.
-2. Add TCP and UDP simulation servers.
-3. Add a local area network file transfer server.
-4. Improve the basic function of CLI command to enable program startup functionality.
-5. Add the function of program update.
-6. Add the official game download market and the automated game installation function.
-7. Improve configuration files and expand examples.
-8. Add Extension Builder.
-9. The projects related to RutCitrus connection.
-    - Interface
-    - Web
-10. Add the function of setting options.
-11. Add RutCitrus game server status detection for information monitoring.
-12. Add an SQLite database.
-13. Add Task Plan Function.
-14. Add a project file downloader.
-15. Add Server Ping Tool.
-16. Add the complete toolkit.
-17. Add Program Repairer.
-18. Add server data packet sending mode.
-19. Add client-side broadcast.
+## 更新项目
+1. 完善项目（对你没听错）
+2. 实现MC服务器配置文件配置
+3. 完善Rt扩展插件
+4. 实现对主流MC服务端核心的支持
+5. 实现对MC速度代理的支持
+6. 完善API库以给扩展调用
+7. 实现对MC服务端插件的配置
+8. 实现群组服务器的管理
+9. 扩展管理器的连接协议
+    - TCP
+    - UDP
+10. 实现常见MC服务端报错的分析器
+11. 更人性的配置（图形化）更安全的系统（连接固）更智能的管理（小龙虾？）
+12. 数据库等日志保存
 
 
-#### What better suggestions and features can be proposed, and thank you for your contribution.
-Your Star is the greatest motivation for me to carry out this project. If you like it, please give me a Star to show your appreciation. Thank you!
+#### 建议及引用
+非常推荐您能对项目指出点评，程序使用了人工智能制作，有错误十分感谢您可以提出甚至改进，如果有时间拜托能点个Stars吗？
 ![GitHub Stars](https://img.shields.io/github/stars/psoloi/RutCitrus?logo=github)
+
+该项目引用了一些库（无序排列）：Silk.NET.Core、TouchSocket、WPF-UI、Newtonsoft.Json、RestSharp、Serilog、Spectre.Console、Spectre.Console.Cli、YamlDotNet、MineStat、PacketDotNet、SharpPcap等
