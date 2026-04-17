@@ -32,7 +32,12 @@
         <ui:TextBox Grid.Row="2" Grid.Column="1" x:Name="PortTextBox" Margin="0,8" Text="7789"/>
 
         <ui:TextBlock Grid.Row="3" Grid.Column="0" Text="密钥:" VerticalAlignment="Center"/>
-        <ui:PasswordBox Grid.Row="3" Grid.Column="1" x:Name="KeyPasswordBox" Margin="0,8"/>
+        <Grid Grid.Row="3" Grid.Column="1" Margin="0,8">
+            <ui:TextBox x:Name="KeyTextBox" Text="(功能正在开发中...)" IsReadOnly="True" 
+                       VerticalContentAlignment="Center"/>
+            <TextBlock Text="(功能正在开发中...)" Foreground="Gray" 
+                       IsHitTestVisible="False" VerticalAlignment="Center" Margin="10,0,0,0"/>
+        </Grid>
 
         <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <ui:Button Content="确定" Width="80" Margin="0,0,8,0" Click="OkButton_Click" IsDefault="True" Appearance="Primary"/>

@@ -8,8 +8,8 @@
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationIcon>rc.ico</ApplicationIcon>
-    <AssemblyVersion>1.2602.27.1</AssemblyVersion>
-    <FileVersion>1.2602.27.1</FileVersion>
+    <AssemblyVersion>1.2604.28.3</AssemblyVersion>
+    <FileVersion>1.2604.28.3</FileVersion>
     <PackageProjectUrl>https://github.com/psoloi/RutCitrus</PackageProjectUrl>
     <Company>RutCitrus</Company>
     <Authors>psoloi</Authors>

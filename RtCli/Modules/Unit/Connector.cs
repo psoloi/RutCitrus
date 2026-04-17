@@ -12,15 +12,12 @@ namespace RtCli.Modules.Unit
     internal class Connector
     {
         private static TcpService? _server;
-        private static readonly ConcurrentDictionary<string, ClientInfo> _authenticatedClients = new();
-        private static readonly ConcurrentDictionary<string, DateTime> _pendingAuthClients = new();
-        private static readonly int _authTimeoutSeconds = 15;
+        private static readonly ConcurrentDictionary<string, ClientInfo> _connectedClients = new();
 
         public static string ServerName => Config.App.ServerName;
-        public static string ServerKey => Config.App.ServerKey;
         public static int ServerPort => Config.App.ServerPort;
         public static bool IsRunning => _server?.ServerState == ServerState.Running;
-        public static int AuthenticatedClientCount => _authenticatedClients.Count;
+        public static int ConnectedClientCount => _connectedClients.Count;
 
         public static async Task StartServerAsync()
         {
@@ -35,18 +32,10 @@ namespace RtCli.Modules.Unit
             try
             {
                 _server = new TcpService();
+                
                 _server.Received = (client, e) =>
                 {
-                    try
-                    {
-                        var message = Encoding.UTF8.GetString(e.Memory.Span);
-                        Output.Log($"[DEBUG] Received回调触发: '{message}'", 1, "Connector");
-                        HandleReceivedSync(client, message);
-                    }
-                    catch (Exception ex)
-                    {
-                        Output.Log($"[DEBUG] Received异常: {ex.Message}", 2, "Connector");
-                    }
+                    ProcessMessage(client, e.Memory.Span);
                     return Task.CompletedTask;
                 };
 
@@ -64,6 +53,7 @@ namespace RtCli.Modules.Unit
                     }));
 
                 await _server.StartAsync();
+                
                 Output.Log($"服务器 [[{ServerName}]] 已启动管理端口: {ServerPort} (IPv4/IPv6)", 1, "Connector");
             }
             catch (Exception ex)
@@ -72,55 +62,30 @@ namespace RtCli.Modules.Unit
             }
         }
 
-        private static void HandleReceivedSync(TcpSessionClient client, string message)
+        private static void ProcessMessage(TcpSessionClient client, ReadOnlySpan<byte> data)
         {
-            var clientId = client.Id;
-
-            Output.Log($"[DEBUG] 处理消息: '{message}' 来自客户端: {clientId}", 1, "Connector");
-
-            if (message.StartsWith("AUTH:"))
+            try
             {
-                var key = message.Substring(5);
-                Output.Log($"[DEBUG] AUTH请求, key长度: {key.Length}", 1, "Connector");
-                
-                if (key == ServerKey)
+                var message = Encoding.UTF8.GetString(data);
+                var clientId = client.Id;
+
+                if (_connectedClients.TryGetValue(clientId, out var clientInfo))
                 {
-                    _pendingAuthClients.TryRemove(clientId, out _);
-                    var clientIP = GetClientIP(client);
-                    _authenticatedClients[clientId] = new ClientInfo
+                    if (message.StartsWith("CMD:"))
                     {
-                        ConnectTime = DateTime.Now,
-                        IP = clientIP
-                    };
-                    Output.Log($"[DEBUG] 验证成功，已添加到authenticatedClients", 1, "Connector");
-                    client.SendAsync($"AUTH_SUCCESS:{ServerName}").Wait();
-                    Output.Log($"管理面板 [{clientIP}] 密钥验证成功", 1, "Connector");
-                }
-                else
-                {
-                    var clientIP = GetClientIP(client);
-                    client.SendAsync("AUTH_FAIL").Wait();
-                    Output.Log($"管理面板 [{clientIP}] 密钥验证失败，已断开连接", 2, "Connector");
-                    client.CloseAsync().Wait();
+                        var command = message.Substring(4);
+                        Output.Log($"收到管理面板 [{clientInfo.IP}] 命令: {command}", 1, "Connector");
+                        client.SendAsync($"RESULT:命令 '{command}' 执行完成").Wait();
+                    }
+                    else
+                    {
+                        Output.Log($"收到管理面板 [{clientInfo.IP}] 消息: {message}", 1, "Connector");
+                    }
                 }
             }
-            else
+            catch (Exception ex)
             {
-                var isAuthenticated = IsClientAuthenticated(clientId);
-                Output.Log($"[DEBUG] 非AUTH消息, isAuthenticated: {isAuthenticated}", 1, "Connector");
-                
-                if (isAuthenticated)
-                {
-                    var clientInfo = _authenticatedClients[clientId];
-                    Output.Log($"收到管理面板 [{clientInfo.IP}] 消息: {message}", 1, "Connector");
-                }
-                else
-                {
-                    var clientIP = GetClientIP(client);
-                    client.SendAsync("NOT_AUTHENTICATED").Wait();
-                    Output.Log($"拒绝未验证管理面板 [{clientIP}] 的消息: {message}", 2, "Connector");
-                    client.CloseAsync().Wait();
-                }
+                Output.Log($"处理消息异常: {ex.Message}", 2, "Connector");
             }
         }
 
@@ -143,8 +108,7 @@ namespace RtCli.Modules.Unit
             if (_server != null && _server.ServerState == ServerState.Running)
             {
                 await _server.StopAsync();
-                _authenticatedClients.Clear();
-                _pendingAuthClients.Clear();
+                _connectedClients.Clear();
                 Output.Log($"服务器 [[{ServerName}]] 关闭", 1, "Connector");
             }
         }
@@ -153,62 +117,33 @@ namespace RtCli.Modules.Unit
         {
             if (_server != null && _server.ServerState == ServerState.Running)
             {
-                foreach (var clientId in _authenticatedClients.Keys)
+                foreach (var clientId in _connectedClients.Keys)
                 {
                     if (_server.Clients.TryGetClient(clientId, out var sessionClient))
                     {
                         await sessionClient.SendAsync(data);
                     }
                 }
-                Output.Log($"已广播数据到 {_authenticatedClients.Count} 个已验证管理面板", 1, "Connector");
-            }
-        }
-
-        public static bool IsClientAuthenticated(string clientId)
-        {
-            return _authenticatedClients.ContainsKey(clientId);
-        }
-
-        internal static async Task CheckAuthTimeoutAsync(string clientId)
-        {
-            await Task.Delay(_authTimeoutSeconds * 1000);
-
-            if (IsClientAuthenticated(clientId))
-            {
-                Output.Log($"[DEBUG] 超时检查: 客户端已验证，跳过", 1, "Connector");
-                return;
-            }
-
-            if (_pendingAuthClients.TryRemove(clientId, out _))
-            {
-                if (_server?.Clients.TryGetClient(clientId, out var client) == true)
-                {
-                    var ip = GetClientIP(client);
-                    Output.Log($"管理面板 [{ip}] 验证超时，已断开连接", 2, "Connector");
-                    try
-                    {
-                        await client.CloseAsync();
-                    }
-                    catch { }
-                }
+                Output.Log($"已广播数据到 {_connectedClients.Count} 个管理面板", 1, "Connector");
             }
         }
 
         internal static void OnClientConnected(string clientId, string clientIP)
         {
-            _pendingAuthClients[clientId] = DateTime.Now;
-            Output.Log($"管理面板 [{clientIP}] 已连接，等待验证... (ID: {clientId})", 1, "Connector");
-            _ = CheckAuthTimeoutAsync(clientId);
+            _connectedClients[clientId] = new ClientInfo
+            {
+                ConnectTime = DateTime.Now,
+                IP = clientIP
+            };
+            Output.Log($"管理面板 [{clientIP}] 已连接 (ID: {clientId})", 1, "Connector");
         }
 
         internal static void OnClientDisconnected(string clientId)
         {
-            Output.Log($"[DEBUG] 客户端断开: {clientId}", 1, "Connector");
-            if (_authenticatedClients.TryRemove(clientId, out var clientInfo))
+            if (_connectedClients.TryRemove(clientId, out var clientInfo))
             {
                 Output.Log($"管理面板 [{clientInfo.IP}] 已断开连接", 1, "Connector");
             }
-            _pendingAuthClients.TryRemove(clientId, out _);
         }
     }
 

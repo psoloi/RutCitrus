@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -8,6 +8,61 @@ using Spectre.Console;
 
 namespace RtCli.Modules.Function
 {
+    public delegate void CommandHandler(string[] args);
+
+    public static class CommandRegistry
+    {
+        private static readonly Dictionary<string, CommandHandler> _commands = new();
+        private static readonly Dictionary<string, string> _commandDescriptions = new();
+
+        public static IReadOnlyDictionary<string, CommandHandler> Commands => _commands;
+        public static IReadOnlyDictionary<string, string> Descriptions => _commandDescriptions;
+
+        public static void RegisterCommand(string command, CommandHandler handler, string description = "")
+        {
+            if (string.IsNullOrWhiteSpace(command))
+                return;
+
+            _commands[command.ToLower()] = handler;
+            if (!string.IsNullOrEmpty(description))
+            {
+                _commandDescriptions[command.ToLower()] = description;
+            }
+        }
+
+        public static void UnregisterCommand(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+                return;
+
+            _commands.Remove(command.ToLower());
+            _commandDescriptions.Remove(command.ToLower());
+        }
+
+        public static bool TryExecute(string command, string[] args)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+                return false;
+
+            if (_commands.TryGetValue(command.ToLower(), out var handler))
+            {
+                handler.Invoke(args);
+                return true;
+            }
+            return false;
+        }
+
+        public static bool HasCommand(string command)
+        {
+            return !string.IsNullOrWhiteSpace(command) && _commands.ContainsKey(command.ToLower());
+        }
+
+        public static string[] GetAutoCompleteCommands()
+        {
+            return _commands.Keys.ToArray();
+        }
+    }
+
     internal class Commands
     {
         public static void Execute(string type)
@@ -15,7 +70,6 @@ namespace RtCli.Modules.Function
             string ThisProgramName = "Commands";
             if (string.IsNullOrEmpty(type))
             {
-                //Output.Log("异常的程序启动参数?", 2, ThisProgramName);
                 return;
             }
             var actions = new Dictionary<string, Action>
@@ -41,20 +95,13 @@ namespace RtCli.Modules.Function
             }
         }
 
-        /// <summary>
-        /// 使用Spectre.Console.Cli实现命令行参数处理
-        /// </summary>
-        /// <param name="args">命令行参数</param>
-        /// <returns>是否处理了参数（true表示已处理参数，false表示需要继续执行默认逻辑）</returns>
         public static bool Cli(string[] args)
         {
-            // 如果没有参数，不处理
             if (args.Length == 0)
             {
                 return false;
             }
 
-            // 检查是否包含--reload参数
             if (args.Contains("--reload", StringComparer.OrdinalIgnoreCase))
             {
                 Output.Log("重启程序...", 1, "RtCli");
@@ -62,7 +109,6 @@ namespace RtCli.Modules.Function
                 return true;
             }
 
-            // 检查是否包含--help或-h参数
             if (args.Contains("--help", StringComparer.OrdinalIgnoreCase) || 
                 args.Contains("-h", StringComparer.OrdinalIgnoreCase))
             {
@@ -73,9 +119,6 @@ namespace RtCli.Modules.Function
             return false;
         }
 
-        /// <summary>
-        /// 显示帮助信息
-        /// </summary>
         private static void ShowHelp()
         {
             var table = new Table();

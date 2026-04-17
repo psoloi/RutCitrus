@@ -12,20 +12,6 @@ namespace RutCitrusServer
     {
         public ObservableCollection<ServerInfo> Servers { get; } = new ObservableCollection<ServerInfo>();
         private ServerInfo? _currentServer;
-        private int _connectTimeoutMs = 5000;
-
-        public int ConnectTimeoutMs
-        {
-            get => _connectTimeoutMs;
-            set
-            {
-                if (_connectTimeoutMs != value && value > 0)
-                {
-                    _connectTimeoutMs = value;
-                    Connector.ConnectTimeoutMs = value;
-                }
-            }
-        }
 
         public MainWindow()
         {
@@ -39,48 +25,16 @@ namespace RutCitrusServer
             {
                 StatusText.Text = "已连接";
                 AppendLog("已连接到服务器");
-            });
-
-            Connector.OnDisconnected += () => Dispatcher.Invoke(() =>
-            {
-                StatusText.Text = "已断开";
-                AppendLog("已断开与服务器的连接");
-                if (_currentServer != null)
-                {
-                    _currentServer.SetState(ConnectionState.Disconnected);
-                    _currentServer = null;
-                }
-            });
-
-            Connector.OnAuthenticated += (serverName) => Dispatcher.Invoke(() =>
-            {
-                StatusText.Text = $"[已验证] {serverName}";
-                AppendLog($"密钥验证成功，服务器: {serverName}");
                 if (_currentServer != null)
                 {
                     _currentServer.SetState(ConnectionState.Connected);
                 }
             });
 
-            Connector.OnAuthFailed += (message) => Dispatcher.Invoke(() =>
+            Connector.OnDisconnected += () => Dispatcher.Invoke(() =>
             {
-                StatusText.Text = "验证失败";
-                AppendLog(message);
-            });
-
-            Connector.OnConnectTimeout += () => Dispatcher.Invoke(() =>
-            {
-                StatusText.Text = "连接超时";
-                if (_currentServer != null)
-                {
-                    _currentServer.SetState(ConnectionState.Disconnected);
-                    _currentServer = null;
-                }
-            });
-
-            Connector.OnAuthTimeout += () => Dispatcher.Invoke(() =>
-            {
-                StatusText.Text = "验证超时";
+                StatusText.Text = "已断开";
+                AppendLog("已断开与服务器的连接");
                 if (_currentServer != null)
                 {
                     _currentServer.SetState(ConnectionState.Disconnected);
@@ -144,8 +98,7 @@ namespace RutCitrusServer
                 {
                     Name = newName,
                     IP = newIP,
-                    Port = newPort,
-                    Key = dialog.ServerKey
+                    Port = newPort
                 };
                 Servers.Add(server);
                 AppendLog($"已添加服务器: {server.Name} ({server.IP}:{server.Port})");
@@ -161,7 +114,7 @@ namespace RutCitrusServer
                     case ConnectionState.Disconnected:
                         _currentServer = server;
                         server.SetState(ConnectionState.Connecting);
-                        _ = Connector.ConnectAsync(server.IP, server.Port, server.Key);
+                        _ = Connector.ConnectAsync(server.IP, server.Port);
                         AppendLog($"正在连接服务器: {server.Name} ({server.IP}:{server.Port})");
                         break;
                     case ConnectionState.Connecting:
@@ -187,14 +140,6 @@ namespace RutCitrusServer
                 AppendLog($"已删除服务器: {server.Name}");
             }
         }
-
-        private void ConnectTimeoutTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
-        {
-            if (ConnectTimeoutTextBox != null && int.TryParse(ConnectTimeoutTextBox.Text, out var timeout) && timeout > 0)
-            {
-                ConnectTimeoutMs = timeout;
-            }
-        }
     }
 
     public enum ConnectionState
@@ -211,7 +156,6 @@ namespace RutCitrusServer
         public string Name { get; set; } = "";
         public string IP { get; set; } = "";
         public int Port { get; set; } = 7789;
-        public string Key { get; set; } = "";
         public string DisplayEndpoint => $"{IP}:{Port}";
 
         public ConnectionState State

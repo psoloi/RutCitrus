@@ -8,7 +8,6 @@ namespace RutCitrusServer
         public string ServerName => NameTextBox.Text.Trim();
         public string ServerIP => IPTextBox.Text.Trim();
         public int ServerPort => int.TryParse(PortTextBox.Text.Trim(), out int port) ? port : 7789;
-        public string ServerKey => KeyPasswordBox.Password;
 
         public AddServerDialog()
         {
