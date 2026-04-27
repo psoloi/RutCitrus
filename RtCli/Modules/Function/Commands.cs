@@ -1,10 +1,11 @@
+using RtCli.Modules.Unit;
+using Spectre.Console;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Spectre.Console.Cli;
-using Spectre.Console;
+using System.Threading;
 
 namespace RtCli.Modules.Function
 {
@@ -63,6 +64,7 @@ namespace RtCli.Modules.Function
         }
     }
 
+
     internal class Commands
     {
         public static void Execute(string type)
@@ -74,8 +76,8 @@ namespace RtCli.Modules.Function
             }
             var actions = new Dictionary<string, Action>
                 {
-                    { "SetMode", () => { 
-                        Output.Log("设置模式中...", 1, ThisProgramName);
+                    { "DebugMode", () => {
+                        Output.Log("调试模式中...", 1, ThisProgramName);
                     } },
                     { "2", () => { /* F 2 */ } },
                     { "3", () => { /* F 3 */ } },
@@ -90,47 +92,20 @@ namespace RtCli.Modules.Function
             }
             else
             {
-                Output.Log("未知的程序启动参数!", 2, ThisProgramName);
-                Thread.Sleep(TimeSpan.FromSeconds(1));
+                Output.Log("未知的命令参数!", 2, ThisProgramName);
             }
         }
-
-        public static bool Cli(string[] args)
+        public static void MinecraftCommand(string[] args)
         {
-            if (args.Length == 0)
+            string ThisProgramName = "MinecraftCommand";
+            if (args == null || args.Length == 0)
             {
-                return false;
+                Output.Log("请提供要执行的 Minecraft 命令!", 2, ThisProgramName);
+                return;
             }
-
-            if (args.Contains("--reload", StringComparer.OrdinalIgnoreCase))
-            {
-                Output.Log("重启程序...", 1, "RtCli");
-                Reload.Restart();
-                return true;
-            }
-
-            if (args.Contains("--help", StringComparer.OrdinalIgnoreCase) || 
-                args.Contains("-h", StringComparer.OrdinalIgnoreCase))
-            {
-                ShowHelp();
-                return true;
-            }
-
-            return false;
-        }
-
-        private static void ShowHelp()
-        {
-            var table = new Table();
-            table.AddColumn(new TableColumn("参数").Centered());
-            table.AddColumn(new TableColumn("描述"));
-
-            table.AddRow("--installer", "启动安装界面演示");
-            table.AddRow("--reload", "重新加载应用");
-            table.AddRow("--help, -h", "显示此帮助信息");
-
-            AnsiConsole.WriteLine("RtCli 命令行参数:");
-            AnsiConsole.Write(table);
+            string command = string.Join(' ', args);
+            Output.Log($"执行 Minecraft 命令: {command}", 1, ThisProgramName);
+            // 在这里添加实际执行 Minecraft 命令的逻辑
         }
     }
 }

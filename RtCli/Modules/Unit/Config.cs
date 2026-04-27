@@ -12,6 +12,7 @@ namespace RtCli.Modules.Unit
         public bool CheckJava { get; set; } = true;
         public bool CheckDotNet { get; set; } = true;
         public bool CheckOSBit { get; set; } = true;
+        public bool SkipSelect { get; set; } = false;
 
         public string ServerName { get; set; } = "myserver";
         public int ServerPort { get; set; } = 7789;
@@ -21,11 +22,14 @@ namespace RtCli.Modules.Unit
     public static class Config
     {
         private static readonly string DataDirectory = "Content/Data";
+        private static readonly string LogsDirectory = "Content/Logs";
         private static readonly string absoluteDataPath = Path.GetFullPath(DataDirectory);
+        private static readonly string absoluteLogsPath = Path.GetFullPath(LogsDirectory);
         private static readonly string ConfigFileName = "config.yml";
         private static bool _isInitialized = false;
 
         public static string DataPath => absoluteDataPath;
+        public static string LogsPath => absoluteLogsPath;
         public static AppConfig App { get; private set; } = new AppConfig();
 
         public static void Initialize()
@@ -36,6 +40,12 @@ namespace RtCli.Modules.Unit
             {
                 Directory.CreateDirectory(absoluteDataPath);
                 Output.Log($"创建数据目录: {absoluteDataPath}", 1, "Config");
+            }
+
+            if (!Directory.Exists(absoluteLogsPath))
+            {
+                Directory.CreateDirectory(absoluteLogsPath);
+                Output.Log($"创建日志目录: {absoluteLogsPath}", 1, "Config");
             }
 
             LoadConfig();
@@ -84,17 +94,15 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#  说明:");
             sb.AppendLine("#    该程序配置文件如果不清晰，未来将会考虑Wiki制作");
             sb.AppendLine("#    如果你不知道那些项有什么作用，请考虑使用RutCitrusServer来设置");
+            sb.AppendLine("#    目前修改配置后需要重启应用程序才能生效");
             sb.AppendLine("#");
             sb.AppendLine("#  配置项说明:");
             sb.AppendLine("#    check_java    - 是否在启动时检查 Java 运行时环境 (true/false)");
             sb.AppendLine("#    check_dot_net - 是否在启动时检查 .NET 运行时环境 (true/false)");
             sb.AppendLine("#    check_os_bit  - 是否检查操作系统位数 (true/false)");
+            sb.AppendLine("#    skip_select   - 是否跳过模式选择界面直接进入默认模式 (true/false)");
             sb.AppendLine("#    server_name   - 服务器名称，用于标识本服务器");
             sb.AppendLine("#    server_port   - 服务器监听端口号 (1-65535)");
-            sb.AppendLine("#");
-            sb.AppendLine("#  注意事项:");
-            sb.AppendLine("#    1. 修改配置后需要重启应用程序才能生效");
-            sb.AppendLine("#    2. server_port 请确保未被其他程序占用");
             sb.AppendLine("#");
             sb.AppendLine("# ==============================================================================");
             sb.AppendLine();
@@ -113,6 +121,8 @@ namespace RtCli.Modules.Unit
                     sb.AppendLine("# 服务器名称");
                 else if (trimmedLine.StartsWith("server_port:"))
                     sb.AppendLine("# 服务器端口号");
+                else if (trimmedLine.StartsWith("skip_select"))
+                    sb.AppendLine("# 跳过模式选择");
 
                 sb.Append(line);
             }

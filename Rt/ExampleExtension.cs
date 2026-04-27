@@ -1,5 +1,6 @@
-﻿using MineStatLib;
+using MineStatLib;
 using RtCli.Modules;
+using RtCli.Modules.Extension;
 using RtCli.Modules.Function;
 using RtExtensionManager;
 using System;
@@ -10,91 +11,119 @@ using System.Threading.Tasks;
 
 namespace Rt
 {
-    /// <summary>
-    /// 示例扩展插件
-    /// </summary>
-    public class ExampleExtension : IExtension
+    public class ExampleExtension : ExtensionBase
     {
-        public string Name => "Rt";
-        public string Version => "1.0.3";
-        public string Description => "示例扩展插件，实现了MC服务器状态监测及安全方面扩展";
+        public override string Name => "Rt";
+        public override string Version => "1.1.5";
+        public override string Description => "示例扩展插件，实现了MC服务器状态监测及安全方面扩展";
 
         private bool _isLoaded = false;
 
-        public void Load()
+        public override void Load()
         {
             if (_isLoaded)
             {
-                Output.Log("扩展已经加载过了", 2, Name);
+                Output.Log("Rt扩展已经加载过了", 2, Name);
                 return;
             }
 
-            Output.Log("扩展正在加载...", 1, Name);
-            // 注册命令
+            Output.Log("Rt扩展正在加载...", 1, Name);
+
+            SubscribeEvent<ModeSelectedEvent>(OnModeSelected);
+            SubscribeEvent<ProgramStartupEvent>(OnProgramStartup);
+            SubscribeEvent<ProgramShutdownEvent>(OnProgramShutdown);
+            SubscribeEvent<ExtensionLoadEvent>(OnExtensionLoad);
+            SubscribeEvent<CommandExecuteEvent>(OnCommandExecute);
+
             CommandRegistry.RegisterCommand("rte", args =>
             {
-                Output.Log($"[green]Rt版本：{Version} 输入rte help获取帮助", 1, "Rt");
+                Output.Log($"[green]Rt版本：{Version} 输入rte help获取帮助[/]", 1, "Rt");
             }, "Rt扩展命令");
             CommandRegistry.RegisterCommand("rte help", args =>
             {
-                Output.Log($"[green]目前该扩展还在开发只有一个get副命令，你先别急，急又是何意味？", 1, "Rt");
+                Output.Log($"[green]目前该扩展还在开发只有一个get副命令，你先别急，急又是何意味？[/]", 1, "Rt");
             }, "Rt扩展命令帮助");
             CommandRegistry.RegisterCommand("rte get", args =>
             {
-                Output.Log($"[green]获取本地127.0.0.1:25565服务器信息", 1, "Rt");
+                Console.WriteLine("正在获取本地127.0.0.1:25565服务器信息...");
                 MineStat ms = new MineStat("127.0.0.1", 25565);
                 if (ms.ServerUp)
                 {
-                    Output.Log($"服务器在线其版本为{ms.Version}最大玩家{ms.MaximumPlayers}当前玩家{ms.CurrentPlayers}", 1, "Rt");
+                    Console.WriteLine($"服务器在线其版本为{ms.Version}最大玩家{ms.MaximumPlayers}当前玩家{ms.CurrentPlayers}");
                     if (ms.Gamemode != null)
-                        Output.Log($"服务器游戏模式为{ms.Gamemode}", 1, "Rt");
-                    Output.Log($"服务器消息为{ms.Stripped_Motd}", 1, "Rt");
-                    Output.Log($"服务器延迟为{ms.Latency}ms", 1, "Rt");
-                    Output.Log($"服务器在线玩家列表为{string.Join(", ", ms.PlayerList)}", 1, "Rt");
-                    Output.Log($"服务器使用的协议为{ms.Protocol}", 1, "Rt");
+                        Console.WriteLine($"服务器游戏模式为{ms.Gamemode}");
+                    Console.WriteLine($"服务器版本为{ms.Version}最大玩家{ms.MaximumPlayers}当前玩家{ms.CurrentPlayers}");
+                    Console.WriteLine("服务器消息为" + ms.Motd);
+                    Console.WriteLine($"服务器延迟为{ms.Latency}ms");
+                    Console.WriteLine($"服务器在线玩家列表为{string.Join(", ", ms.PlayerList)}");
+                    Console.WriteLine($"服务器使用的协议为{ms.Protocol}");
                 }
                 else
-                    Output.Log($"服务器离线", 1, "Rt");
+                    Console.WriteLine("服务器离线");
 
 
             }, "Rt扩展获取Minecraft信息");
 
 
             _isLoaded = true;
-            Output.Log("扩展加载完成", 1, Name);
+            Output.Log("Rt扩展加载完成", 1, Name);
         }
 
-        public void Run()
+        private void OnModeSelected(ModeSelectedEvent e)
+        {
+            //Output.Log($"当前模式: {e.Mode}", 1, Name);
+        }
+
+        private void OnProgramStartup(ProgramStartupEvent e)
+        {
+            //Output.Log($"启动Rt扩展", 1, Name);
+        }
+
+        private void OnProgramShutdown(ProgramShutdownEvent e)
+        {
+            //Output.Log($"关闭Rt扩展: {e.Reason}", 1, Name);
+        }
+
+        private void OnExtensionLoad(ExtensionLoadEvent e)
+        {
+            //Output.Log($"[green]扩展加载[/]: {e.ExtensionName} Ver:{e.Version}", 1, Name);
+        }
+
+        private void OnCommandExecute(CommandExecuteEvent e)
+        {
+            //Output.Log($"[green]命令执行[/]: {e.Command}", 1, Name);
+        }
+
+        public override void Run()
         {
             if (!_isLoaded)
             {
-                Output.Log("扩展未加载，无法运行", 3, Name);
+                Output.Log("Rt扩展未加载，无法运行", 3, Name);
                 return;
             }
 
-            Output.Log("扩展正在运行...", 1, Name);
+            Output.Log("Rt扩展正在运行...", 1, Name);
 
-
-            //
             throw new NotImplementedException("示例扩展的Run方法尚未实现");
-
         }
 
-        public void Unload()
+        public override void Unload()
         {
             if (!_isLoaded)
             {
-                Output.Log("扩展未加载，无法卸载", 2, Name);
+                Output.Log("Rt扩展未加载，无法卸载", 2, Name);
                 return;
             }
 
-            Output.Log("扩展正在卸载...", 1, Name);
-            // 注销命令
+            Output.Log("Rt扩展正在卸载...", 1, Name);
             CommandRegistry.UnregisterCommand("rte");
+            CommandRegistry.UnregisterCommand("rte help");
+            CommandRegistry.UnregisterCommand("rte get");
 
+            base.Unload();
 
             _isLoaded = false;
-            Output.Log("扩展卸载完成", 1, Name);
+            Output.Log("Rt扩展卸载完成", 1, Name);
         }
 
     }

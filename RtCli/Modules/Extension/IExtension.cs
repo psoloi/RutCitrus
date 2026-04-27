@@ -1,50 +1,47 @@
-ï»¿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using RtCli.Modules.Extension;
 
-//namespace RtCli.Modules.Extension
 namespace RtExtensionManager
 {
-    /// <summary>
-    /// æ’ä»¶æ¥å£å®šä¹‰
-    /// </summary>
     public interface IExtension
     {
         /// <summary>
-        /// æ’ä»¶åç§°
+        /// ²å¼şÃû³Æ
         /// </summary>
         string Name { get; }
 
         /// <summary>
-        /// æ’ä»¶ç‰ˆæœ¬
+        /// ²å¼ş°æ±¾
         /// </summary>
         string Version { get; }
 
         /// <summary>
-        /// æ’ä»¶æè¿°
+        /// ²å¼şÃèÊö
         /// </summary>
         string Description { get; }
 
         /// <summary>
-        /// åŠ è½½æ’ä»¶
+        /// ¼ÓÔØ²å¼ş
         /// </summary>
         void Load();
 
         /// <summary>
-        /// è¿è¡Œæ’ä»¶
+        /// ÔËĞĞ²å¼ş
         /// </summary>
         void Run();
 
         /// <summary>
-        /// å¸è½½æ’ä»¶
+        /// Ğ¶ÔØ²å¼ş
         /// </summary>
         void Unload();
     }
 
     /// <summary>
-    /// æ’ä»¶ä¿¡æ¯
+    /// ²å¼şĞÅÏ¢
     /// </summary>
     public class ExtensionInfo
     {
@@ -55,5 +52,35 @@ namespace RtExtensionManager
         public string? TypeName { get; set; }
         public bool IsLoaded { get; set; }
         public DateTime LoadTime { get; set; }
+    }
+
+    public abstract class ExtensionBase : IExtension
+    {
+        public abstract string Name { get; }
+        public abstract string Version { get; }
+        public abstract string Description { get; }
+
+        private readonly List<Delegate> _registeredHandlers = new();
+
+        protected void SubscribeEvent<TEvent>(RtEventHandler<TEvent> handler) where TEvent : RtEvent
+        {
+            _registeredHandlers.Add(handler);
+            EventBus.Subscribe(handler, Name);
+        }
+
+        protected void UnsubscribeEvent<TEvent>(RtEventHandler<TEvent> handler) where TEvent : RtEvent
+        {
+            _registeredHandlers.Remove(handler);
+            EventBus.Unsubscribe(handler);
+        }
+
+        public virtual void Load() { }
+        public virtual void Run() { }
+
+        public virtual void Unload()
+        {
+            _registeredHandlers.Clear();
+            EventBus.UnsubscribeAll(Name);
+        }
     }
 }

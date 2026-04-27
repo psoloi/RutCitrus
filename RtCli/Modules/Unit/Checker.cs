@@ -21,7 +21,7 @@ namespace RtCli.Modules.Unit
                 using var process = Process.Start(startInfo);
                 if (process == null)
                 {
-                    return "当前设备环境没有检测到Java";
+                    return I18n.Get("checker_nojava");
                 }
 
                 string output = process.StandardError.ReadToEnd() + process.StandardOutput.ReadToEnd();
@@ -29,7 +29,7 @@ namespace RtCli.Modules.Unit
 
                 if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
                 {
-                    return "当前设备环境没有检测到Java";
+                    return I18n.Get("checker_nojava");
                 }
 
                 string? versionLine = output.Split('\n').FirstOrDefault(line => line.Contains("version"));
@@ -37,14 +37,14 @@ namespace RtCli.Modules.Unit
                 {
                     int startIdx = versionLine.IndexOf("version") + "version".Length;
                     string version = versionLine.Substring(startIdx).Trim().Trim('"');
-                    return $"检测到的Java版本: {version}";
+                    return $"{I18n.Get("checker_java")} {version}";
                 }
 
-                return "当前设备环境没有检测到Java";
+                return I18n.Get("checker_nojava");
             }
             catch
             {
-                return "当前设备环境没有检测到Java";
+                return I18n.Get("checker_nojava");
             }
         }
         public static string CheckDotNet()
@@ -62,19 +62,19 @@ namespace RtCli.Modules.Unit
                 using var process = Process.Start(startInfo);
                 if (process == null)
                 {
-                    return "当前设备环境没有检测到.NET，推荐安装.NET8.0及更高版本";
+                    return I18n.Get("checker_nodotnet");
                 }
                 string output = process.StandardOutput.ReadToEnd();
                 process.WaitForExit();
                 if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
                 {
-                    return "当前设备环境没有检测到.NET，推荐安装.NET8.0及更高版本";
+                    return I18n.Get("checker_nodotnet");
                 }
-                return $"检测到的.NET版本: {output.Trim()}";
+                return $"{I18n.Get("checker_dotnet")} {output.Trim()}";
             }
             catch
             {
-                return "当前设备环境没有检测到.NET，推荐安装.NET8.0及更高版本";
+                return I18n.Get("checker_nodotnet");
             }
         }
     }

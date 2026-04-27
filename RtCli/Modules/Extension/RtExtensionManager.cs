@@ -1,4 +1,3 @@
-// using global::RtExtensionManager;
 using System;
 using System.Text;
 using System.Threading.Tasks;
@@ -8,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using RtCli.Modules;
+using RtCli.Modules.Extension;
 
 //namespace RtCli.Modules.Extension
 namespace RtExtensionManager
@@ -141,6 +141,8 @@ namespace RtExtensionManager
 
                         Output.Log($"[green]+[/] 加载扩展成功: {extension.Name} Ver:{extension.Version}", 1, "RtExtensionManager");
                         Output.Log($"   描述: {extension.Description}", 1, "RtExtensionManager");
+
+                        EventBus.Publish(new ExtensionLoadEvent(extension.Name, extension.Version));
                         return true;
                     }
                     catch (Exception ex)
@@ -234,7 +236,10 @@ namespace RtExtensionManager
             {
                 try
                 {
-                    // 调用扩展的卸载方法
+                    EventBus.Publish(new ExtensionUnloadEvent(context.Info.Name ?? ""));
+
+                    EventBus.UnsubscribeAll(context.Info.Name ?? "");
+
                     context.Extension.Unload();
 
                     // 卸载加载上下文

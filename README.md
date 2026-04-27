@@ -22,6 +22,8 @@
 给RtCli设置服务器端口再打开RutCitrusServer连接就可以了
 
 ## RtCli 扩展
+这些只是基本的定义，还有事件作为扩展的调用，详情见源代码Events.cs
+如果还是无法理解可以试着看看Rt扩展示列
 ```csharp
     /// <summary>
     /// 插件接口定义
@@ -83,7 +85,7 @@
 3. 完善Rt扩展插件
 4. 实现对主流MC服务端核心的支持
 5. 实现对MC速度代理的支持
-6. 完善API库以给扩展调用
+6. 完善Event以给扩展调用
 7. 实现对MC服务端插件的配置
 8. 实现群组服务器的管理
 9. 扩展管理器的连接协议
@@ -98,4 +100,4 @@
 非常推荐您能对项目指出点评，程序使用了人工智能制作，有错误十分感谢您可以提出甚至改进，如果有时间拜托能点个Stars吗？
 ![GitHub Stars](https://img.shields.io/github/stars/psoloi/RutCitrus?logo=github)
 
-该项目引用了一些库（无序排列）：Silk.NET.Core、TouchSocket、WPF-UI、Newtonsoft.Json、RestSharp、Serilog、Spectre.Console、Spectre.Console.Cli、YamlDotNet、MineStat、PacketDotNet、SharpPcap等
+项目中作者主动引用了的一些库（无序排列）：Spectre.Console、Silk.NET.Core、TouchSocket、WPF-UI、Newtonsoft.Json、RestSharp、Serilog、YamlDotNet、MineStat、PacketDotNet、SharpPcap等
