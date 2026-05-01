@@ -1,4 +1,4 @@
-using RtCli.Modules;
+using RtCli.Modules.Unit;
 using Spectre.Console;
 using System;
 using System.Collections.Generic;
@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -15,14 +16,252 @@ namespace RtCli.Modules.Function
 {
     internal class Analyzer
     {
-        private static Process? _attachedProcess;
+        private static Process? _serverProcess;
+        private static StreamWriter? _serverInput;
         private static CancellationTokenSource? _outputCts;
         private static readonly object _attachLock = new object();
         private static int _attachedProcessId = 0;
         private static string _attachedWindowTitle = "";
+        private static string _connectedServerName = "";
         private static List<MinecraftServerInfo> _lastScanResults = new List<MinecraftServerInfo>();
+        private static long _logFilePosition = 0;
+        private static string _currentMode = "RCON";
+        private static bool _isRunModeActive = false;
+
+        private static RconClient? _rconClient;
 
         public static IReadOnlyList<MinecraftServerInfo> LastScanResults => _lastScanResults;
+        public static string CurrentMode => _currentMode;
+        public static bool IsRunMode => _currentMode == "RUN";
+        public static bool IsRconMode => _currentMode == "RCON";
+
+        public static void Initialize()
+        {
+            _currentMode = Config.App.AnalyzerMode.ToUpperInvariant();
+            if (_currentMode != "RUN" && _currentMode != "RCON")
+            {
+                _currentMode = "RCON";
+            }
+        }
+
+        #region RUN Mode
+
+        public static bool IsRunModeActive => _isRunModeActive;
+
+        public static void StartServer()
+        {
+            string ThisProgramName = "Analyzer";
+
+            if (_currentMode != "RUN")
+            {
+                Output.Log("当前模式为 RCON，无法使用 RUN 模式启动服务端。请在配置文件中设置 analyzer_mode 为 RUN。", 2, ThisProgramName);
+                return;
+            }
+
+            if (_isRunModeActive)
+            {
+                Output.Log("服务端已在运行中。", 2, ThisProgramName);
+                return;
+            }
+
+            string workPath = Config.App.WorkPath;
+            string flags = Config.App.RunServerFlags;
+
+            if (string.IsNullOrWhiteSpace(workPath))
+            {
+                workPath = FindServerPathFromScan();
+                if (string.IsNullOrEmpty(workPath))
+                {
+                    Output.Log("未配置工作目录且无法自动检测。请在配置文件中设置 work_path。", 2, ThisProgramName);
+                    return;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(flags))
+            {
+                Output.Log("未配置启动参数。请在配置文件中设置 run_server_flags。", 2, ThisProgramName);
+                return;
+            }
+
+            if (!Directory.Exists(workPath))
+            {
+                Output.Log($"工作目录不存在: {workPath}", 3, ThisProgramName);
+                return;
+            }
+
+            try
+            {
+                _serverProcess = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "java",
+                        Arguments = flags,
+                        WorkingDirectory = workPath,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        RedirectStandardInput = true,
+                        CreateNoWindow = true,
+                        StandardOutputEncoding = Encoding.UTF8,
+                        StandardErrorEncoding = Encoding.UTF8
+                    },
+                    EnableRaisingEvents = true
+                };
+
+                _serverProcess.OutputDataReceived += (sender, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data))
+                    {
+                        Output.Log(Markup.Escape(e.Data), 1, _connectedServerName);
+                    }
+                };
+
+                _serverProcess.ErrorDataReceived += (sender, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data))
+                    {
+                        Output.Log(Markup.Escape(e.Data), 3, _connectedServerName);
+                    }
+                };
+
+                _serverProcess.Start();
+                _serverProcess.BeginOutputReadLine();
+                _serverProcess.BeginErrorReadLine();
+                _serverInput = _serverProcess.StandardInput;
+                _serverInput.AutoFlush = true;
+
+                _isRunModeActive = true;
+                _attachedProcessId = _serverProcess.Id;
+                _connectedServerName = Config.App.ServerName;
+
+                _outputCts = new CancellationTokenSource();
+                _ = Task.Run(() => MonitorServerProcess(_outputCts.Token), _outputCts.Token);
+
+                Output.Log($"已启动服务端 (PID: {_serverProcess.Id})", 1, ThisProgramName);
+                Output.Log($"工作目录: {workPath}", 1, ThisProgramName);
+                Output.Log($"启动参数: java {flags}", 1, ThisProgramName);
+                Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
+                Output.Log("输入 .server stop 停止服务端。", 1, ThisProgramName);
+            }
+            catch (Exception ex)
+            {
+                Output.ReportError(ex, false, "启动服务端失败");
+                CleanupRunMode();
+            }
+        }
+
+        public static void StopServer()
+        {
+            string ThisProgramName = "Analyzer";
+
+            if (!_isRunModeActive)
+            {
+                Output.Log("服务端未在运行。", 2, ThisProgramName);
+                return;
+            }
+
+            try
+            {
+                if (_serverInput != null)
+                {
+                    _serverInput.WriteLine("stop");
+                    _serverInput.Flush();
+                }
+
+                if (_serverProcess != null && !_serverProcess.HasExited)
+                {
+                    if (!_serverProcess.WaitForExit(10000))
+                    {
+                        _serverProcess.Kill();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"停止服务端时出错: {ex.Message}", 2, ThisProgramName);
+            }
+
+            CleanupRunMode();
+            Output.Log("服务端已停止。", 1, ThisProgramName);
+        }
+
+        private static void MonitorServerProcess(CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    if (_serverProcess == null || _serverProcess.HasExited)
+                    {
+                        int exitCode = _serverProcess?.ExitCode ?? -1;
+                        Output.Log($"服务端进程已退出 (退出码: {exitCode})", 2, "Analyzer");
+                        CleanupRunMode();
+                        break;
+                    }
+                    Thread.Sleep(500);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch { }
+        }
+
+        private static void CleanupRunMode()
+        {
+            lock (_attachLock)
+            {
+                _outputCts?.Cancel();
+                _outputCts?.Dispose();
+                _outputCts = null;
+
+                _serverInput?.Dispose();
+                _serverInput = null;
+
+                if (_serverProcess != null)
+                {
+                    try
+                    {
+                        if (!_serverProcess.HasExited)
+                        {
+                            _serverProcess.CancelOutputRead();
+                            _serverProcess.CancelErrorRead();
+                        }
+                    }
+                    catch { }
+
+                    try { _serverProcess.Dispose(); } catch { }
+                    _serverProcess = null;
+                }
+
+                _isRunModeActive = false;
+                _attachedProcessId = 0;
+                _attachedWindowTitle = "";
+                _connectedServerName = "";
+            }
+        }
+
+        private static string? FindServerPathFromScan()
+        {
+            var servers = ScanMinecraftServers();
+            if (servers.Count > 0)
+            {
+                string? jarPath = servers[0].JarPath;
+                if (!string.IsNullOrEmpty(jarPath))
+                {
+                    if (Path.IsPathRooted(jarPath))
+                        return Path.GetDirectoryName(jarPath);
+
+                    string? workDir = GetProcessWorkingDirectory(servers[0].ProcessId);
+                    if (!string.IsNullOrEmpty(workDir))
+                        return workDir;
+                }
+            }
+            return null;
+        }
+
+        #endregion
+
+        #region RCON Mode
 
         public static void ScanAndListServers()
         {
@@ -63,6 +302,12 @@ namespace RtCli.Modules.Function
         {
             string ThisProgramName = "Analyzer";
 
+            if (_currentMode == "RUN")
+            {
+                Output.Log("当前为 RUN 模式，不支持 .server connect。请使用 .server start 启动服务端。", 2, ThisProgramName);
+                return;
+            }
+
             if (_lastScanResults.Count == 0)
             {
                 Output.Log("没有可用的服务端列表，请先使用 .server get 扫描。", 2, ThisProgramName);
@@ -76,17 +321,23 @@ namespace RtCli.Modules.Function
             }
 
             var selectedServer = _lastScanResults[index - 1];
-            AttachToServer(selectedServer);
+            AttachToServerRcon(selectedServer, index.ToString());
         }
 
         public static void ConnectToServerByPid(int pid)
         {
             string ThisProgramName = "Analyzer";
 
+            if (_currentMode == "RUN")
+            {
+                Output.Log("当前为 RUN 模式，不支持 .server connect。请使用 .server start 启动服务端。", 2, ThisProgramName);
+                return;
+            }
+
             var server = _lastScanResults.FirstOrDefault(s => s.ProcessId == pid);
             if (server != null)
             {
-                AttachToServer(server);
+                AttachToServerRcon(server, $"PID:{pid}");
                 return;
             }
 
@@ -101,7 +352,7 @@ namespace RtCli.Modules.Function
                     JarPath = $"PID:{pid}",
                     CommandLine = ""
                 };
-                AttachToServer(tempServer);
+                AttachToServerRcon(tempServer, $"PID:{pid}");
             }
             catch (Exception ex)
             {
@@ -109,41 +360,207 @@ namespace RtCli.Modules.Function
             }
         }
 
-        public static bool IsAttached => _attachedProcessId != 0;
+        private static void AttachToServerRcon(MinecraftServerInfo server, string serverName)
+        {
+            string ThisProgramName = "Analyzer";
+            lock (_attachLock)
+            {
+                Detach();
+
+                try
+                {
+                    string? serverDir = ResolveServerDirectory(server);
+                    if (string.IsNullOrEmpty(serverDir))
+                    {
+                        Output.Log("无法确定服务端工作目录，连接失败。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    string logFile = Path.Combine(serverDir, "logs", "latest.log");
+                    if (!File.Exists(logFile))
+                    {
+                        Output.Log($"找不到日志文件: {logFile}", 2, ThisProgramName);
+                        return;
+                    }
+
+                    _attachedProcessId = server.ProcessId;
+                    _attachedWindowTitle = server.WindowTitle;
+                    _connectedServerName = serverName;
+
+                    using (var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    {
+                        _logFilePosition = fs.Length;
+                    }
+
+                    _outputCts = new CancellationTokenSource();
+                    var token = _outputCts.Token;
+                    var capturedServerName = _connectedServerName;
+                    var capturedLogFile = logFile;
+
+                    _ = Task.Run(() => WatchLogFile(capturedLogFile, capturedServerName, token), token);
+
+                    _rconClient = new RconClient();
+                    bool rconConnected = false;
+                    try
+                    {
+                        rconConnected = _rconClient.Connect(
+                            Config.App.RconHost,
+                            Config.App.RconPort,
+                            Config.App.RconPassword);
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"RCON 连接失败: {ex.Message}，命令发送将不可用。", 2, ThisProgramName);
+                    }
+
+                    Output.Log($"已连接服务端: {Path.GetFileName(server.JarPath)} (PID: {server.ProcessId})", 1, ThisProgramName);
+                    Output.Log($"日志文件: {logFile}", 1, ThisProgramName);
+                    if (rconConnected)
+                    {
+                        Output.Log($"RCON 已连接 ({Config.App.RconHost}:{Config.App.RconPort})", 1, ThisProgramName);
+                    }
+                    else
+                    {
+                        Output.Log("RCON 未连接，命令发送不可用。请检查 RCON 配置。", 2, ThisProgramName);
+                    }
+                    Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
+                    Output.Log("输入 .server detach 可断开连接。", 1, ThisProgramName);
+                }
+                catch (Exception ex)
+                {
+                    _attachedProcessId = 0;
+                    _attachedWindowTitle = "";
+                    _connectedServerName = "";
+                    _logFilePosition = 0;
+                    Output.ReportError(ex, false, "连接服务端失败");
+                }
+            }
+        }
+
+        private static void WatchLogFile(string logFile, string serverName, CancellationToken cancellationToken)
+        {
+            try
+            {
+                using var watcher = new FileSystemWatcher(Path.GetDirectoryName(logFile)!, Path.GetFileName(logFile))
+                {
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size
+                };
+
+                var changedEvent = new AutoResetEvent(false);
+                watcher.Changed += (s, e) => changedEvent.Set();
+                watcher.EnableRaisingEvents = true;
+
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    WaitHandle.WaitAny(new WaitHandle[] { changedEvent, cancellationToken.WaitHandle }, 2000);
+
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+
+                    ReadNewLogLines(logFile, serverName);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch { }
+        }
+
+        private static void ReadNewLogLines(string logFile, string serverName)
+        {
+            try
+            {
+                using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                if (fs.Length <= _logFilePosition)
+                    return;
+
+                fs.Seek(_logFilePosition, SeekOrigin.Begin);
+                using var reader = new StreamReader(fs, Encoding.UTF8);
+
+                string? line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        Output.Log(Markup.Escape(line), 1, serverName);
+                    }
+                }
+
+                _logFilePosition = fs.Position;
+            }
+            catch (IOException) { }
+            catch { }
+        }
+
+        #endregion
+
+        #region Common
+
+        public static bool IsAttached => _attachedProcessId != 0 || _isRunModeActive;
 
         public static void SendCommand(string command)
         {
             lock (_attachLock)
             {
-                if (_attachedProcessId == 0)
+                if (_currentMode == "RUN")
                 {
-                    Output.Log("未连接到 Minecraft 服务端，请先使用 .server get 扫描并连接。", 2, "Analyzer");
-                    return;
+                    SendCommandRunMode(command);
                 }
-
-                try
+                else
                 {
-                    IntPtr hWnd = FindWindowByTitleOrPid(_attachedWindowTitle, _attachedProcessId);
-                    if (hWnd == IntPtr.Zero)
-                    {
-                        Output.Log("无法找到目标控制台窗口，可能窗口已关闭。", 2, "Analyzer");
-                        return;
-                    }
-
-                    foreach (char c in command)
-                    {
-                        PostMessage(hWnd, WM_CHAR, (IntPtr)c, IntPtr.Zero);
-                    }
-
-                    PostMessage(hWnd, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero);
-                    PostMessage(hWnd, WM_KEYUP, (IntPtr)VK_RETURN, IntPtr.Zero);
-
-                    Output.Log($"> {command}", 1, "MC");
+                    SendCommandRconMode(command);
                 }
-                catch (Exception ex)
+            }
+        }
+
+        private static void SendCommandRunMode(string command)
+        {
+            string ThisProgramName = "Analyzer";
+
+            if (!_isRunModeActive || _serverInput == null)
+            {
+                Output.Log("服务端未运行，请先使用 .server start 启动。", 2, ThisProgramName);
+                return;
+            }
+
+            try
+            {
+                _serverInput.WriteLine(command);
+                _serverInput.Flush();
+                Output.Log($"> {command}", 1, _connectedServerName);
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"发送命令失败: {ex.Message}", 3, ThisProgramName);
+            }
+        }
+
+        private static void SendCommandRconMode(string command)
+        {
+            string ThisProgramName = "Analyzer";
+
+            if (_attachedProcessId == 0)
+            {
+                Output.Log("未连接到 Minecraft 服务端，请先使用 .server get 扫描并连接。", 2, ThisProgramName);
+                return;
+            }
+
+            if (_rconClient == null || !_rconClient.IsConnected)
+            {
+                Output.Log("RCON 未连接，无法发送命令。请检查 RCON 配置后重新连接。", 2, ThisProgramName);
+                return;
+            }
+
+            try
+            {
+                string response = _rconClient.SendCommand(command);
+                Output.Log($"> {command}", 1, _connectedServerName);
+                if (!string.IsNullOrWhiteSpace(response))
                 {
-                    Output.Log($"发送命令失败: {ex.Message}", 3, "Analyzer");
+                    Output.Log(Markup.Escape(response), 1, _connectedServerName);
                 }
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"RCON 发送命令失败: {ex.Message}", 3, ThisProgramName);
             }
         }
 
@@ -155,259 +572,135 @@ namespace RtCli.Modules.Function
                 _outputCts?.Dispose();
                 _outputCts = null;
 
-                if (_attachedProcess != null)
+                if (_rconClient != null)
                 {
-                    try
-                    {
-                        if (!_attachedProcess.HasExited)
-                        {
-                            _attachedProcess.CancelOutputRead();
-                            _attachedProcess.CancelErrorRead();
-                        }
-                    }
-                    catch { }
-
-                    _attachedProcess.Dispose();
-                    _attachedProcess = null;
+                    _rconClient.Disconnect();
+                    _rconClient = null;
                 }
 
                 _attachedProcessId = 0;
                 _attachedWindowTitle = "";
-                Output.Log("已断开与 Minecraft 服务端的连接。", 1, "Analyzer");
+                _connectedServerName = "";
+                _logFilePosition = 0;
+
+                if (!_isRunModeActive)
+                {
+                    Output.Log("断开与 Minecraft 服务端的连接。", 1, "Analyzer");
+                }
             }
         }
 
-        private static void AttachToServer(MinecraftServerInfo server)
+        private static string? ResolveServerDirectory(MinecraftServerInfo server)
         {
-            string ThisProgramName = "Analyzer";
-            lock (_attachLock)
+            if (!string.IsNullOrEmpty(server.JarPath) && server.JarPath != $"PID:{server.ProcessId}")
             {
-                Detach();
-
-                try
+                if (Path.IsPathRooted(server.JarPath))
                 {
-                    _attachedProcessId = server.ProcessId;
-                    _attachedWindowTitle = server.WindowTitle;
-                    _attachedProcess = Process.GetProcessById(server.ProcessId);
-
-                    _outputCts = new CancellationTokenSource();
-                    _ = Task.Run(() => CaptureConsoleOutput(server.ProcessId, _outputCts.Token), _outputCts.Token);
-
-                    Output.Log($"已连接服务端: {Path.GetFileName(server.JarPath)} (PID: {server.ProcessId})", 1, ThisProgramName);
-                    Output.Log("现在可以使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
-                    Output.Log("输入 .server detach 可断开连接。", 1, ThisProgramName);
+                    return Path.GetDirectoryName(server.JarPath);
                 }
-                catch (Exception ex)
+
+                string? workDir = GetProcessWorkingDirectory(server.ProcessId);
+                if (!string.IsNullOrEmpty(workDir))
                 {
-                    _attachedProcessId = 0;
-                    _attachedWindowTitle = "";
-                    Output.ReportError(ex, false, "连接服务端失败");
+                    string fullPath = Path.Combine(workDir, server.JarPath);
+                    if (File.Exists(fullPath))
+                    {
+                        return Path.GetDirectoryName(fullPath);
+                    }
                 }
+
+                return workDir;
             }
+
+            return GetProcessWorkingDirectory(server.ProcessId);
         }
 
-        private static void CaptureConsoleOutput(int processId, CancellationToken cancellationToken)
-        {
-            string ThisProgramName = "Analyzer";
-            IntPtr hConsole = IntPtr.Zero;
+        #endregion
 
+        #region Process Working Directory
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int dwSize, out int lpNumberOfBytesRead);
+
+        [DllImport("ntdll.dll")]
+        private static extern int NtQueryInformationProcess(IntPtr ProcessHandle, int ProcessInformationClass, out PROCESS_BASIC_INFORMATION ProcessInformation, int ProcessInformationLength, out int ReturnLength);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_BASIC_INFORMATION
+        {
+            public IntPtr Reserved1;
+            public IntPtr PebBaseAddress;
+            public IntPtr Reserved2_0;
+            public IntPtr Reserved2_1;
+            public IntPtr UniqueProcessId;
+            public IntPtr Reserved3;
+        }
+
+        private const uint PROCESS_QUERY_INFORMATION = 0x0400;
+        private const uint PROCESS_VM_READ = 0x0010;
+        private const int ProcessBasicInformation = 0;
+
+        private static string? GetProcessWorkingDirectory(int pid)
+        {
+            IntPtr hProcess = IntPtr.Zero;
             try
             {
-                if (!FreeConsole()) { }
+                hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, (uint)pid);
+                if (hProcess == IntPtr.Zero)
+                    return null;
 
-                if (!AttachConsole((uint)processId))
-                {
-                    AllocConsole();
-                    Output.Log($"无法附加到进程 {processId} 的控制台，输出捕获不可用。", 2, ThisProgramName);
-                    return;
-                }
+                int status = NtQueryInformationProcess(hProcess, ProcessBasicInformation, out PROCESS_BASIC_INFORMATION pbi, Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(), out _);
+                if (status != 0 || pbi.PebBaseAddress == IntPtr.Zero)
+                    return null;
 
-                hConsole = CreateFile(
-                    "CONOUT$",
-                    GENERIC_READ | GENERIC_WRITE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    IntPtr.Zero,
-                    OPEN_EXISTING,
-                    0,
-                    IntPtr.Zero);
+                bool is64Bit = Environment.Is64BitProcess;
+                int pebParamsOffset = is64Bit ? 0x20 : 0x10;
 
-                if (hConsole == IntPtr.Zero || hConsole == new IntPtr(-1))
-                {
-                    FreeConsole();
-                    AllocConsole();
-                    Output.Log("无法打开控制台输出缓冲区。", 2, ThisProgramName);
-                    return;
-                }
+                byte[] pebBuffer = new byte[pebParamsOffset + IntPtr.Size];
+                if (!ReadProcessMemory(hProcess, pbi.PebBaseAddress, pebBuffer, pebBuffer.Length, out _))
+                    return null;
 
-                if (!GetConsoleScreenBufferInfo(hConsole, out CONSOLE_SCREEN_BUFFER_INFO sbInfo))
-                {
-                    CloseHandle(hConsole);
-                    FreeConsole();
-                    AllocConsole();
-                    Output.Log("无法获取控制台缓冲区信息。", 2, ThisProgramName);
-                    return;
-                }
+                IntPtr processParamsPtr = is64Bit
+                    ? (IntPtr)BitConverter.ToInt64(pebBuffer, pebParamsOffset)
+                    : (IntPtr)BitConverter.ToInt32(pebBuffer, pebParamsOffset);
 
-                string previousContent = "";
+                if (processParamsPtr == IntPtr.Zero)
+                    return null;
 
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    try
-                    {
-                        if (!GetConsoleScreenBufferInfo(hConsole, out sbInfo))
-                            break;
+                int curDirOffset = is64Bit ? 0x38 : 0x24;
+                int unicodeStringSize = is64Bit ? 16 : 8;
+                byte[] paramsBuffer = new byte[curDirOffset + unicodeStringSize];
+                if (!ReadProcessMemory(hProcess, processParamsPtr, paramsBuffer, paramsBuffer.Length, out _))
+                    return null;
 
-                        short width = sbInfo.dwSize.X;
-                        short height = sbInfo.dwSize.Y;
+                ushort strLength = BitConverter.ToUInt16(paramsBuffer, curDirOffset);
+                IntPtr strBufferPtr = is64Bit
+                    ? (IntPtr)BitConverter.ToInt64(paramsBuffer, curDirOffset + 8)
+                    : (IntPtr)BitConverter.ToInt32(paramsBuffer, curDirOffset + 4);
 
-                        if (width <= 0 || height <= 0)
-                        {
-                            Thread.Sleep(500);
-                            continue;
-                        }
+                if (strLength == 0 || strBufferPtr == IntPtr.Zero)
+                    return null;
 
-                        int bufSize = width * height;
-                        if (bufSize <= 0 || bufSize > 65536)
-                        {
-                            Thread.Sleep(500);
-                            continue;
-                        }
+                byte[] strBuffer = new byte[strLength];
+                if (!ReadProcessMemory(hProcess, strBufferPtr, strBuffer, strBuffer.Length, out _))
+                    return null;
 
-                        var buffer = new CHAR_INFO[bufSize];
-                        var readRegion = new SMALL_RECT
-                        {
-                            Left = 0,
-                            Top = 0,
-                            Right = (short)(width - 1),
-                            Bottom = (short)(height - 1)
-                        };
-
-                        if (ReadConsoleOutput(hConsole, buffer, new COORD(width, height), new COORD(0, 0), ref readRegion))
-                        {
-                            var sb = new StringBuilder();
-                            for (int row = 0; row < height; row++)
-                            {
-                                var lineBuilder = new StringBuilder();
-                                for (int col = 0; col < width; col++)
-                                {
-                                    int idx = row * width + col;
-                                    if (idx < buffer.Length)
-                                    {
-                                        char c = (char)buffer[idx].UnicodeChar;
-                                        if (c != '\0')
-                                            lineBuilder.Append(c);
-                                    }
-                                }
-                                string line = lineBuilder.ToString().TrimEnd();
-                                if (!string.IsNullOrWhiteSpace(line))
-                                {
-                                    sb.AppendLine(line);
-                                }
-                            }
-
-                            string currentContent = sb.ToString();
-                            if (currentContent != previousContent && !string.IsNullOrWhiteSpace(currentContent))
-                            {
-                                string diff = GetDiff(previousContent, currentContent);
-                                if (!string.IsNullOrWhiteSpace(diff))
-                                {
-                                    foreach (var line in diff.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
-                                    {
-                                        if (!string.IsNullOrWhiteSpace(line))
-                                        {
-                                            Output.Log(line, 1, "MC-Out");
-                                        }
-                                    }
-                                }
-                                previousContent = currentContent;
-                            }
-                        }
-
-                        Thread.Sleep(500);
-                    }
-                    catch
-                    {
-                        break;
-                    }
-                }
+                string dir = Encoding.Unicode.GetString(strBuffer);
+                dir = dir.TrimEnd('\\', '\0');
+                return dir;
             }
-            catch (Exception ex)
+            catch
             {
-                Output.Log($"输出捕获异常: {ex.Message}", 3, ThisProgramName);
+                return null;
             }
             finally
             {
-                if (hConsole != IntPtr.Zero && hConsole != new IntPtr(-1))
-                    CloseHandle(hConsole);
-
-                try
-                {
-                    FreeConsole();
-                    AllocConsole();
-                }
-                catch { }
+                if (hProcess != IntPtr.Zero)
+                    CloseHandle(hProcess);
             }
-        }
-
-        private static string GetDiff(string previous, string current)
-        {
-            if (string.IsNullOrEmpty(previous))
-                return current;
-
-            if (current.StartsWith(previous, StringComparison.Ordinal))
-            {
-                return current.Substring(previous.Length);
-            }
-
-            var prevLines = previous.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            var currLines = current.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-
-            var newLines = new List<string>();
-            int startIndex = 0;
-            for (int i = Math.Max(0, currLines.Length - prevLines.Length - 5); i < currLines.Length; i++)
-            {
-                bool found = false;
-                for (int j = startIndex; j < prevLines.Length; j++)
-                {
-                    if (currLines[i] == prevLines[j])
-                    {
-                        startIndex = j + 1;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found)
-                {
-                    newLines.Add(currLines[i]);
-                }
-            }
-
-            return string.Join(Environment.NewLine, newLines);
-        }
-
-        #region Window Helpers
-
-        private static IntPtr FindWindowByTitleOrPid(string title, int pid)
-        {
-            if (!string.IsNullOrEmpty(title))
-            {
-                IntPtr hWnd = FindWindow(null, title);
-                if (hWnd != IntPtr.Zero)
-                    return hWnd;
-            }
-
-            IntPtr result = IntPtr.Zero;
-            EnumWindows((hWnd, lParam) =>
-            {
-                GetWindowThreadProcessId(hWnd, out uint windowPid);
-                if (windowPid == pid)
-                {
-                    result = hWnd;
-                    return false;
-                }
-                return true;
-            }, IntPtr.Zero);
-            return result;
         }
 
         #endregion
@@ -415,95 +708,7 @@ namespace RtCli.Modules.Function
         #region Windows API
 
         [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool AllocConsole();
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool FreeConsole();
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool AttachConsole(uint dwProcessId);
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-        private static extern IntPtr CreateFile(
-            string lpFileName,
-            uint dwDesiredAccess,
-            uint dwShareMode,
-            IntPtr lpSecurityAttributes,
-            uint dwCreationDisposition,
-            uint dwFlagsAndAttributes,
-            IntPtr hTemplateFile);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool GetConsoleScreenBufferInfo(IntPtr hConsoleOutput, out CONSOLE_SCREEN_BUFFER_INFO lpConsoleScreenBufferInfo);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool ReadConsoleOutput(IntPtr hConsoleOutput, [Out] CHAR_INFO[] lpBuffer, COORD dwBufferSize, COORD dwBufferCoord, ref SMALL_RECT lpReadRegion);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
-
-        [DllImport("user32.dll")]
-        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
-        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-        private const uint GENERIC_READ = 0x80000000;
-        private const uint GENERIC_WRITE = 0x40000000;
-        private const uint FILE_SHARE_READ = 0x00000001;
-        private const uint FILE_SHARE_WRITE = 0x00000002;
-        private const uint OPEN_EXISTING = 3;
-        private const uint WM_CHAR = 0x0102;
-        private const uint WM_KEYDOWN = 0x0100;
-        private const uint WM_KEYUP = 0x0101;
-        private const int VK_RETURN = 0x0D;
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct COORD
-        {
-            public short X;
-            public short Y;
-            public COORD(short x, short y)
-            {
-                X = x;
-                Y = y;
-            }
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct SMALL_RECT
-        {
-            public short Left;
-            public short Top;
-            public short Right;
-            public short Bottom;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct CONSOLE_SCREEN_BUFFER_INFO
-        {
-            public COORD dwSize;
-            public COORD dwCursorPosition;
-            public short wAttributes;
-            public SMALL_RECT srWindow;
-            public COORD dwMaximumWindowSize;
-        }
-
-        [StructLayout(LayoutKind.Explicit, CharSet = CharSet.Unicode)]
-        private struct CHAR_INFO
-        {
-            [FieldOffset(0)] public char UnicodeChar;
-            [FieldOffset(0)] public byte AsciiChar;
-            [FieldOffset(2)] public short Attributes;
-        }
 
         #endregion
 
@@ -538,7 +743,6 @@ namespace RtCli.Modules.Function
                     }
                     catch
                     {
-                        // 进程可能已退出
                     }
                 }
             }
@@ -646,5 +850,148 @@ namespace RtCli.Modules.Function
         public string WindowTitle { get; set; } = "";
         public string JarPath { get; set; } = "";
         public string CommandLine { get; set; } = "";
+    }
+
+    internal class RconClient
+    {
+        private TcpClient? _tcpClient;
+        private NetworkStream? _stream;
+        private int _requestId = 0;
+
+        public bool IsConnected => _tcpClient?.Connected == true;
+
+        private const int PacketTypeLogin = 3;
+        private const int PacketTypeCommand = 2;
+
+        public bool Connect(string host, int port, string password)
+        {
+            try
+            {
+                _tcpClient = new TcpClient();
+                var result = _tcpClient.BeginConnect(host, port, null, null);
+                bool success = result.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5));
+
+                if (!success)
+                {
+                    _tcpClient.Dispose();
+                    _tcpClient = null;
+                    return false;
+                }
+
+                _tcpClient.EndConnect(result);
+                _stream = _tcpClient.GetStream();
+
+                SendPacket(PacketTypeLogin, password);
+                var response = ReadPacket();
+
+                if (response == null || response.Type == -1)
+                {
+                    Disconnect();
+                    return false;
+                }
+
+                return true;
+            }
+            catch
+            {
+                Disconnect();
+                return false;
+            }
+        }
+
+        public string SendCommand(string command)
+        {
+            if (!IsConnected || _stream == null)
+                throw new InvalidOperationException("RCON 未连接");
+
+            _requestId++;
+            SendPacket(PacketTypeCommand, command);
+
+            var response = ReadPacket();
+            return response?.Body ?? "";
+        }
+
+        public void Disconnect()
+        {
+            try
+            {
+                _stream?.Close();
+                _stream = null;
+                _tcpClient?.Close();
+                _tcpClient = null;
+            }
+            catch { }
+        }
+
+        private void SendPacket(int type, string body)
+        {
+            if (_stream == null) return;
+
+            byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
+            int length = 4 + 4 + bodyBytes.Length + 2;
+
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+
+            writer.Write(length);
+            writer.Write(_requestId);
+            writer.Write(type);
+            writer.Write(bodyBytes);
+            writer.Write((byte)0);
+            writer.Write((byte)0);
+
+            _stream.Write(ms.ToArray(), 0, (int)ms.Length);
+            _stream.Flush();
+        }
+
+        private RconPacket? ReadPacket()
+        {
+            if (_stream == null) return null;
+
+            try
+            {
+                var lengthBuffer = new byte[4];
+                int read = _stream.Read(lengthBuffer, 0, 4);
+                if (read < 4) return null;
+
+                int length = BitConverter.ToInt32(lengthBuffer, 0);
+                if (length <= 0 || length > 4096) return null;
+
+                var dataBuffer = new byte[length];
+                int totalRead = 0;
+                while (totalRead < length)
+                {
+                    int bytesRead = _stream.Read(dataBuffer, totalRead, length - totalRead);
+                    if (bytesRead == 0) return null;
+                    totalRead += bytesRead;
+                }
+
+                int requestId = BitConverter.ToInt32(dataBuffer, 0);
+                int type = BitConverter.ToInt32(dataBuffer, 4);
+
+                string body = "";
+                if (length > 8)
+                {
+                    int bodyLength = length - 8 - 2;
+                    if (bodyLength > 0)
+                    {
+                        body = Encoding.UTF8.GetString(dataBuffer, 8, bodyLength);
+                    }
+                }
+
+                return new RconPacket { RequestId = requestId, Type = type, Body = body };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private class RconPacket
+        {
+            public int RequestId { get; set; }
+            public int Type { get; set; }
+            public string Body { get; set; } = "";
+        }
     }
 }

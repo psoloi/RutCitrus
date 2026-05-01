@@ -9,14 +9,23 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="Common\MineStat.dll" />
+    <None Remove="MineStat.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="MineStat.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MineStat" Version="3.1.2" />
     <PackageReference Include="PacketDotNet" Version="1.4.8" />
     <PackageReference Include="SharpPcap" Version="6.3.1" />
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Core\" />
     <Folder Include="Common\" />
+    <Folder Include="Core\" />
   </ItemGroup>
 
   <ItemGroup>

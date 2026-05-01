@@ -5,7 +5,10 @@ using RtCli.Modules.Function;
 using RtExtensionManager;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -26,6 +29,8 @@ namespace Rt
                 Output.Log("Rt扩展已经加载过了", 2, Name);
                 return;
             }
+
+            RegisterAssemblyResolver();
 
             Output.Log("Rt扩展正在加载...", 1, Name);
 
@@ -126,5 +131,61 @@ namespace Rt
             Output.Log("Rt扩展卸载完成", 1, Name);
         }
 
+
+
+
+        private static bool _resolverRegistered = false;
+        private static readonly Dictionary<string, byte[]> _loadedAssemblies = new();
+
+        private static void RegisterAssemblyResolver()
+        {
+            if (_resolverRegistered)
+                return;
+
+            var currentContext = AssemblyLoadContext.GetLoadContext(Assembly.GetExecutingAssembly());
+            if (currentContext == null)
+            {
+                Output.Log("扩展缺失AssemblyLoadContext", 2, "Rt");
+                return;
+            }
+
+            currentContext.Resolving += (context, assemblyName) =>
+            {
+                string resourceName = assemblyName.Name + ".dll";
+
+                if (_loadedAssemblies.TryGetValue(assemblyName.Name!, out byte[]? assemblyBytes))
+                {
+                    using var stream = new MemoryStream(assemblyBytes);
+                    return context.LoadFromStream(stream);
+                }
+
+                Assembly asm = Assembly.GetExecutingAssembly();
+                string[] resources = asm.GetManifestResourceNames();
+
+                var matchingResource = resources.FirstOrDefault(r =>
+                    r.EndsWith(resourceName, StringComparison.OrdinalIgnoreCase) ||
+                    r == resourceName ||
+                    r.EndsWith("." + resourceName, StringComparison.OrdinalIgnoreCase));
+
+                if (matchingResource != null)
+                {
+                    using Stream? resourceStream = asm.GetManifestResourceStream(matchingResource);
+                    if (resourceStream != null)
+                    {
+                        byte[] bytes = new byte[resourceStream.Length];
+                        resourceStream.Read(bytes, 0, bytes.Length);
+
+                        _loadedAssemblies[assemblyName.Name!] = bytes;
+
+                        using var memStream = new MemoryStream(bytes);
+                        return context.LoadFromStream(memStream);
+                    }
+                }
+
+                return null;
+            };
+
+            _resolverRegistered = true;
+        }
     }
 }

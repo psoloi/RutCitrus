@@ -305,9 +305,9 @@ namespace RtExtensionManager
         /// </summary>
         private class ExtensionContext
         {
-            public ExtensionLoadContext? Context { get; set; }
-            public IExtension Extension { get; set; }
-            public ExtensionInfo Info { get; set; }
+            public required ExtensionLoadContext Context { get; set; }
+            public required IExtension Extension { get; set; }
+            public required ExtensionInfo Info { get; set; }
         }
     }
 

@@ -16,7 +16,7 @@ namespace RtCli
 {
     internal class Program
     {
-        // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器
+        // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器，将捕获控制台方式换为/命令通过rcon或management来发送
         // 程序版本号规则：主版本号.日期yy/mm.次版本号.编译号
         public static string RtCliVersion { get; } = "1.2604.29.13";
         public static string ThisProgramName { get; } = "RtCli";
@@ -36,6 +36,8 @@ namespace RtCli
             ".server",
             ".server get",
             ".server connect",
+            ".server start",
+            ".server stop",
             ".server detach",
             ".server status",
             "/"
@@ -110,6 +112,7 @@ namespace RtCli
 
             Modules.Unit.I18n.Init();
             Output.InitializeLogging();
+            Analyzer.Initialize();
 
             Thread.CurrentThread.Name = "MainThread";
             if (Config.App.CheckJava)
@@ -564,11 +567,13 @@ namespace RtCli
                                     .AddRow("[white]rt clients[/]", "已连接面板列表")
                                     .AddRow("[white]rt extensions[/]", "已加载的扩展列表")
                                     .AddRow("[green].help[/]", "显示其他命令或扩展命令列表")
-                                    .AddRow("[white].server[/]", "连接MC控制台相关命令")
-                                    .AddRow("[white].server get[/]", "扫描并列出运行中的MC服务端")
-                                    .AddRow("[white].server connect <序号|pid:进程ID>[/]", "连接到指定的MC服务端")
-                                    .AddRow("[white].server detach[/]", "取消与MC服务端控制台的连接")
-                                    .AddRow("[white].server status[/]", "查看与MC服务端控制台的连接状态")
+                                    .AddRow("[white].server[/]", "MC控制台相关命令 (模式取决于配置)")
+                                    .AddRow("[white].server get[/]", "[[[DarkOrange]RCON[/]]] 扫描并列出运行中的MC服务端")
+                                    .AddRow("[white].server connect <序号|pid:进程ID>[/]", "[[[DarkOrange]RCON[/]]] 连接到指定的MC服务端")
+                                    .AddRow("[white].server detach[/]", "[[[DarkOrange]RCON[/]]] 断开与MC服务端的连接")
+                                    .AddRow("[white].server start[/]", "[[[green]RUN[/]]] 启动MC服务端作为子进程")
+                                    .AddRow("[white].server stop[/]", "[[[green]RUN[/]]] 停止MC服务端")
+                                    .AddRow("[white].server status[/]", "查看MC服务端连接/运行状态")
                                     .AddRow("[green]/[/]", "输入/开头的命令将直接发送到MC服务端执行");
                                 AnsiConsole.Write(table);
                                 handled = true;
@@ -578,57 +583,111 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == BaseCommands[9]:
-                                Output.Log($"命令：.server", 1, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[10]:
-                                Output.Log($"用于连接MC控制台，子命令：get、connect、detach、status", 1, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[11]:
-                                Analyzer.ScanAndListServers();
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[12]:
-                                Output.Log("用法: .server connect <序号|pid:进程ID>", 1, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[13]:
-                                Analyzer.Detach();
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[14]:
-                                Output.Log(Analyzer.IsAttached ? "已连接到 Minecraft 服务端。" : "未连接到 Minecraft 服务端。", 1, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd !=null && cmd.StartsWith(".server connect "):
-                                string connectArg = cmd.Substring(16).Trim();
-                                if (!string.IsNullOrWhiteSpace(connectArg))
+                                var extensionCommands = CommandRegistry.Commands;
+                                var extensionDescriptions = CommandRegistry.Descriptions;
+                                if (extensionCommands.Count > 0)
                                 {
-                                    if (connectArg.StartsWith("pid:", StringComparison.OrdinalIgnoreCase))
+                                    Output.Log("扩展注册的命令列表：", 1, ThisProgramName);
+                                    var extTable = new Table()
+                                        .AddColumn("命令")
+                                        .AddColumn("描述");
+                                    foreach (var kvp in extensionCommands)
                                     {
-                                        string pidStr = connectArg.Substring(4);
-                                        if (int.TryParse(pidStr, out int pid))
-                                        {
-                                            Analyzer.ConnectToServerByPid(pid);
-                                        }
-                                        else
-                                        {
-                                            Output.Log("无效的进程ID格式。", 2, ThisProgramName);
-                                        }
+                                        string description = extensionDescriptions.TryGetValue(kvp.Key, out var desc) ? desc : "";
+                                        extTable.AddRow($"[cyan]{kvp.Key}[/]", string.IsNullOrEmpty(description) ? "[grey]-[/]" : description);
                                     }
-                                    else if (int.TryParse(connectArg, out int index))
-                                    {
-                                        Analyzer.ConnectToServer(index);
-                                    }
-                                    else
-                                    {
-                                        Output.Log("无效的参数。请使用序号或 pid:进程ID。", 2, ThisProgramName);
-                                    }
+                                    AnsiConsole.Write(extTable);
                                 }
                                 else
                                 {
+                                    Output.Log("没有扩展注册的命令", 1, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd == BaseCommands[10]:
+                                if (Analyzer.IsRunMode)
+                                    Output.Log("当前为 RUN 模式，子命令：start、stop、status", 1, ThisProgramName);
+                                else
+                                    Output.Log("当前为 RCON 模式，子命令：get、connect、detach、status", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == BaseCommands[11]:
+                                if (Analyzer.IsRunMode)
+                                    Output.Log("RUN 模式下不支持 .server get，请使用 .server start 启动服务端。", 2, ThisProgramName);
+                                else
+                                    Analyzer.ScanAndListServers();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == BaseCommands[12]:
+                                if (Analyzer.IsRunMode)
+                                    Output.Log("RUN 模式下不支持 .server connect，请使用 .server start 启动服务端。", 2, ThisProgramName);
+                                else
                                     Output.Log("用法: .server connect <序号|pid:进程ID>", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == BaseCommands[13]:
+                                if (Analyzer.IsRunMode)
+                                    Analyzer.StartServer();
+                                else
+                                    Output.Log("RCON 模式下不支持 .server start，请使用 .server get + .server connect 连接。", 2, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == BaseCommands[14]:
+                                if (Analyzer.IsRunMode)
+                                    Analyzer.StopServer();
+                                else
+                                    Output.Log("RCON 模式下不支持 .server stop。", 2, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == BaseCommands[15]:
+                                if (Analyzer.IsRunMode)
+                                    Output.Log("RUN 模式下不支持 .server detach，请使用 .server stop 停止服务端。", 2, ThisProgramName);
+                                else
+                                    Analyzer.Detach();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == BaseCommands[16]:
+                                if (Analyzer.IsRunMode)
+                                    Output.Log(Analyzer.IsRunModeActive ? "服务端运行中。" : "服务端未运行。", 1, ThisProgramName);
+                                else
+                                    Output.Log(Analyzer.IsAttached ? "已连接到 Minecraft 服务端。" : "未连接到 Minecraft 服务端。", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".server connect "):
+                                if (Analyzer.IsRunMode)
+                                {
+                                    Output.Log("RUN 模式下不支持 .server connect，请使用 .server start 启动服务端。", 2, ThisProgramName);
+                                }
+                                else
+                                {
+                                    string connectArg = cmd.Substring(16).Trim();
+                                    if (!string.IsNullOrWhiteSpace(connectArg))
+                                    {
+                                        if (connectArg.StartsWith("pid:", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            string pidStr = connectArg.Substring(4);
+                                            if (int.TryParse(pidStr, out int pid))
+                                            {
+                                                Analyzer.ConnectToServerByPid(pid);
+                                            }
+                                            else
+                                            {
+                                                Output.Log("无效的进程ID格式。", 2, ThisProgramName);
+                                            }
+                                        }
+                                        else if (int.TryParse(connectArg, out int index))
+                                        {
+                                            Analyzer.ConnectToServer(index);
+                                        }
+                                        else
+                                        {
+                                            Output.Log("无效的参数。请使用序号或 pid:进程ID。", 2, ThisProgramName);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Output.Log("用法: .server connect <序号|pid:进程ID>", 1, ThisProgramName);
+                                    }
                                 }
                                 handled = true;
                                 break;

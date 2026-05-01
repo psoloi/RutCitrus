@@ -95,17 +95,5 @@ namespace RtCli.Modules.Function
                 Output.Log("未知的命令参数!", 2, ThisProgramName);
             }
         }
-        public static void MinecraftCommand(string[] args)
-        {
-            string ThisProgramName = "MinecraftCommand";
-            if (args == null || args.Length == 0)
-            {
-                Output.Log("请提供要执行的 Minecraft 命令!", 2, ThisProgramName);
-                return;
-            }
-            string command = string.Join(' ', args);
-            Output.Log($"执行 Minecraft 命令: {command}", 1, ThisProgramName);
-            // 在这里添加实际执行 Minecraft 命令的逻辑
-        }
     }
 }
