@@ -293,12 +293,104 @@ namespace RtExtensionManager
             {
                 var info = kvp.Value.Info;
                 Output.Log($"[[#]] {info.Name} Ver:{info.Version}", 1, "RtExtensionManager");
+                Output.Log($"     Key: {kvp.Key}", 1, "RtExtensionManager");
                 Output.Log($"     描述: {info.Description}", 1, "RtExtensionManager");
                 Output.Log($"     程序集: {Path.GetFileName(info.AssemblyPath)}", 1, "RtExtensionManager");
                 Output.Log($"     加载时间: {info.LoadTime:yyyy-MM-dd HH:mm:ss}", 1, "RtExtensionManager");
 
             }
         }
+
+        /// <summary>
+        /// 获取扩展列表JSON
+        /// </summary>
+        public static string GetExtensionsJson()
+        {
+            var extensions = _loadedExtensions.Select(kvp => new
+            {
+                Key = kvp.Key,
+                Name = kvp.Value.Info.Name,
+                Version = kvp.Value.Info.Version,
+                Description = kvp.Value.Info.Description,
+                LoadTime = kvp.Value.Info.LoadTime.ToString("yyyy-MM-dd HH:mm:ss")
+            }).ToList();
+
+            return Newtonsoft.Json.JsonConvert.SerializeObject(extensions);
+        }
+
+        /// <summary>
+        /// 卸载指定扩展（公开方法）
+        /// </summary>
+        public static bool UnloadExtensionByKey(string extensionKey)
+        {
+            if (string.IsNullOrWhiteSpace(extensionKey))
+            {
+                Output.Log("扩展Key不能为空", 2, "RtExtensionManager");
+                return false;
+            }
+
+            if (!_loadedExtensions.ContainsKey(extensionKey))
+            {
+                Output.Log($"未找到扩展: {extensionKey}", 2, "RtExtensionManager");
+                Output.Log("可用的扩展Key:", 1, "RtExtensionManager");
+                foreach (var key in _loadedExtensions.Keys)
+                {
+                    Output.Log($"  - {key}", 1, "RtExtensionManager");
+                }
+                return false;
+            }
+
+            return UnloadExtension(extensionKey);
+        }
+
+        /// <summary>
+        /// 加载指定扩展（公开方法）
+        /// </summary>
+        public static bool LoadExtensionByKey(string extensionPath)
+        {
+            Thread.CurrentThread.Name = "Main";
+            Initialize();
+            
+            if (string.IsNullOrWhiteSpace(extensionPath))
+            {
+                Output.Log("扩展路径不能为空", 2, "RtExtensionManager");
+                return false;
+            }
+
+            string fullPath;
+            if (Path.IsPathRooted(extensionPath))
+            {
+                fullPath = extensionPath;
+            }
+            else
+            {
+                fullPath = Path.Combine(absoluteExtensionsPath, extensionPath);
+            }
+
+            if (!File.Exists(fullPath))
+            {
+                Output.Log($"扩展文件不存在: {fullPath}", 2, "RtExtensionManager");
+                return false;
+            }
+
+            if (!fullPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            {
+                Output.Log("扩展文件必须是 .dll 格式", 2, "RtExtensionManager");
+                return false;
+            }
+
+            return LoadExtension(fullPath);
+        }
+
+        /// <summary>
+        /// 获取扩展目录路径
+        /// </summary>
+        public static string GetExtensionsDirectory() => absoluteExtensionsPath;
+
+        /// <summary>
+        /// 获取扩展数量
+        /// </summary>
+        public static int GetExtensionCount() => _loadedExtensions.Count;
 
         /// <summary>
         /// 扩展上下文

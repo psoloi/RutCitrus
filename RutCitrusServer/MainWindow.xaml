@@ -104,7 +104,50 @@
 
                     <ScrollViewer x:Name="ExtensionPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
-                            <ui:TextBlock Text="扩展" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,16"/>
+                            <Grid Margin="0,0,0,16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Column="0" Text="扩展管理" FontSize="20" FontWeight="SemiBold"/>
+                                <ui:Button Grid.Column="1" Content="刷新" Icon="{ui:SymbolIcon ArrowSync24}" Click="RefreshExtensionsButton_Click"/>
+                            </Grid>
+                            
+                            <ui:Card Margin="0,0,0,8" Padding="12">
+                                <ui:TextBlock Text="显示已连接服务器上 RtCli 加载的扩展，可以在此卸载扩展。" Foreground="Gray" TextWrapping="Wrap"/>
+                            </ui:Card>
+                            
+                            <ui:TextBlock x:Name="ExtensionNotConnectedText" Text="请先连接到服务器" 
+                                          Foreground="Orange" HorizontalAlignment="Center" Margin="0,16" Visibility="Collapsed"/>
+                            
+                            <ItemsControl x:Name="ExtensionItemsControl" ItemsSource="{Binding Extensions}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <ui:Card Margin="0,4" Padding="12">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <ui:TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14"/>
+                                                        <ui:TextBlock Text=" v" Foreground="Gray" FontSize="12" VerticalAlignment="Center"/>
+                                                        <ui:TextBlock Text="{Binding Version}" Foreground="Gray" FontSize="12" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                    <ui:TextBlock Text="{Binding Description}" Foreground="Gray" FontSize="12" TextWrapping="Wrap" MaxHeight="40"/>
+                                                    <ui:TextBlock Text="{Binding LoadTime}" Foreground="DarkGray" FontSize="10"/>
+                                                </StackPanel>
+                                                <ui:Button Grid.Column="1" Content="卸载" Click="UnloadExtensionButton_Click" 
+                                                           Tag="{Binding Key}" Appearance="Danger"/>
+                                            </Grid>
+                                        </ui:Card>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            
+                            <ui:TextBlock x:Name="EmptyExtensionText" Text="暂无已加载的扩展" 
+                                          Foreground="Gray" HorizontalAlignment="Center" Margin="0,16"/>
                         </StackPanel>
                     </ScrollViewer>
 

@@ -583,7 +583,7 @@ namespace RtCli.Modules.Function
                 _connectedServerName = "";
                 _logFilePosition = 0;
 
-                if (!_isRunModeActive)
+                if (!_isRunModeActive && _currentMode != "RUN")
                 {
                     Output.Log("断开与 Minecraft 服务端的连接。", 1, "Analyzer");
                 }

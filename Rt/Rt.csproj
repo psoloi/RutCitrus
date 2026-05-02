@@ -11,6 +11,7 @@
   <ItemGroup>
     <None Remove="Common\MineStat.dll" />
     <None Remove="MineStat.dll" />
+    <None Remove="nginx-1.30.0.zip" />
   </ItemGroup>
 
   <ItemGroup>
@@ -30,6 +31,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\RtCli\RtCli.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="nginx-1.30.0.zip" />
   </ItemGroup>
 
 </Project>

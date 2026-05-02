@@ -16,7 +16,7 @@ namespace RtCli
 {
     internal class Program
     {
-        // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器，将捕获控制台方式换为/命令通过rcon或management来发送
+        // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器，将捕获控制台方式换为/命令通过rcon或management来发送，未来使用Base64和密钥加密通信
         // 程序版本号规则：主版本号.日期yy/mm.次版本号.编译号
         public static string RtCliVersion { get; } = "1.2604.29.13";
         public static string ThisProgramName { get; } = "RtCli";
@@ -33,6 +33,8 @@ namespace RtCli
             "rt help",
             "rt",
             ".help",
+            ".guide",
+            ".auto",
             ".server",
             ".server get",
             ".server connect",
@@ -46,6 +48,18 @@ namespace RtCli
         private static string[] _allCommands = Array.Empty<string>();
         private static readonly List<string> _commandHistory = new List<string>();
         private const int MaxHistorySize = 100;
+        private static Mutex? _appMutex;
+
+        public static void ReleaseMutex()
+        {
+            try
+            {
+                _appMutex?.ReleaseMutex();
+                _appMutex?.Dispose();
+                _appMutex = null;
+            }
+            catch { }
+        }
 
         /// <summary>
         /// 应用程序主入口点
@@ -91,22 +105,34 @@ namespace RtCli
             Thread rtmain = new Thread(Continued);
             Thread.CurrentThread.Name = "MainThread";
 
-            Process currentProcess = Process.GetCurrentProcess();
-            string currentProcessName = currentProcess.ProcessName;
+            bool createdNew;
+            _appMutex = new Mutex(true, "RtCli_SingleInstance", out createdNew);
 
-            Process[] processes = Process.GetProcessesByName(currentProcessName);
-            if (processes.Length > 1)
+            if (!createdNew)
             {
-                Output.TextBlock("重复的程序!", 2, "Task#End");
-                return Task.CompletedTask;
+                Output.TextBlock("重复的程序可能会导致异常请等待程序结束...", 2, "Mutex");
+                try
+                {
+                    _appMutex.WaitOne();
+                    Output.TextBlock("等待结束...", 1, "Mutex");
+                }
+                catch (AbandonedMutexException)
+                {
+                    Output.TextBlock("继续启动...", 1, "Mutex");
+                }
             }
 
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
 
-            Output.Log("启动中...", 1, currentProcessName);
+            Output.Log("启动中...", 1, ThisProgramName);
 
             #region 启动任务
+
+            if (Config.App.Debug.ToLower() != "No")
+            {
+                Commands.Execute(Config.App.Debug);
+            }
 
             RtExtensionManager.RtExtensionManager.LoadAll();
 
@@ -170,7 +196,6 @@ namespace RtCli
 
                 case "测试模式":
                     EventBus.Publish(new ModeSelectedEvent("测试模式"));
-                    // no
                     Output.ReportError(new Exception("神秘错误"), true, "这只是一个彩蛋");
                     Task.Run(() =>
                     {
@@ -191,7 +216,6 @@ namespace RtCli
                 default:
                     Output.Log(I18n.Get("main_selmode_no"), 3, ThisProgramName);
                     return Task.CompletedTask;
-
             }
 
             EventBus.Publish(new ProgramShutdownEvent("正常退出"));
@@ -204,21 +228,6 @@ namespace RtCli
         {
             var registeredCommands = CommandRegistry.GetAutoCompleteCommands();
             _allCommands = BaseCommands.Union(registeredCommands).Distinct().ToArray();
-        }
-
-        // Windows的最大化控制台窗口
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GetConsoleWindow();
-
-        const int SW_MAXIMIZE = 3;
-        public static void Maximize_ConsoleWindows()
-        {
-            IntPtr hWnd = GetConsoleWindow();
-            ShowWindow(hWnd, SW_MAXIMIZE);
-            Console.ReadKey();
         }
 
         #region 命令附加功能
@@ -503,7 +512,7 @@ namespace RtCli
             try
             {
                 Thread.CurrentThread.Name = "Main";
-                Output.Log("[yellow]注意：目前已将通信验证删除！程序仅能在本机或局域网运行，如果在其他网络环境下运行安全目前无法保障！[/]", 2, ThisProgramName);
+                Output.Log("[yellow]注意：目前已将通信验证删除！程序仅能在本机或局域网运行否则安全无法保障！[/]", 2, ThisProgramName);
                 Output.Log("[yellow]注意：该分支为测试分支，可能包含未测试的功能！[/]", 2, ThisProgramName);
                 await Connector.StartServerAsync();
                 Thread.CurrentThread.Name = "Main";
@@ -519,18 +528,29 @@ namespace RtCli
                         {
                             EventBus.Publish(new CommandExecuteEvent(cmd_input, BaseCommands));
                         }
+
                         switch (cmd_input)
                         {
-                            case var cmd when cmd == BaseCommands[0]:
+                            case var cmd when cmd == "rt":
+                                Output.Log($"RtCli版本：{RtCliVersion} 输入rt help查看命令列表，按 TAB 键自动补全命令", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == "rt help":
+                                ShowHelp();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == "rt end":
+                                goto endpage;
+                            case var cmd when cmd == "rt reload":
                                 Output.Log("重新加载中...", 1, ThisProgramName);
                                 Reload.Restart();
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[1]:
+                            case var cmd when cmd == "rt status":
                                 Output.Log($"管理端口状态：{(Connector.IsRunning ? "运行中" : "未运行")}，已连接客户端数量：{Connector.ConnectedClientCount}", 1, ThisProgramName);
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[2]:
+                            case var cmd when cmd == "rt clients":
                                 Output.Log($"已连接面板列表：", 1, ThisProgramName);
                                 foreach (var client in Connector.ConnectedClientCount > 0 ? Connector.ConnectedClientCount.ToString() : "无")
                                 {
@@ -538,119 +558,76 @@ namespace RtCli
                                 }
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[3]:
+                            case var cmd when cmd == "rt extensions":
                                 Output.Log("已加载的扩展列表：", 1, ThisProgramName);
                                 RtExtensionManager.RtExtensionManager.DisplayLoadedExtensions();
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[4]:
-                                goto endpage;
-                            case var cmd when cmd == BaseCommands[5]:
-                                await Connector.StopServerAsync();
+                            case var cmd when cmd == "rt extension load":
+                                Output.Log("用法: rt extension load <扩展文件路径或文件名>", 1, ThisProgramName);
+                                Output.Log($"扩展目录: {RtExtensionManager.RtExtensionManager.GetExtensionsDirectory()}", 1, ThisProgramName);
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[6]:
+                            case var cmd when cmd == "rt extension unload":
+                                Output.Log("用法: rt extension unload <扩展Key>", 1, ThisProgramName);
+                                Output.Log("使用 rt extensions 查看已加载的扩展列表", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith("rt extension load "):
+                                string loadPath = cmd.Substring(18).Trim();
+                                if (!string.IsNullOrWhiteSpace(loadPath))
+                                {
+                                    RtExtensionManager.RtExtensionManager.LoadExtensionByKey(loadPath);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith("rt extension unload "):
+                                string unloadKey = cmd.Substring(20).Trim();
+                                if (!string.IsNullOrWhiteSpace(unloadKey))
+                                {
+                                    RtExtensionManager.RtExtensionManager.UnloadExtensionByKey(unloadKey);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd == "rt start":
                                 await Connector.StartServerAsync();
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[7]:
-                                Output.Log("RtCli程序命令列表：", 1, ThisProgramName);
-                                var table = new Table()
-                                    .AddColumn("命令")
-                                    .AddColumn("描述")
-                                    .AddRow("[green]rt help[/]", "显示此列表")
-                                    .AddRow("[white]rt end[/]", "关闭程序")
-                                    .AddRow("[white]rt stop[/]", "关闭管理端口")
-                                    .AddRow("[white]rt start[/]", "启动管理端口")
-                                    .AddRow("[white]rt reload[/]", "重新加载")
-                                    .AddRow("[white]rt status[/]", "管理端口状态")
-                                    .AddRow("[white]rt clients[/]", "已连接面板列表")
-                                    .AddRow("[white]rt extensions[/]", "已加载的扩展列表")
-                                    .AddRow("[green].help[/]", "显示其他命令或扩展命令列表")
-                                    .AddRow("[white].server[/]", "MC控制台相关命令 (模式取决于配置)")
-                                    .AddRow("[white].server get[/]", "[[[DarkOrange]RCON[/]]] 扫描并列出运行中的MC服务端")
-                                    .AddRow("[white].server connect <序号|pid:进程ID>[/]", "[[[DarkOrange]RCON[/]]] 连接到指定的MC服务端")
-                                    .AddRow("[white].server detach[/]", "[[[DarkOrange]RCON[/]]] 断开与MC服务端的连接")
-                                    .AddRow("[white].server start[/]", "[[[green]RUN[/]]] 启动MC服务端作为子进程")
-                                    .AddRow("[white].server stop[/]", "[[[green]RUN[/]]] 停止MC服务端")
-                                    .AddRow("[white].server status[/]", "查看MC服务端连接/运行状态")
-                                    .AddRow("[green]/[/]", "输入/开头的命令将直接发送到MC服务端执行");
-                                AnsiConsole.Write(table);
+                            case var cmd when cmd == "rt stop":
+                                await Connector.StopServerAsync();
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[8]:
-                                Output.Log($"RtCli版本：{RtCliVersion} 输入rt help查看命令列表，按 TAB 键自动补全命令", 1, ThisProgramName);
+                            case var cmd when cmd == ".help":
+                                ShowExtensionCommands();
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[9]:
-                                var extensionCommands = CommandRegistry.Commands;
-                                var extensionDescriptions = CommandRegistry.Descriptions;
-                                if (extensionCommands.Count > 0)
-                                {
-                                    Output.Log("扩展注册的命令列表：", 1, ThisProgramName);
-                                    var extTable = new Table()
-                                        .AddColumn("命令")
-                                        .AddColumn("描述");
-                                    foreach (var kvp in extensionCommands)
-                                    {
-                                        string description = extensionDescriptions.TryGetValue(kvp.Key, out var desc) ? desc : "";
-                                        extTable.AddRow($"[cyan]{kvp.Key}[/]", string.IsNullOrEmpty(description) ? "[grey]-[/]" : description);
-                                    }
-                                    AnsiConsole.Write(extTable);
-                                }
-                                else
-                                {
-                                    Output.Log("没有扩展注册的命令", 1, ThisProgramName);
-                                }
+                            case var cmd when cmd == ".guide":
+                                Intelligence.Guide();
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[10]:
+                            case var cmd when cmd == ".auto":
+                                Intelligence.Auto();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server":
                                 if (Analyzer.IsRunMode)
                                     Output.Log("当前为 RUN 模式，子命令：start、stop、status", 1, ThisProgramName);
                                 else
                                     Output.Log("当前为 RCON 模式，子命令：get、connect、detach、status", 1, ThisProgramName);
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[11]:
+                            case var cmd when cmd == ".server get":
                                 if (Analyzer.IsRunMode)
                                     Output.Log("RUN 模式下不支持 .server get，请使用 .server start 启动服务端。", 2, ThisProgramName);
                                 else
                                     Analyzer.ScanAndListServers();
                                 handled = true;
                                 break;
-                            case var cmd when cmd == BaseCommands[12]:
+                            case var cmd when cmd == ".server connect":
                                 if (Analyzer.IsRunMode)
                                     Output.Log("RUN 模式下不支持 .server connect，请使用 .server start 启动服务端。", 2, ThisProgramName);
                                 else
                                     Output.Log("用法: .server connect <序号|pid:进程ID>", 1, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[13]:
-                                if (Analyzer.IsRunMode)
-                                    Analyzer.StartServer();
-                                else
-                                    Output.Log("RCON 模式下不支持 .server start，请使用 .server get + .server connect 连接。", 2, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[14]:
-                                if (Analyzer.IsRunMode)
-                                    Analyzer.StopServer();
-                                else
-                                    Output.Log("RCON 模式下不支持 .server stop。", 2, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[15]:
-                                if (Analyzer.IsRunMode)
-                                    Output.Log("RUN 模式下不支持 .server detach，请使用 .server stop 停止服务端。", 2, ThisProgramName);
-                                else
-                                    Analyzer.Detach();
-                                handled = true;
-                                break;
-                            case var cmd when cmd == BaseCommands[16]:
-                                if (Analyzer.IsRunMode)
-                                    Output.Log(Analyzer.IsRunModeActive ? "服务端运行中。" : "服务端未运行。", 1, ThisProgramName);
-                                else
-                                    Output.Log(Analyzer.IsAttached ? "已连接到 Minecraft 服务端。" : "未连接到 Minecraft 服务端。", 1, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd != null && cmd.StartsWith(".server connect "):
@@ -689,6 +666,34 @@ namespace RtCli
                                         Output.Log("用法: .server connect <序号|pid:进程ID>", 1, ThisProgramName);
                                     }
                                 }
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server detach":
+                                if (Analyzer.IsRunMode)
+                                    Output.Log("RUN 模式下不支持 .server detach，请使用 .server stop 停止服务端。", 2, ThisProgramName);
+                                else
+                                    Analyzer.Detach();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server start":
+                                if (Analyzer.IsRunMode)
+                                    Analyzer.StartServer();
+                                else
+                                    Output.Log("RCON 模式下不支持 .server start，请使用 .server get + .server connect 连接。", 2, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server stop":
+                                if (Analyzer.IsRunMode)
+                                    Analyzer.StopServer();
+                                else
+                                    Output.Log("RCON 模式下不支持 .server stop。", 2, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server status":
+                                if (Analyzer.IsRunMode)
+                                    Output.Log(Analyzer.IsRunModeActive ? "服务端运行中。" : "服务端未运行。", 1, ThisProgramName);
+                                else
+                                    Output.Log(Analyzer.IsAttached ? "已连接到 Minecraft 服务端。" : "未连接到 Minecraft 服务端。", 1, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd != null && cmd.StartsWith("/"):
@@ -742,6 +747,60 @@ namespace RtCli
             catch (Exception ex)
             {
                 Output.ReportError(ex);
+            }
+        }
+
+        private static void ShowHelp()
+        {
+            Output.Log("RtCli程序命令列表：", 1, ThisProgramName);
+            var table = new Table()
+                .AddColumn("命令")
+                .AddColumn("描述")
+                .AddRow("[green]rt[/]", "显示版本信息")
+                .AddRow("[green]rt help[/]", "显示此列表")
+                .AddRow("[white]rt end[/]", "关闭程序")
+                .AddRow("[white]rt reload[/]", "重新加载")
+                .AddRow("[white]rt status[/]", "管理端口状态")
+                .AddRow("[white]rt clients[/]", "已连接面板列表")
+                .AddRow("[white]rt extensions[/]", "已加载的扩展列表")
+                .AddRow("[white]rt extension load <路径>[/]", "加载指定扩展")
+                .AddRow("[white]rt extension unload <Key>[/]", "卸载指定扩展")
+                .AddRow("[white]rt start[/]", "启动管理端口")
+                .AddRow("[white]rt stop[/]", "关闭管理端口")
+                .AddRow("[green].help[/]", "显示扩展命令列表")
+                .AddRow("[white].guide[/]", "新手引导")
+                .AddRow("[white].auto[/]", "自动化")
+                .AddRow("[white].server[/]", "MC控制台相关命令 (模式取决于配置)")
+                .AddRow("[white].server get[/]", "[[[DarkOrange]RCON[/]]] 扫描并列出运行中的MC服务端")
+                .AddRow("[white].server connect <序号|pid:进程ID>[/]", "[[[DarkOrange]RCON[/]]] 连接到指定的MC服务端")
+                .AddRow("[white].server detach[/]", "[[[DarkOrange]RCON[/]]] 断开与MC服务端的连接")
+                .AddRow("[white].server start[/]", "[[[green]RUN[/]]] 启动MC服务端作为子进程")
+                .AddRow("[white].server stop[/]", "[[[green]RUN[/]]] 停止MC服务端")
+                .AddRow("[white].server status[/]", "查看MC服务端连接/运行状态")
+                .AddRow("[green]/<命令>[/]", "发送命令到MC服务端执行");
+            AnsiConsole.Write(table);
+        }
+
+        private static void ShowExtensionCommands()
+        {
+            var extensionCommands = CommandRegistry.Commands;
+            var extensionDescriptions = CommandRegistry.Descriptions;
+            if (extensionCommands.Count > 0)
+            {
+                Output.Log("扩展注册的命令列表：", 1, ThisProgramName);
+                var extTable = new Table()
+                    .AddColumn("命令")
+                    .AddColumn("描述");
+                foreach (var kvp in extensionCommands)
+                {
+                    string description = extensionDescriptions.TryGetValue(kvp.Key, out var desc) ? desc : "";
+                    extTable.AddRow($"[cyan]{kvp.Key}[/]", string.IsNullOrEmpty(description) ? "[grey]-[/]" : description);
+                }
+                AnsiConsole.Write(extTable);
+            }
+            else
+            {
+                Output.Log("没有扩展注册的命令", 1, ThisProgramName);
             }
         }
     }

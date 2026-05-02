@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace RtCli.Modules.Function
@@ -69,15 +70,16 @@ namespace RtCli.Modules.Function
     {
         public static void Execute(string type)
         {
-            string ThisProgramName = "Commands";
+            string ThisProgramName = "Debug";
             if (string.IsNullOrEmpty(type))
             {
                 return;
             }
             var actions = new Dictionary<string, Action>
                 {
-                    { "DebugMode", () => {
-                        Output.Log("调试模式中...", 1, ThisProgramName);
+                    { "1", () => {
+                        Output.Log("测试", 1, ThisProgramName);
+                        Maximize_ConsoleWindows();
                     } },
                     { "2", () => { /* F 2 */ } },
                     { "3", () => { /* F 3 */ } },
@@ -92,8 +94,22 @@ namespace RtCli.Modules.Function
             }
             else
             {
-                Output.Log("未知的命令参数!", 2, ThisProgramName);
+                Output.Log("未知的调试参数!", 2, ThisProgramName);
             }
+        }
+        // Windows的最大化控制台窗口
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr GetConsoleWindow();
+
+        const int SW_MAXIMIZE = 3;
+        public static void Maximize_ConsoleWindows()
+        {
+            IntPtr hWnd = GetConsoleWindow();
+            ShowWindow(hWnd, SW_MAXIMIZE);
+            Console.ReadKey();
         }
     }
 }

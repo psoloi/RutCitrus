@@ -1,4 +1,6 @@
 using RtCli.Modules;
+using RtExtensionManager;
+using Spectre.Console;
 using System;
 using System.Collections.Concurrent;
 using System.Net;
@@ -71,21 +73,72 @@ namespace RtCli.Modules.Unit
 
                 if (_connectedClients.TryGetValue(clientId, out var clientInfo))
                 {
+                    var safeIP = Markup.Escape(clientInfo.IP);
+                    
                     if (message.StartsWith("CMD:"))
                     {
                         var command = message.Substring(4);
-                        Output.Log($"收到管理面板 [{clientInfo.IP}] 命令: {command}", 1, "Connector");
-                        client.SendAsync($"RESULT:命令 '{command}' 执行完成").Wait();
+                        Output.Log($"收到管理面板 ({safeIP}) 命令: {command}", 1, "Connector");
+                        HandleCommand(client, command);
+                    }
+                    else if (message.StartsWith("EXT_GET:"))
+                    {
+                        Output.Log($"收到管理面板 ({safeIP}) 请求扩展列表", 1, "Connector");
+                        var json = RtExtensionManager.RtExtensionManager.GetExtensionsJson();
+                        client.SendAsync($"EXT_LIST:{json}").Wait();
+                    }
+                    else if (message.StartsWith("EXT_UNLOAD:"))
+                    {
+                        var extensionKey = message.Substring(11);
+                        Output.Log($"收到管理面板 ({safeIP}) 卸载扩展请求: {extensionKey}", 1, "Connector");
+                        bool success = RtExtensionManager.RtExtensionManager.UnloadExtensionByKey(extensionKey);
+                        client.SendAsync($"EXT_UNLOAD_RESULT:{(success ? "SUCCESS" : "FAILED")}:{extensionKey}").Wait();
                     }
                     else
                     {
-                        Output.Log($"收到管理面板 [{clientInfo.IP}] 消息: {message}", 1, "Connector");
+                        Output.Log($"收到管理面板 ({safeIP}) 消息: {message}", 1, "Connector");
                     }
                 }
             }
             catch (Exception ex)
             {
                 Output.Log($"处理消息异常: {ex.Message}", 2, "Connector");
+            }
+        }
+
+        private static void HandleCommand(TcpSessionClient client, string command)
+        {
+            try
+            {
+                var parts = command.Split(' ', 2);
+                var cmd = parts[0].ToLower();
+                var args = parts.Length > 1 ? parts[1] : "";
+
+                switch (cmd)
+                {
+                    case "extensions":
+                        var json = RtExtensionManager.RtExtensionManager.GetExtensionsJson();
+                        client.SendAsync($"RESULT:{json}").Wait();
+                        break;
+                    case "unload":
+                        if (!string.IsNullOrEmpty(args))
+                        {
+                            bool success = RtExtensionManager.RtExtensionManager.UnloadExtensionByKey(args);
+                            client.SendAsync($"RESULT:{(success ? $"扩展 {args} 卸载成功" : $"扩展 {args} 卸载失败")}").Wait();
+                        }
+                        else
+                        {
+                            client.SendAsync("RESULT:请指定要卸载的扩展Key").Wait();
+                        }
+                        break;
+                    default:
+                        client.SendAsync($"RESULT:命令 '{command}' 执行完成").Wait();
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                client.SendAsync($"RESULT:命令执行错误: {ex.Message}").Wait();
             }
         }
 
@@ -130,19 +183,21 @@ namespace RtCli.Modules.Unit
 
         internal static void OnClientConnected(string clientId, string clientIP)
         {
+            var safeIP = Markup.Escape(clientIP);
             _connectedClients[clientId] = new ClientInfo
             {
                 ConnectTime = DateTime.Now,
                 IP = clientIP
             };
-            Output.Log($"管理面板 [{clientIP}] 已连接 (ID: {clientId})", 1, "Connector");
+            Output.Log($"管理面板 ({safeIP}) 已连接 (ID: {clientId})", 1, "Connector");
         }
 
         internal static void OnClientDisconnected(string clientId)
         {
             if (_connectedClients.TryRemove(clientId, out var clientInfo))
             {
-                Output.Log($"管理面板 [{clientInfo.IP}] 已断开连接", 1, "Connector");
+                var safeIP = Markup.Escape(clientInfo.IP);
+                Output.Log($"管理面板 ({safeIP}) 已断开连接", 1, "Connector");
             }
         }
     }

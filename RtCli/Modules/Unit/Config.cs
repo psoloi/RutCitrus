@@ -24,6 +24,8 @@ namespace RtCli.Modules.Unit
         public int RconPort { get; set; } = 25575;
         public string RconPassword { get; set; } = "";
 
+        public string Debug { get; set; } = "no";
+
     }
 
     public static class Config
@@ -150,6 +152,8 @@ namespace RtCli.Modules.Unit
                     sb.AppendLine("# RCON服务端口");
                 else if (trimmedLine.StartsWith("rcon_password:"))
                     sb.AppendLine("# RCON密码");
+                else if (trimmedLine.StartsWith("debug:"))
+                    sb.AppendLine("# 调试模式 (No)");
 
                 sb.Append(line);
             }

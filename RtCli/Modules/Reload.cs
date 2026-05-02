@@ -1,4 +1,4 @@
-﻿using RtCli.Modules.Extension;
+using RtCli.Modules.Extension;
 using RtExtensionManager;
 using Spectre.Console;
 using System;
@@ -21,10 +21,10 @@ namespace RtCli.Modules
             {
                 string? currentProcessPath = Environment.ProcessPath;
                 RtExtensionManager.RtExtensionManager.UnloadAll();
+                Program.ReleaseMutex();
                 Console.Clear();
                 if (currentProcessPath != null)
                 {
-                    // 启动当前程序
                     Process.Start(currentProcessPath);
                 }
                 else
@@ -47,6 +47,7 @@ namespace RtCli.Modules
                 RtExtensionManager.RtExtensionManager.UnloadAll();
                 Output.CloseLogging();
                 Output.TextBlock(Modules.Unit.I18n.Get("main_end"), 1, "Task#0");
+                Program.ReleaseMutex();
                 _isEnd = true;
                 return;
             }

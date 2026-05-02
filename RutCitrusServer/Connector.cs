@@ -3,6 +3,7 @@ using System.Text;
 using System.Threading.Tasks;
 using TouchSocket.Core;
 using TouchSocket.Sockets;
+using Newtonsoft.Json.Linq;
 
 namespace RutCitrusServer
 {
@@ -16,6 +17,8 @@ namespace RutCitrusServer
         public static event Action<string>? OnMessageReceived;
         public static event Action? OnConnected;
         public static event Action? OnDisconnected;
+        public static event Action<string>? OnExtensionListReceived;
+        public static event Action<bool, string>? OnExtensionUnloadResult;
 
         private static void Log(string message)
         {
@@ -39,15 +42,7 @@ namespace RutCitrusServer
                     try
                     {
                         var message = Encoding.UTF8.GetString(e.Memory.Span);
-
-                        if (message.StartsWith("RESULT:"))
-                        {
-                            Log(message.Substring(7));
-                        }
-                        else
-                        {
-                            Log(message);
-                        }
+                        ProcessReceivedMessage(message);
                     }
                     catch (Exception ex)
                     {
@@ -75,6 +70,34 @@ namespace RutCitrusServer
                 Log($"连接失败: {ex.Message}");
                 OnDisconnected?.Invoke();
                 return false;
+            }
+        }
+
+        private static void ProcessReceivedMessage(string message)
+        {
+            if (message.StartsWith("RESULT:"))
+            {
+                Log(message.Substring(7));
+            }
+            else if (message.StartsWith("EXT_LIST:"))
+            {
+                var json = message.Substring(9);
+                OnExtensionListReceived?.Invoke(json);
+            }
+            else if (message.StartsWith("EXT_UNLOAD_RESULT:"))
+            {
+                var parts = message.Substring(18).Split(':');
+                if (parts.Length >= 2)
+                {
+                    bool success = parts[0] == "SUCCESS";
+                    string extensionKey = parts[1];
+                    OnExtensionUnloadResult?.Invoke(success, extensionKey);
+                    Log($"扩展 {extensionKey} 卸载{(success ? "成功" : "失败")}");
+                }
+            }
+            else
+            {
+                Log(message);
             }
         }
 
@@ -122,6 +145,42 @@ namespace RutCitrusServer
             catch
             {
                 return false;
+            }
+        }
+
+        public static async Task RequestExtensionsAsync()
+        {
+            if (_client == null || !_client.Online)
+            {
+                Log("未连接到服务器");
+                return;
+            }
+
+            try
+            {
+                await _client.SendAsync("EXT_GET:");
+            }
+            catch (Exception ex)
+            {
+                Log($"请求扩展列表失败: {ex.Message}");
+            }
+        }
+
+        public static async Task UnloadExtensionAsync(string extensionKey)
+        {
+            if (_client == null || !_client.Online)
+            {
+                Log("未连接到服务器");
+                return;
+            }
+
+            try
+            {
+                await _client.SendAsync($"EXT_UNLOAD:{extensionKey}");
+            }
+            catch (Exception ex)
+            {
+                Log($"发送卸载请求失败: {ex.Message}");
             }
         }
 

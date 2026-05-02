@@ -18,7 +18,7 @@ namespace Rt
     {
         public override string Name => "Rt";
         public override string Version => "1.1.5";
-        public override string Description => "示例扩展插件，实现了MC服务器状态监测及安全方面扩展";
+        public override string Description => "示例扩展插件，扩展了MC服务器状态监测、安全和网页面板";
 
         private bool _isLoaded = false;
 
@@ -34,10 +34,6 @@ namespace Rt
 
             Output.Log("Rt扩展正在加载...", 1, Name);
 
-            SubscribeEvent<ModeSelectedEvent>(OnModeSelected);
-            SubscribeEvent<ProgramStartupEvent>(OnProgramStartup);
-            SubscribeEvent<ProgramShutdownEvent>(OnProgramShutdown);
-            SubscribeEvent<ExtensionLoadEvent>(OnExtensionLoad);
             SubscribeEvent<CommandExecuteEvent>(OnCommandExecute);
 
             CommandRegistry.RegisterCommand("rte", args =>
@@ -72,26 +68,6 @@ namespace Rt
 
             _isLoaded = true;
             Output.Log("Rt扩展加载完成", 1, Name);
-        }
-
-        private void OnModeSelected(ModeSelectedEvent e)
-        {
-            //Output.Log($"当前模式: {e.Mode}", 1, Name);
-        }
-
-        private void OnProgramStartup(ProgramStartupEvent e)
-        {
-            //Output.Log($"启动Rt扩展", 1, Name);
-        }
-
-        private void OnProgramShutdown(ProgramShutdownEvent e)
-        {
-            //Output.Log($"关闭Rt扩展: {e.Reason}", 1, Name);
-        }
-
-        private void OnExtensionLoad(ExtensionLoadEvent e)
-        {
-            //Output.Log($"[green]扩展加载[/]: {e.ExtensionName} Ver:{e.Version}", 1, Name);
         }
 
         private void OnCommandExecute(CommandExecuteEvent e)

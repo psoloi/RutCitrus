@@ -28,13 +28,12 @@
     <PackageReference Include="Serilog" Version="4.3.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
-    <PackageReference Include="System.Management" Version="8.0.0" />
-    <PackageReference Include="TouchSocket" Version="4.2.6" />
-    <PackageReference Include="YamlDotNet" Version="17.0.1" />
+    <PackageReference Include="System.Management" Version="10.0.7" />
+    <PackageReference Include="TouchSocket" Version="4.2.7" />
+    <PackageReference Include="YamlDotNet" Version="17.1.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Content\Data\" />
     <Folder Include="Content\Extension\" />
   </ItemGroup>
 
