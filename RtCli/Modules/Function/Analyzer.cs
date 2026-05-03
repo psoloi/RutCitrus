@@ -389,7 +389,7 @@ namespace RtCli.Modules.Function
 
                     using (var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                     {
-                        _logFilePosition = fs.Length;
+                        Interlocked.Exchange(ref _logFilePosition, fs.Length);
                     }
 
                     _outputCts = new CancellationTokenSource();
@@ -431,7 +431,7 @@ namespace RtCli.Modules.Function
                     _attachedProcessId = 0;
                     _attachedWindowTitle = "";
                     _connectedServerName = "";
-                    _logFilePosition = 0;
+                    Interlocked.Exchange(ref _logFilePosition, 0);
                     Output.ReportError(ex, false, "连接服务端失败");
                 }
             }
@@ -469,10 +469,11 @@ namespace RtCli.Modules.Function
             try
             {
                 using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                if (fs.Length <= _logFilePosition)
+                long currentPos = Interlocked.Read(ref _logFilePosition);
+                if (fs.Length <= currentPos)
                     return;
 
-                fs.Seek(_logFilePosition, SeekOrigin.Begin);
+                fs.Seek(currentPos, SeekOrigin.Begin);
                 using var reader = new StreamReader(fs, Encoding.UTF8);
 
                 string? line;
@@ -484,7 +485,7 @@ namespace RtCli.Modules.Function
                     }
                 }
 
-                _logFilePosition = fs.Position;
+                Interlocked.Exchange(ref _logFilePosition, fs.Position);
             }
             catch (IOException) { }
             catch { }
@@ -581,7 +582,7 @@ namespace RtCli.Modules.Function
                 _attachedProcessId = 0;
                 _attachedWindowTitle = "";
                 _connectedServerName = "";
-                _logFilePosition = 0;
+                Interlocked.Exchange(ref _logFilePosition, 0);
 
                 if (!_isRunModeActive && _currentMode != "RUN")
                 {
@@ -716,7 +717,7 @@ namespace RtCli.Modules.Function
         private static List<MinecraftServerInfo> ScanMinecraftServers()
         {
             var results = new List<MinecraftServerInfo>();
-            var javaProcesses = new List<(Process Process, string CommandLine, string WindowTitle)>();
+            var javaProcesses = new List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle)>();
 
             try
             {
@@ -731,15 +732,17 @@ namespace RtCli.Modules.Function
 
                     try
                     {
-                        var process = Process.GetProcessById(pid);
+                        using var process = Process.GetProcessById(pid);
+                        string processName = "";
                         string windowTitle = "";
                         try
                         {
+                            processName = process.ProcessName;
                             windowTitle = process.MainWindowTitle ?? "";
                         }
                         catch { }
 
-                        javaProcesses.Add((process, cmdLine, windowTitle));
+                        javaProcesses.Add((pid, processName, cmdLine, windowTitle));
                     }
                     catch
                     {
@@ -751,7 +754,7 @@ namespace RtCli.Modules.Function
                 Output.Log($"WMI 查询失败: {ex.Message}", 3, "Analyzer");
             }
 
-            foreach (var (process, cmdLine, windowTitle) in javaProcesses)
+            foreach (var (processId, processName, cmdLine, windowTitle) in javaProcesses)
             {
                 string? jarPath = ExtractJarPath(cmdLine);
                 if (!string.IsNullOrEmpty(jarPath))
@@ -787,9 +790,9 @@ namespace RtCli.Modules.Function
                     {
                         results.Add(new MinecraftServerInfo
                         {
-                            ProcessId = process.Id,
-                            ProcessName = process.ProcessName,
-                            WindowTitle = string.IsNullOrEmpty(windowTitle) ? $"java (PID: {process.Id})" : windowTitle,
+                            ProcessId = processId,
+                            ProcessName = processName,
+                            WindowTitle = string.IsNullOrEmpty(windowTitle) ? $"java (PID: {processId})" : windowTitle,
                             JarPath = jarPath,
                             CommandLine = cmdLine
                         });
@@ -857,6 +860,7 @@ namespace RtCli.Modules.Function
         private TcpClient? _tcpClient;
         private NetworkStream? _stream;
         private int _requestId = 0;
+        private readonly object _sendLock = new object();
 
         public bool IsConnected => _tcpClient?.Connected == true;
 
@@ -901,14 +905,17 @@ namespace RtCli.Modules.Function
 
         public string SendCommand(string command)
         {
-            if (!IsConnected || _stream == null)
-                throw new InvalidOperationException("RCON 未连接");
+            lock (_sendLock)
+            {
+                if (!IsConnected || _stream == null)
+                    throw new InvalidOperationException("RCON 未连接");
 
-            _requestId++;
-            SendPacket(PacketTypeCommand, command);
+                _requestId++;
+                SendPacket(PacketTypeCommand, command);
 
-            var response = ReadPacket();
-            return response?.Body ?? "";
+                var response = ReadPacket();
+                return response?.Body ?? "";
+            }
         }
 
         public void Disconnect()
@@ -955,7 +962,7 @@ namespace RtCli.Modules.Function
                 if (read < 4) return null;
 
                 int length = BitConverter.ToInt32(lengthBuffer, 0);
-                if (length <= 0 || length > 4096) return null;
+                if (length <= 0 || length > 65536) return null;
 
                 var dataBuffer = new byte[length];
                 int totalRead = 0;

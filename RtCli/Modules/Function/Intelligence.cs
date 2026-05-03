@@ -1,4 +1,4 @@
-﻿using RtCli.Modules.Unit;
+using RtCli.Modules.Unit;
 using Spectre.Console;
 using System;
 using System.Collections.Generic;
@@ -13,7 +13,8 @@ namespace RtCli.Modules.Function
         //.guide
         public static void Guide()
         {
-            if (Checker.CheckJava().StartsWith(I18n.Get("checker_nojava")))
+            string javaResult = Checker.CheckJava();
+            if (javaResult.StartsWith(I18n.Get("checker_nojava")))
             {
                 Output.Log("（1）请下载JDK并安装后重试...", 1, "Guide");
                 var table = new Table()
@@ -27,7 +28,7 @@ namespace RtCli.Modules.Function
             }
             else
             {
-                Output.Log($"（1）Java环境检测通过，版本为{Checker.CheckJava().Substring(I18n.Get("checker_java").Length)}", 1, "Guide");
+                Output.Log($"（1）Java环境检测通过，版本为{javaResult.Substring(I18n.Get("checker_java").Length)}", 1, "Guide");
                 Output.Log("（2）请下载Minecraft服务端并配置Config.yml中的work_path和run_server_flags后输入rt reload重启", 1, "Guide");
             }
         }

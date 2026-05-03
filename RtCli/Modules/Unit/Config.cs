@@ -11,6 +11,7 @@ namespace RtCli.Modules.Unit
 
         public bool CheckJava { get; set; } = true;
         public bool CheckDotNet { get; set; } = true;
+        [YamlMember(Alias = "check_os_bit")]
         public bool CheckOSBit { get; set; } = true;
         public bool SkipSelect { get; set; } = true;
 
@@ -24,7 +25,7 @@ namespace RtCli.Modules.Unit
         public int RconPort { get; set; } = 25575;
         public string RconPassword { get; set; } = "";
 
-        public string Debug { get; set; } = "no";
+        public string Debug { get; set; } = "No";
 
     }
 
@@ -132,7 +133,7 @@ namespace RtCli.Modules.Unit
                     sb.AppendLine("# 是否检查 Java 运行时环境");
                 else if (trimmedLine.StartsWith("check_dot_net:"))
                     sb.AppendLine("# 是否检查 .NET 运行时环境");
-                else if (trimmedLine.StartsWith("check_o_s_bit:"))
+                else if (trimmedLine.StartsWith("check_os_bit:"))
                     sb.AppendLine("# 是否检查操作系统位数 (32位/64位)");
                 else if (trimmedLine.StartsWith("server_name:"))
                     sb.AppendLine("# 服务器名称");

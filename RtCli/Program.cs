@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -17,8 +18,8 @@ namespace RtCli
     internal class Program
     {
         // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器，将捕获控制台方式换为/命令通过rcon或management来发送，未来使用Base64和密钥加密通信
-        // 程序版本号规则：主版本号.日期yy/mm.次版本号.编译号
-        public static string RtCliVersion { get; } = "1.2604.29.13";
+        // 版本号在 RtCli.csproj 的 VersionPrefix 中修改
+        public static string RtCliVersion { get; } = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
         public static string ThisProgramName { get; } = "RtCli";
 
         private static readonly string[] BaseCommands = new string[]
@@ -94,7 +95,7 @@ namespace RtCli
             ex.SetObserved();
         }
 
-        private static Task MainInternal(string[] args)
+        private static async Task MainInternal(string[] args)
         {
             Console.OutputEncoding = System.Text.Encoding.UTF8;
             Console.Title = "RtCli";
@@ -102,7 +103,6 @@ namespace RtCli
             Output.TextBlock("启动主线程", 1, "Task#0");
 
             TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
-            Thread rtmain = new Thread(Continued);
             Thread.CurrentThread.Name = "MainThread";
 
             bool createdNew;
@@ -129,6 +129,12 @@ namespace RtCli
 
             #region 启动任务
 
+            Reload.Initialize();
+            Config.Initialize();
+            Modules.Unit.I18n.Init();
+            Output.InitializeLogging();
+            Analyzer.Initialize();
+
             if (Config.App.Debug.ToLower() != "No")
             {
                 Commands.Execute(Config.App.Debug);
@@ -136,11 +142,6 @@ namespace RtCli
 
             RtExtensionManager.RtExtensionManager.LoadAll();
 
-            Modules.Unit.I18n.Init();
-            Output.InitializeLogging();
-            Analyzer.Initialize();
-
-            Thread.CurrentThread.Name = "MainThread";
             if (Config.App.CheckJava)
             {
                 string result = Checker.CheckJava();
@@ -168,34 +169,41 @@ namespace RtCli
             Output.Log($"{Modules.Unit.I18n.Get("main_loadfinsih")}（{stopwatch.ElapsedMilliseconds}ms）", 1, ThisProgramName);
             EventBus.Publish(new ProgramStartupEvent(args));
 
-            Thread.CurrentThread.Name = "MainThread";
-            string selloaded;
+            var modeChoices = new (string Key, string DisplayName)[]
+            {
+                ("default", I18n.Get("main_selmode_default")),
+                ("debug", I18n.Get("main_selmode_debug")),
+                ("reload", I18n.Get("main_selmode_reload")),
+                ("exit", I18n.Get("main_selmode_exit"))
+            };
+
+            string selectedMode;
             if (Config.App.SkipSelect)
             {
-                selloaded = I18n.Get("main_selmode_default");
+                selectedMode = "default";
             }
             else
             {
-                Output.Log(Modules.Unit.I18n.Get("main_seltip_1"), 1, ThisProgramName);
-                selloaded = AnsiConsole.Prompt(
+                Output.Log(I18n.Get("main_seltip_1"), 1, ThisProgramName);
+                var selectedDisplay = AnsiConsole.Prompt(
                     new SelectionPrompt<string>()
-                    .Title(Modules.Unit.I18n.Get("mian_seltip_2"))
-                    .AddChoices(I18n.Get("main_selmode_default"), I18n.Get("main_selmode_debug"), I18n.Get("main_selmode_reload"), I18n.Get("main_selmode_exit")));
+                    .Title(I18n.Get("mian_seltip_2"))
+                    .AddChoices(modeChoices.Select(c => c.DisplayName)));
+                selectedMode = modeChoices.First(c => c.DisplayName == selectedDisplay).Key;
             }
 
-            switch (selloaded)
+            switch (selectedMode)
             {
-                case "默认模式":
-                    EventBus.Publish(new ModeSelectedEvent("默认模式"));
+                case "default":
+                    EventBus.Publish(new ModeSelectedEvent(I18n.Get("main_selmode_default")));
                     Output.Log("正在运行扩展内容...", 1, ThisProgramName);
                     RtExtensionManager.RtExtensionManager.DisplayLoadedExtensions();
                     RtExtensionManager.RtExtensionManager.Run();
-                    rtmain.Start();
-                    rtmain.Join();
+                    await Continued();
                     break;
 
-                case "测试模式":
-                    EventBus.Publish(new ModeSelectedEvent("测试模式"));
+                case "debug":
+                    EventBus.Publish(new ModeSelectedEvent(I18n.Get("main_selmode_debug")));
                     Output.ReportError(new Exception("神秘错误"), true, "这只是一个彩蛋");
                     Task.Run(() =>
                     {
@@ -204,24 +212,23 @@ namespace RtCli
                     }).Wait();
                     break;
 
-                case "关闭程序":
+                case "exit":
                     Reload.End();
                     break;
 
-                case "重新加载":
+                case "reload":
                     Output.Log("重新加载中...", 1, ThisProgramName);
                     Reload.Restart();
                     break;
 
                 default:
                     Output.Log(I18n.Get("main_selmode_no"), 3, ThisProgramName);
-                    return Task.CompletedTask;
+                    return;
             }
 
             EventBus.Publish(new ProgramShutdownEvent("正常退出"));
 
             Reload.End();
-            return Task.CompletedTask;
         }
 
         private static void UpdateAllCommands()
@@ -439,7 +446,12 @@ namespace RtCli
         {
             int currentLine = Console.CursorTop;
             Console.SetCursorPosition(0, currentLine);
-            Console.Write(text + new string(' ', Math.Max(0, Console.WindowWidth - text.Length - 1)));
+            Console.Write(text);
+            int clearLength = Math.Max(0, Console.WindowWidth - text.Length - 1);
+            if (clearLength > 0)
+            {
+                Console.Write(new string(' ', clearLength));
+            }
             Console.SetCursorPosition(cursorPosition, currentLine);
         }
 
@@ -507,15 +519,13 @@ namespace RtCli
 
         #endregion
 
-        public static async void Continued()
+        public static async Task Continued()
         {
             try
             {
-                Thread.CurrentThread.Name = "Main";
                 Output.Log("[yellow]注意：目前已将通信验证删除！程序仅能在本机或局域网运行否则安全无法保障！[/]", 2, ThisProgramName);
                 Output.Log("[yellow]注意：该分支为测试分支，可能包含未测试的功能！[/]", 2, ThisProgramName);
                 await Connector.StartServerAsync();
-                Thread.CurrentThread.Name = "Main";
 
                 string? cmd_input = ReadLineWithTabCompletion();
                 while (true)
@@ -532,7 +542,7 @@ namespace RtCli
                         switch (cmd_input)
                         {
                             case var cmd when cmd == "rt":
-                                Output.Log($"RtCli版本：{RtCliVersion} 输入rt help查看命令列表，按 TAB 键自动补全命令", 1, ThisProgramName);
+                                Output.Log($"RtCli版本：{Markup.Escape(RtCliVersion)} 输入rt help查看命令列表，按 TAB 键自动补全命令", 1, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd == "rt help":
@@ -551,10 +561,17 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == "rt clients":
-                                Output.Log($"已连接面板列表：", 1, ThisProgramName);
-                                foreach (var client in Connector.ConnectedClientCount > 0 ? Connector.ConnectedClientCount.ToString() : "无")
+                                Output.Log("已连接面板列表：", 1, ThisProgramName);
+                                if (Connector.ConnectedClientCount > 0)
                                 {
-                                    Output.Log($"- {client}", 1, ThisProgramName);
+                                    foreach (var client in Connector.ConnectedClients.Values)
+                                    {
+                                        Output.Log($"- {client.IP} (连接时间: {client.ConnectTime:HH:mm:ss})", 1, ThisProgramName);
+                                    }
+                                }
+                                else
+                                {
+                                    Output.Log("无", 1, ThisProgramName);
                                 }
                                 handled = true;
                                 break;
@@ -736,7 +753,6 @@ namespace RtCli
                         }
                     }
 
-                    Thread.CurrentThread.Name = "Main";
                     cmd_input = ReadLineWithTabCompletion();
                 }
                 endpage:

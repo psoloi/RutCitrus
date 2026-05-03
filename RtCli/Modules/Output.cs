@@ -148,19 +148,38 @@ namespace RtCli.Modules
             if (string.IsNullOrEmpty(text)) return text;
             
             var result = new StringBuilder();
+            int i = 0;
             
-            for (int i = 0; i < text.Length; i++)
+            while (i < text.Length)
             {
-                if (text[i] == '[' && i + 1 < text.Length && text[i + 1] != '[')
+                if (text[i] == '[')
                 {
+                    if (i + 1 < text.Length && text[i + 1] == '[')
+                    {
+                        result.Append('[');
+                        i += 2;
+                        continue;
+                    }
+                    
                     int end = text.IndexOf(']', i);
                     if (end > i)
                     {
-                        i = end;
+                        i = end + 1;
                         continue;
                     }
                 }
+                else if (text[i] == ']')
+                {
+                    if (i + 1 < text.Length && text[i + 1] == ']')
+                    {
+                        result.Append(']');
+                        i += 2;
+                        continue;
+                    }
+                }
+                
                 result.Append(text[i]);
+                i++;
             }
             
             return result.ToString();
@@ -197,14 +216,14 @@ namespace RtCli.Modules
                   .AddColumn("[yellow]属性[/]")
                   .AddColumn("[yellow]值[/]");
 
-                table.AddRow("异常类型", ex.GetType().Name);
-                table.AddRow("异常消息", ex.Message);
+                table.AddRow("异常类型", Markup.Escape(ex.GetType().Name));
+                table.AddRow("异常消息", Markup.Escape(ex.Message));
                 table.AddRow("发生时间", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-                table.AddRow("线程", Thread.CurrentThread.Name ?? "Unknown");
+                table.AddRow("线程", Markup.Escape(Thread.CurrentThread.Name ?? "Unknown"));
                 if (ex.InnerException != null)
                 {
-                    table.AddRow("内部异常类型", ex.InnerException.GetType().Name);
-                    table.AddRow("内部异常消息", ex.InnerException.Message);
+                    table.AddRow("内部异常类型", Markup.Escape(ex.InnerException.GetType().Name));
+                    table.AddRow("内部异常消息", Markup.Escape(ex.InnerException.Message));
                 }
                 AnsiConsole.Write(table);
 
@@ -213,8 +232,8 @@ namespace RtCli.Modules
                 if (ex.InnerException != null)
                 {
                     AnsiConsole.Markup("[yellow]内部异常:[/]\n");
-                    AnsiConsole.Markup($"  [yellow]类型:[/] [white]{ex.InnerException.GetType().Name}[/]\n");
-                    AnsiConsole.Markup($"  [yellow]消息:[/] [white]{ex.InnerException.Message}[/]\n\n");
+                    AnsiConsole.Markup($"  [yellow]类型:[/] [white]{Markup.Escape(ex.InnerException.GetType().Name)}[/]\n");
+                    AnsiConsole.Markup($"  [yellow]消息:[/] [white]{Markup.Escape(ex.InnerException.Message)}[/]\n\n");
                 }
 
                 AnsiConsole.Markup("[yellow]堆栈跟踪:[/]\n");
@@ -224,7 +243,7 @@ namespace RtCli.Modules
             }
             catch (Exception innerEx)
             {
-                AnsiConsole.Markup($"[red]CrashAssistant 自身发生错误: {innerEx.Message}[/]\n");
+                AnsiConsole.Markup($"[red]CrashAssistant 自身发生错误: {Markup.Escape(innerEx.Message)}[/]\n");
                 _logger?.Error(innerEx, "[CrashAssistant] CrashAssistant 自身发生错误");
             }
             finally
@@ -293,7 +312,7 @@ namespace RtCli.Modules
 
             if (!string.IsNullOrEmpty(additionalInfo))
             {
-                AnsiConsole.Markup($"[yellow]附加信息:[/] [white]{additionalInfo}[/]\n");
+                AnsiConsole.Markup($"[yellow]附加信息:[/] [white]{Markup.Escape(additionalInfo)}[/]\n");
             }
 
             if (suggestion != null)

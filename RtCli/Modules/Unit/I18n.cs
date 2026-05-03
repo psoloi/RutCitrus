@@ -57,7 +57,15 @@ namespace RtCli.Modules.Unit
             }
 
             var json = File.ReadAllText(langFilePath);
-            _langData = JObject.Parse(json);
+            try
+            {
+                _langData = JObject.Parse(json);
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"语言文件解析失败，使用默认语言: {ex.Message}", 2, "I18n");
+                _langData = DefaultLangData;
+            }
             _currentLang = _langData["selectLang"]?.ToString() ?? "zh_CN";
         }
 

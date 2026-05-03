@@ -68,33 +68,41 @@ namespace RtCli.Modules.Function
 
     internal class Commands
     {
+        private static readonly Dictionary<string, Action> DebugActions = new Dictionary<string, Action>
+        {
+            { "1", () => {
+                Output.Log("测试", 1, "Debug");
+                Maximize_ConsoleWindows();
+            } },
+            { "2", () => { } },
+            { "3", () => { } },
+            { "4", () => { } },
+            { "5", () => { } },
+            { "6", () => { } },
+            { "7", () => { } }
+        };
+
         public static void Execute(string type)
         {
             string ThisProgramName = "Debug";
-            if (string.IsNullOrEmpty(type))
+            try 
             {
-                return;
-            }
-            var actions = new Dictionary<string, Action>
+                if (string.IsNullOrEmpty(type))
                 {
-                    { "1", () => {
-                        Output.Log("测试", 1, ThisProgramName);
-                        Maximize_ConsoleWindows();
-                    } },
-                    { "2", () => { /* F 2 */ } },
-                    { "3", () => { /* F 3 */ } },
-                    { "4", () => { /* F 4 */ } },
-                    { "5", () => { /* F 5 */ } },
-                    { "6", () => { } },
-                    { "7", () => { } }
-                };
-            if (actions.ContainsKey(type))
-            {
-                actions[type].Invoke();
+                    return;
+                }
+                if (DebugActions.ContainsKey(type))
+                {
+                    DebugActions[type].Invoke();
+                }
+                else
+                {
+                    Output.Log("调试关闭", 1, ThisProgramName);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                Output.Log("未知的调试参数!", 2, ThisProgramName);
+                Output.Log($"调试失败: {ex.Message}", 1, ThisProgramName);
             }
         }
         // Windows的最大化控制台窗口

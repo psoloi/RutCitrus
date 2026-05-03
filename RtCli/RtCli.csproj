@@ -10,8 +10,13 @@
     <PublishAot>False</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationIcon>rc.ico</ApplicationIcon>
-    <AssemblyVersion>1.2604.29.13</AssemblyVersion>
-    <FileVersion>1.2604.29.13</FileVersion>
+    
+    <!-- 版本号定义 - 程序版本号规则：主版本号.日期yy/mm.次版本号.编译号 -->
+    <VersionPrefix>1.2605.1.17</VersionPrefix>
+    <AssemblyVersion>$(VersionPrefix)</AssemblyVersion>
+    <FileVersion>$(VersionPrefix)</FileVersion>
+    <InformationalVersion>$(VersionPrefix)</InformationalVersion>
+    
     <PackageProjectUrl>https://github.com/psoloi/RutCitrus</PackageProjectUrl>
     <Company>RutCitrus</Company>
     <Authors>psoloi</Authors>

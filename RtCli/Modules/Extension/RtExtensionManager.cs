@@ -21,19 +21,21 @@ namespace RtExtensionManager
         private static readonly string absoluteExtensionsPath = Path.GetFullPath(ExtensionsDirectory);
         private static readonly Dictionary<string, ExtensionContext> _loadedExtensions = new Dictionary<string, ExtensionContext>();
         private static bool _isInitialized = false;
+        private static IReadOnlyDictionary<string, ExtensionInfo>? _cachedLoadedExtensions;
 
-        /// <summary>
-        /// 已加载的插件信息
-        /// </summary>
         public static IReadOnlyDictionary<string, ExtensionInfo> LoadedExtensions =>
-            _loadedExtensions.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Info);
+            _cachedLoadedExtensions ??= _loadedExtensions.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Info);
+
+        private static void InvalidateLoadedExtensionsCache()
+        {
+            _cachedLoadedExtensions = null;
+        }
 
         /// <summary>
         /// 初始化扩展管理器
         /// </summary>
         private static void Initialize()
         {
-            Thread.CurrentThread.Name = "Main";
             if (_isInitialized) return;
 
             if (!Directory.Exists(absoluteExtensionsPath))
@@ -50,7 +52,6 @@ namespace RtExtensionManager
         /// </summary>
         public static void LoadAll()
         {
-            Thread.CurrentThread.Name = "Main";
             Initialize();
             Output.Log("开始加载所有扩展...", 1, "RtExtensionManager");
 
@@ -92,7 +93,6 @@ namespace RtExtensionManager
         /// <returns>是否加载成功</returns>
         private static bool LoadExtension(string assemblyPath)
         {
-            Thread.CurrentThread.Name = "Main";
             try
             {
                 // 创建可卸载的加载上下文
@@ -117,7 +117,6 @@ namespace RtExtensionManager
                     {
                         var extension = (IExtension)Activator.CreateInstance(type);
 
-                        // 调用加载方法
                         extension.Load();
 
                         var extensionKey = $"{extension.Name}_{extension.Version}";
@@ -138,20 +137,20 @@ namespace RtExtensionManager
                             Extension = extension,
                             Info = info
                         };
+                        InvalidateLoadedExtensionsCache();
 
                         Output.Log($"[green]+[/] 加载扩展成功: {extension.Name} Ver:{extension.Version}", 1, "RtExtensionManager");
                         Output.Log($"   描述: {extension.Description}", 1, "RtExtensionManager");
 
                         EventBus.Publish(new ExtensionLoadEvent(extension.Name, extension.Version));
-                        return true;
                     }
                     catch (Exception ex)
                     {
                         Output.Log($"创建扩展实例失败 {type.FullName}: {ex.Message}", 1, "RtExtensionManager");
-                        context.Unload();
-                        return false;
                     }
                 }
+
+                return _loadedExtensions.Any(kvp => kvp.Value.Context == context);
             }
             catch (Exception ex)
             {
@@ -167,7 +166,6 @@ namespace RtExtensionManager
         /// </summary>
         public static void Run()
         {
-            Thread.CurrentThread.Name = "Main";
             if (_loadedExtensions.Count == 0)
             {
                 Output.Log("没有可运行的扩展", 1, "RtExtensionManager");
@@ -201,7 +199,6 @@ namespace RtExtensionManager
         /// </summary>
         public static void UnloadAll()
         {
-            Thread.CurrentThread.Name = "Main";
             if (_loadedExtensions.Count == 0)
             {
                 Output.Log("没有需要卸载的扩展", 1, "RtExtensionManager");
@@ -222,6 +219,9 @@ namespace RtExtensionManager
             }
 
             Output.Log($"扩展卸载成功: {unloadedCount}, 总数: {keys.Count}", 1, "RtExtensionManager");
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
         }
 
         /// <summary>
@@ -231,7 +231,6 @@ namespace RtExtensionManager
         /// <returns>是否卸载成功</returns>
         private static bool UnloadExtension(string extensionKey)
         {
-            Thread.CurrentThread.Name = "Main";
             if (_loadedExtensions.TryGetValue(extensionKey, out var context))
             {
                 try
@@ -246,10 +245,7 @@ namespace RtExtensionManager
                     context.Context.Unload();
 
                     _loadedExtensions.Remove(extensionKey);
-
-                    // 强制垃圾回收以完成卸载
-                    GC.Collect();
-                    GC.WaitForPendingFinalizers();
+                    InvalidateLoadedExtensionsCache();
 
                     Output.Log($"- 卸载扩展成功: {context.Info.Name}", 1, "RtExtensionManager");
                     return true;
@@ -268,7 +264,6 @@ namespace RtExtensionManager
         /// </summary>
         public static void Reload()
         {
-            Thread.CurrentThread.Name = "Main";
             Output.Log("开始重新加载所有扩展...", 1, "RtExtensionManager");
             UnloadAll();
             LoadAll();
@@ -279,7 +274,6 @@ namespace RtExtensionManager
         /// </summary>
         public static void DisplayLoadedExtensions()
         {
-            Thread.CurrentThread.Name = "Main";
             if (_loadedExtensions.Count == 0)
             {
                 Output.Log("没有已加载的扩展", 1, "RtExtensionManager");
@@ -348,7 +342,6 @@ namespace RtExtensionManager
         /// </summary>
         public static bool LoadExtensionByKey(string extensionPath)
         {
-            Thread.CurrentThread.Name = "Main";
             Initialize();
             
             if (string.IsNullOrWhiteSpace(extensionPath))

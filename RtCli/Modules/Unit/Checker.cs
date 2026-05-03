@@ -1,11 +1,16 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 
 namespace RtCli.Modules.Unit
 {
     internal class Checker
     {
+        private static string? _cachedJavaResult;
+        private static string? _cachedDotNetResult;
+
         public static string CheckJava()
         {
+            if (_cachedJavaResult != null) return _cachedJavaResult;
+
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -21,7 +26,7 @@ namespace RtCli.Modules.Unit
                 using var process = Process.Start(startInfo);
                 if (process == null)
                 {
-                    return I18n.Get("checker_nojava");
+                    return _cachedJavaResult = I18n.Get("checker_nojava");
                 }
 
                 string output = process.StandardError.ReadToEnd() + process.StandardOutput.ReadToEnd();
@@ -29,7 +34,7 @@ namespace RtCli.Modules.Unit
 
                 if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
                 {
-                    return I18n.Get("checker_nojava");
+                    return _cachedJavaResult = I18n.Get("checker_nojava");
                 }
 
                 string? versionLine = output.Split('\n').FirstOrDefault(line => line.Contains("version"));
@@ -37,18 +42,21 @@ namespace RtCli.Modules.Unit
                 {
                     int startIdx = versionLine.IndexOf("version") + "version".Length;
                     string version = versionLine.Substring(startIdx).Trim().Trim('"');
-                    return $"{I18n.Get("checker_java")} {version}";
+                    return _cachedJavaResult = $"{I18n.Get("checker_java")} {version}";
                 }
 
-                return I18n.Get("checker_nojava");
+                return _cachedJavaResult = I18n.Get("checker_nojava");
             }
             catch
             {
-                return I18n.Get("checker_nojava");
+                return _cachedJavaResult = I18n.Get("checker_nojava");
             }
         }
+
         public static string CheckDotNet()
         {
+            if (_cachedDotNetResult != null) return _cachedDotNetResult;
+
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -62,19 +70,19 @@ namespace RtCli.Modules.Unit
                 using var process = Process.Start(startInfo);
                 if (process == null)
                 {
-                    return I18n.Get("checker_nodotnet");
+                    return _cachedDotNetResult = I18n.Get("checker_nodotnet");
                 }
                 string output = process.StandardOutput.ReadToEnd();
                 process.WaitForExit();
                 if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
                 {
-                    return I18n.Get("checker_nodotnet");
+                    return _cachedDotNetResult = I18n.Get("checker_nodotnet");
                 }
-                return $"{I18n.Get("checker_dotnet")} {output.Trim()}";
+                return _cachedDotNetResult = $"{I18n.Get("checker_dotnet")} {output.Trim()}";
             }
             catch
             {
-                return I18n.Get("checker_nodotnet");
+                return _cachedDotNetResult = I18n.Get("checker_nodotnet");
             }
         }
     }
