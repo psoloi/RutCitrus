@@ -157,8 +157,6 @@ namespace RtExtensionManager
                 Output.Log($"加载扩展程序集失败 {Path.GetFileName(assemblyPath)}: {ex.Message}", 1, "RtExtensionManager");
                 return false;
             }
-
-            return false;
         }
 
         /// <summary>

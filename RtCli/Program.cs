@@ -17,7 +17,7 @@ namespace RtCli
 {
     internal class Program
     {
-        // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器，将捕获控制台方式换为/命令通过rcon或management来发送，未来使用Base64和密钥加密通信
+        // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器，将捕获控制台方式加强rcon或management来发送未来主要run，未来使用Base64和密钥加密通信
         // 版本号在 RtCli.csproj 的 VersionPrefix 中修改
         public static string RtCliVersion { get; } = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
         public static string ThisProgramName { get; } = "RtCli";
@@ -142,24 +142,7 @@ namespace RtCli
 
             RtExtensionManager.RtExtensionManager.LoadAll();
 
-            if (Config.App.CheckJava)
-            {
-                string result = Checker.CheckJava();
-                Output.Log(result, 1, "Checker");
-            }
-            if (Config.App.CheckDotNet)
-            {
-                string result2 = Checker.CheckDotNet();
-                Output.Log(result2, 1, "Checker");
-            }
-            if (Config.App.CheckOSBit)
-            {
-                bool is64BitOperatingSystem = Environment.Is64BitOperatingSystem;
-                if (!is64BitOperatingSystem)
-                {
-                    Output.Log($"[yellow]{I18n.Get("checker_osbit")}[/]", 2, "Checker");
-                }
-            }
+            Checker.CheckAll();
 
             UpdateAllCommands();
 
@@ -619,7 +602,7 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".guide":
-                                Intelligence.Guide();
+                                Intelligence.Guide().GetAwaiter().GetResult();
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".auto":

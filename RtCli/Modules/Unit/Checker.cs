@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace RtCli.Modules.Unit
 {
@@ -83,6 +84,46 @@ namespace RtCli.Modules.Unit
             catch
             {
                 return _cachedDotNetResult = I18n.Get("checker_nodotnet");
+            }
+        }
+
+
+        public static void CheckOS()
+        {
+            string os = Environment.OSVersion.Platform switch
+            {
+                PlatformID.Win32NT => "Windows",
+                PlatformID.Unix => "Unix/Linux",
+                PlatformID.MacOSX => "macOS",
+                _ => "Unknown"
+            };
+            Output.Log($"系统为 {os}", 1, "Checker");
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                Output.Log("Windows支持大多数功能", 1, "Checker");
+            }
+            var osNameAndVersion = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+        }
+        public static void CheckOSBit()
+        {
+            bool is64Bit = Environment.Is64BitOperatingSystem;
+            Output.Log($"{(is64Bit ? "当前系统为64位" : $"{I18n.Get("checker_osbit")}")}", 1, "Checker");
+        }
+        public static void CheckAll()
+        {
+            if (Config.App.CheckJava)
+            {
+                string javaResult = CheckJava();
+                Output.Log(javaResult, 1, "Checker");
+            }
+            if (Config.App.CheckDotNet)
+            {
+                string dotNetResult = CheckDotNet();
+                Output.Log(dotNetResult, 1, "Checker");
+            }
+            if (Config.App.CheckOSBit)
+            {
+                CheckOSBit();
             }
         }
     }
