@@ -17,11 +17,14 @@ namespace RtExtensionManager
     /// </summary>
     public static class RtExtensionManager
     {
+        private const string ThisName = "RtEM";
         private static readonly string ExtensionsDirectory = "Extensions";
         private static readonly string absoluteExtensionsPath = Path.GetFullPath(ExtensionsDirectory);
         private static readonly Dictionary<string, ExtensionContext> _loadedExtensions = new Dictionary<string, ExtensionContext>();
         private static bool _isInitialized = false;
         private static IReadOnlyDictionary<string, ExtensionInfo>? _cachedLoadedExtensions;
+        private static readonly List<Task> _runningTasks = new List<Task>();
+        private static readonly object _taskLock = new object();
 
         public static IReadOnlyDictionary<string, ExtensionInfo> LoadedExtensions =>
             _cachedLoadedExtensions ??= _loadedExtensions.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Info);
@@ -41,7 +44,7 @@ namespace RtExtensionManager
             if (!Directory.Exists(absoluteExtensionsPath))
             {
                 Directory.CreateDirectory(absoluteExtensionsPath);
-                Output.Log($"创建扩展目录: {Path.GetFullPath(absoluteExtensionsPath)}", 1, "RtExtensionManager");
+                Output.Log($"创建扩展目录: {Path.GetFullPath(absoluteExtensionsPath)}", 1, ThisName);
             }
 
             _isInitialized = true;
@@ -53,7 +56,7 @@ namespace RtExtensionManager
         public static void LoadAll()
         {
             Initialize();
-            Output.Log("开始加载所有扩展...", 1, "RtExtensionManager");
+            Output.Log("开始加载所有扩展...", 1, ThisName);
 
             // 防止神秘小漏洞的初始化-清空已加载的扩展
             UnloadAll();
@@ -63,7 +66,7 @@ namespace RtExtensionManager
 
             if (dllFiles.Length == 0)
             {
-                Output.Log("未找到任何扩展文件", 1, "RtExtensionManager");
+                Output.Log("未找到任何扩展文件", 1, ThisName);
                 return;
             }
 
@@ -79,11 +82,11 @@ namespace RtExtensionManager
                 }
                 catch (Exception ex)
                 {
-                    Output.Log($"加载扩展失败 {Path.GetFileName(dllPath)}: {ex.Message}", 3, "RtExtensionManager");
+                    Output.Log($"加载扩展失败 {Path.GetFileName(dllPath)}: {ex.Message}", 3, ThisName);
                 }
             }
 
-            Output.Log($"扩展加载完成。成功: {loadedCount}, 总数: {dllFiles.Length}", 1, "RtExtensionManager");
+            Output.Log($"扩展加载完成。成功: {loadedCount}, 总数: {dllFiles.Length}", 1, ThisName);
         }
 
         /// <summary>
@@ -95,18 +98,27 @@ namespace RtExtensionManager
         {
             try
             {
-                // 创建可卸载的加载上下文
-                var context = new ExtensionLoadContext(assemblyPath);
-                Assembly assembly = context.LoadFromAssemblyPath(assemblyPath);
+                string normalizedPath = Path.GetFullPath(assemblyPath);
 
-                // 查找实现IExtension接口的类型
+                var alreadyLoaded = _loadedExtensions.FirstOrDefault(kvp => 
+                    string.Equals(Path.GetFullPath(kvp.Value.Info.AssemblyPath ?? ""), normalizedPath, StringComparison.OrdinalIgnoreCase));
+                
+                if (!string.IsNullOrEmpty(alreadyLoaded.Key))
+                {
+                    Output.Log($"扩展已加载，取消加载: {alreadyLoaded.Value.Info.Name} Ver:{alreadyLoaded.Value.Info.Version}", 2, ThisName);
+                    return false;
+                }
+
+                var context = new ExtensionLoadContext(normalizedPath);
+                Assembly assembly = context.LoadFromAssemblyPath(normalizedPath);
+
                 var extensionTypes = assembly.GetTypes()
                     .Where(t => typeof(IExtension).IsAssignableFrom(t) &&
                                !t.IsInterface && !t.IsAbstract);
 
                 if (!extensionTypes.Any())
                 {
-                    Output.Log($"程序集 {Path.GetFileName(assemblyPath)} 中未找到实现IExtension接口的类型", 2, "RtExtensionManager");
+                    Output.Log($"程序集 {Path.GetFileName(normalizedPath)} 中未找到实现IExtension接口的类型", 2, ThisName);
                     context.Unload();
                     return false;
                 }
@@ -115,17 +127,29 @@ namespace RtExtensionManager
                 {
                     try
                     {
-                        var extension = (IExtension)Activator.CreateInstance(type);
+                        var extension = (IExtension?)Activator.CreateInstance(type);
+                        if (extension == null)
+                        {
+                            Output.Log($"创建扩展实例失败 {type.FullName}: 返回null", 2, ThisName);
+                            continue;
+                        }
+
+                        var extensionKey = $"{extension.Name}_{extension.Version}";
+                        
+                        if (_loadedExtensions.ContainsKey(extensionKey))
+                        {
+                            Output.Log($"扩展键已存在，取消加载: {extensionKey}", 2, ThisName);
+                            continue;
+                        }
 
                         extension.Load();
 
-                        var extensionKey = $"{extension.Name}_{extension.Version}";
                         var info = new ExtensionInfo
                         {
                             Name = extension.Name,
                             Version = extension.Version,
                             Description = extension.Description,
-                            AssemblyPath = assemblyPath,
+                            AssemblyPath = normalizedPath,
                             TypeName = type.FullName,
                             IsLoaded = true,
                             LoadTime = DateTime.Now
@@ -139,14 +163,14 @@ namespace RtExtensionManager
                         };
                         InvalidateLoadedExtensionsCache();
 
-                        Output.Log($"[green]+[/] 加载扩展成功: {extension.Name} Ver:{extension.Version}", 1, "RtExtensionManager");
-                        Output.Log($"   描述: {extension.Description}", 1, "RtExtensionManager");
+                        Output.Log($"[green]+[/] 加载扩展成功: {extension.Name} Ver:{extension.Version}", 1, ThisName);
+                        Output.Log($"   描述: {extension.Description}", 1, ThisName);
 
                         EventBus.Publish(new ExtensionLoadEvent(extension.Name, extension.Version));
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"创建扩展实例失败 {type.FullName}: {ex.Message}", 1, "RtExtensionManager");
+                        Output.Log($"创建扩展实例失败 {type.FullName}: {ex.Message}", 2, ThisName);
                     }
                 }
 
@@ -154,7 +178,7 @@ namespace RtExtensionManager
             }
             catch (Exception ex)
             {
-                Output.Log($"加载扩展程序集失败 {Path.GetFileName(assemblyPath)}: {ex.Message}", 1, "RtExtensionManager");
+                Output.Log($"加载扩展程序集失败 {Path.GetFileName(assemblyPath)}: {ex.Message}", 2, ThisName);
                 return false;
             }
         }
@@ -166,30 +190,34 @@ namespace RtExtensionManager
         {
             if (_loadedExtensions.Count == 0)
             {
-                Output.Log("没有可运行的扩展", 1, "RtExtensionManager");
+                Output.Log("没有可运行的扩展", 1, ThisName);
                 return;
             }
 
-            Output.Log($"开始运行 {_loadedExtensions.Count} 个扩展...", 1, "RtExtensionManager");
+            Output.Log($"开始运行 {_loadedExtensions.Count} 个扩展...", 1, ThisName);
 
             foreach (var kvp in _loadedExtensions)
             {
                 var context = kvp.Value;
-                Task.Run(() =>
+                var task = Task.Run(() =>
                 {
                     try
                     {
-                        Output.Log($"》 运行扩展: {context.Info.Name}", 1, "RtExtensionManager");
+                        Output.Log($"》 运行扩展: {context.Info.Name}", 0, ThisName);
                         context.Extension.Run();
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"× 运行扩展失败 {context.Info.Name}: {ex.Message}", 1, "RtExtensionManager");
+                        Output.Log($"× 运行扩展失败 {context.Info.Name}: {ex.Message}", 0, ThisName);
                     }
                 });
+                lock (_taskLock)
+                {
+                    _runningTasks.Add(task);
+                }
             }
 
-            Output.Log("所有扩展已启动", 1, "RtExtensionManager");
+            Output.Log("所有扩展已启动", 1, ThisName);
         }
 
         /// <summary>
@@ -197,13 +225,26 @@ namespace RtExtensionManager
         /// </summary>
         public static void UnloadAll()
         {
+            lock (_taskLock)
+            {
+                if (_runningTasks.Count > 0)
+                {
+                    try
+                    {
+                        Task.WaitAll(_runningTasks.ToArray(), TimeSpan.FromSeconds(5));
+                    }
+                    catch { }
+                    _runningTasks.Clear();
+                }
+            }
+
             if (_loadedExtensions.Count == 0)
             {
-                Output.Log("没有需要卸载的扩展", 1, "RtExtensionManager");
+                Output.Log("没有需要卸载的扩展", 1, ThisName);
                 return;
             }
 
-            Output.Log($"开始卸载 {_loadedExtensions.Count} 个扩展...", 1, "RtExtensionManager");
+            Output.Log($"开始卸载 {_loadedExtensions.Count} 个扩展...", 1, ThisName);
 
             var keys = _loadedExtensions.Keys.ToList();
             int unloadedCount = 0;
@@ -216,7 +257,7 @@ namespace RtExtensionManager
                 }
             }
 
-            Output.Log($"扩展卸载成功: {unloadedCount}, 总数: {keys.Count}", 1, "RtExtensionManager");
+            Output.Log($"扩展卸载成功: {unloadedCount}, 总数: {keys.Count}", 1, ThisName);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -245,12 +286,12 @@ namespace RtExtensionManager
                     _loadedExtensions.Remove(extensionKey);
                     InvalidateLoadedExtensionsCache();
 
-                    Output.Log($"- 卸载扩展成功: {context.Info.Name}", 1, "RtExtensionManager");
+                    Output.Log($"- 卸载扩展成功: {context.Info.Name}", 1, ThisName);
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    Output.Log($"× 卸载扩展失败 {context.Info.Name}: {ex.Message}", 1, "RtExtensionManager");
+                    Output.Log($"× 卸载扩展失败 {context.Info.Name}: {ex.Message}", 1, ThisName);
                     return false;
                 }
             }
@@ -262,7 +303,7 @@ namespace RtExtensionManager
         /// </summary>
         public static void Reload()
         {
-            Output.Log("开始重新加载所有扩展...", 1, "RtExtensionManager");
+            Output.Log("开始重新加载所有扩展...", 1, ThisName);
             UnloadAll();
             LoadAll();
         }
@@ -274,21 +315,21 @@ namespace RtExtensionManager
         {
             if (_loadedExtensions.Count == 0)
             {
-                Output.Log("没有已加载的扩展", 1, "RtExtensionManager");
+                Output.Log("没有已加载的扩展", 1, ThisName);
                 return;
             }
 
-            Output.Log($"* - 已加载的扩展 ({_loadedExtensions.Count} 个):", 1, "RtExtensionManager");
-            Output.Log(new string('=', 60), 1, "RtExtensionManager");
+            Output.Log($"* - 已加载的扩展 ({_loadedExtensions.Count} 个):", 1, ThisName);
+            Output.Log(new string('=', 60), 1, ThisName);
 
             foreach (var kvp in _loadedExtensions)
             {
                 var info = kvp.Value.Info;
-                Output.Log($"[[#]] {info.Name} Ver:{info.Version}", 1, "RtExtensionManager");
-                Output.Log($"     Key: {kvp.Key}", 1, "RtExtensionManager");
-                Output.Log($"     描述: {info.Description}", 1, "RtExtensionManager");
-                Output.Log($"     程序集: {Path.GetFileName(info.AssemblyPath)}", 1, "RtExtensionManager");
-                Output.Log($"     加载时间: {info.LoadTime:yyyy-MM-dd HH:mm:ss}", 1, "RtExtensionManager");
+                Output.Log($"[[#]] {info.Name} Ver:{info.Version}", 1, ThisName);
+                Output.Log($"     Key: {kvp.Key}", 1, ThisName);
+                Output.Log($"     描述: {info.Description}", 1, ThisName);
+                Output.Log($"     程序集: {Path.GetFileName(info.AssemblyPath)}", 1, ThisName);
+                Output.Log($"     加载时间: {info.LoadTime:yyyy-MM-dd HH:mm:ss}", 1, ThisName);
 
             }
         }
@@ -317,17 +358,17 @@ namespace RtExtensionManager
         {
             if (string.IsNullOrWhiteSpace(extensionKey))
             {
-                Output.Log("扩展Key不能为空", 2, "RtExtensionManager");
+                Output.Log("扩展Key不能为空", 2, ThisName);
                 return false;
             }
 
             if (!_loadedExtensions.ContainsKey(extensionKey))
             {
-                Output.Log($"未找到扩展: {extensionKey}", 2, "RtExtensionManager");
-                Output.Log("可用的扩展Key:", 1, "RtExtensionManager");
+                Output.Log($"未找到扩展: {extensionKey}", 2, ThisName);
+                Output.Log("可用的扩展Key:", 1, ThisName);
                 foreach (var key in _loadedExtensions.Keys)
                 {
-                    Output.Log($"  - {key}", 1, "RtExtensionManager");
+                    Output.Log($"  - {key}", 1, ThisName);
                 }
                 return false;
             }
@@ -344,7 +385,7 @@ namespace RtExtensionManager
             
             if (string.IsNullOrWhiteSpace(extensionPath))
             {
-                Output.Log("扩展路径不能为空", 2, "RtExtensionManager");
+                Output.Log("扩展路径不能为空", 2, ThisName);
                 return false;
             }
 
@@ -360,13 +401,13 @@ namespace RtExtensionManager
 
             if (!File.Exists(fullPath))
             {
-                Output.Log($"扩展文件不存在: {fullPath}", 2, "RtExtensionManager");
+                Output.Log($"扩展文件不存在: {fullPath}", 2, ThisName);
                 return false;
             }
 
             if (!fullPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
             {
-                Output.Log("扩展文件必须是 .dll 格式", 2, "RtExtensionManager");
+                Output.Log("扩展文件必须是 .dll 格式", 2, ThisName);
                 return false;
             }
 
@@ -400,18 +441,34 @@ namespace RtExtensionManager
     internal class ExtensionLoadContext : AssemblyLoadContext
     {
         private readonly AssemblyDependencyResolver _resolver;
+        private readonly string _pluginPath;
 
         public ExtensionLoadContext(string pluginPath) : base(isCollectible: true)
         {
+            _pluginPath = pluginPath;
             _resolver = new AssemblyDependencyResolver(pluginPath);
         }
 
-        protected override Assembly Load(AssemblyName assemblyName)
+        protected override Assembly? Load(AssemblyName assemblyName)
         {
-            string assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
+            string? assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
             if (assemblyPath != null)
             {
                 return LoadFromAssemblyPath(assemblyPath);
+            }
+
+            try
+            {
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (asm.GetName().Name == assemblyName.Name)
+                    {
+                        return asm;
+                    }
+                }
+            }
+            catch
+            {
             }
 
             return null;
@@ -419,7 +476,7 @@ namespace RtExtensionManager
 
         protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
         {
-            string libraryPath = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
+            string? libraryPath = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
             if (libraryPath != null)
             {
                 return LoadUnmanagedDllFromPath(libraryPath);

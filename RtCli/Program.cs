@@ -33,6 +33,8 @@ namespace RtCli
             "rt status",
             "rt clients",
             "rt extensions",
+            "rt extension load",
+            "rt extension unload",
             "rt end",
             "rt stop",
             "rt start",
