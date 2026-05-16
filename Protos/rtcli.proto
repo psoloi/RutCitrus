@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package rtcli;
+
+option csharp_namespace = "RtCli.Grpc";
+
+service RtCliService {
+  rpc GetServerInfo (Empty) returns (ServerInfoResponse);
+  rpc GetExtensions (Empty) returns (ExtensionListResponse);
+  rpc UnloadExtension (UnloadExtensionRequest) returns (UnloadExtensionResponse);
+  rpc LoadExtension (LoadExtensionRequest) returns (LoadExtensionResponse);
+  rpc ExecuteCommand (ExecuteCommandRequest) returns (ExecuteCommandResponse);
+  rpc StreamLogs (Empty) returns (stream LogMessage);
+  rpc GetClients (Empty) returns (ClientListResponse);
+  rpc GetStatus (Empty) returns (StatusResponse);
+}
+
+message Empty {}
+
+message ServerInfoResponse {
+  string server_name = 1;
+  string version = 2;
+  int32 port = 3;
+  bool is_running = 4;
+}
+
+message ExtensionInfo {
+  string key = 1;
+  string name = 2;
+  string version = 3;
+  string description = 4;
+  string load_time = 5;
+}
+
+message ExtensionListResponse {
+  repeated ExtensionInfo extensions = 1;
+}
+
+message UnloadExtensionRequest {
+  string extension_key = 1;
+}
+
+message UnloadExtensionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message LoadExtensionRequest {
+  string extension_path = 1;
+}
+
+message LoadExtensionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ExecuteCommandRequest {
+  string command = 1;
+}
+
+message ExecuteCommandResponse {
+  bool success = 1;
+  string result = 2;
+}
+
+message LogMessage {
+  string timestamp = 1;
+  int32 level = 2;
+  string source = 3;
+  string message = 4;
+}
+
+message ClientInfo {
+  string id = 1;
+  string ip = 2;
+  string connect_time = 3;
+}
+
+message ClientListResponse {
+  repeated ClientInfo clients = 1;
+}
+
+message StatusResponse {
+  bool is_running = 1;
+  int32 connected_client_count = 2;
+  int32 extension_count = 3;
+  string server_name = 4;
+}

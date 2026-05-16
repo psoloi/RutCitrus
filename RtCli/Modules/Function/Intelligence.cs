@@ -16,15 +16,24 @@ namespace RtCli.Modules.Function
     {
         private static readonly string ThisProgramName = "Guide";
 
-        private static readonly string[] PopularVersions = new[]
+        private static readonly string[] DefaultPopularVersions = new[]
         {
-            "1.21.4", "1.21.3", "1.21.1", "1.21",
+            "26.1", "26.2",
+            "1.21.11", "1.21.4", "1.21.3", "1.21.1", "1.21",
             "1.20.6", "1.20.4", "1.20.2", "1.20.1",
             "1.19.4", "1.19.2",
             "1.18.2",
             "1.16.5",
             "1.12.2",
         };
+
+        private static string[] GetPopularVersions()
+        {
+            var configVersions = Config.App.PopularVersions;
+            if (configVersions != null && configVersions.Count > 0)
+                return configVersions.ToArray();
+            return DefaultPopularVersions;
+        }
 
         private static readonly ServerTypeInfo[] ServerList = new[]
         {
@@ -66,7 +75,7 @@ namespace RtCli.Modules.Function
             Output.Log("服务端架设引导完成！之后可以使用 .server start 启动服务端。", 1, ThisProgramName);
         }
 
-        private static async Task<bool> Step1_CheckJava()
+        private static Task<bool> Step1_CheckJava()
         {
             Output.Log("[[步骤 1/3]] 检查 Java 环境...", 1, ThisProgramName);
 
@@ -87,7 +96,7 @@ namespace RtCli.Modules.Function
                 AnsiConsole.Write(table);
 
                 Output.Log("安装 JDK 后请重新运行引导。", 2, ThisProgramName);
-                return false;
+                return Task.FromResult(false);
             }
 
             string versionStr = javaResult.Substring(I18n.Get("checker_java").Length).Trim();
@@ -108,11 +117,11 @@ namespace RtCli.Modules.Function
                 AnsiConsole.Write(table);
 
                 Output.Log("升级 JDK 后请重新运行引导。", 2, ThisProgramName);
-                return false;
+                return Task.FromResult(false);
             }
 
             Output.Log("Java 版本满足要求 (JDK 17+)。", 1, ThisProgramName);
-            return true;
+            return Task.FromResult(true);
         }
 
         private static async Task<bool> Step2_DownloadServer()
@@ -201,7 +210,7 @@ namespace RtCli.Modules.Function
                     ? allVersions.Where(v => v.Type == "release" || v.Type == "snapshot").ToList()
                     : allVersions.Where(v => v.Type == "release").ToList();
 
-                var availablePopular = filteredVersions.Where(v => PopularVersions.Contains(v.Id)).ToList();
+                var availablePopular = filteredVersions.Where(v => GetPopularVersions().Contains(v.Id)).ToList();
                 if (!availablePopular.Any())
                 {
                     availablePopular = filteredVersions.Take(10).ToList();
@@ -270,7 +279,7 @@ namespace RtCli.Modules.Function
                 var project = JObject.Parse(projectJson);
                 var allVersions = project["versions"]!.Select(v => v.ToString()).ToList();
 
-                var availablePopular = allVersions.Where(v => PopularVersions.Contains(v)).ToList();
+                var availablePopular = allVersions.Where(v => GetPopularVersions().Contains(v)).ToList();
                 if (!availablePopular.Any())
                 {
                     availablePopular = allVersions.Take(10).ToList();
@@ -349,7 +358,7 @@ namespace RtCli.Modules.Function
                 var versionsData = JObject.Parse(versionsJson);
                 var allVersions = versionsData["versions"]!.Select(v => v.ToString()).ToList();
 
-                var availablePopular = allVersions.Where(v => PopularVersions.Contains(v)).ToList();
+                var availablePopular = allVersions.Where(v => GetPopularVersions().Contains(v)).ToList();
                 if (!availablePopular.Any())
                 {
                     availablePopular = allVersions.Take(10).ToList();
@@ -408,7 +417,7 @@ namespace RtCli.Modules.Function
                 var stableVersions = gameVersions.Where(v => v["stable"]?.Value<bool>() == true).ToList();
 
                 var allVersionIds = stableVersions.Select(v => v["version"]!.ToString()).ToList();
-                var availablePopular = allVersionIds.Where(v => PopularVersions.Contains(v)).ToList();
+                var availablePopular = allVersionIds.Where(v => GetPopularVersions().Contains(v)).ToList();
                 if (!availablePopular.Any())
                 {
                     availablePopular = allVersionIds.Take(10).ToList();

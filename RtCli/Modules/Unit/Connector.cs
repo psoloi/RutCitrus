@@ -1,204 +1,153 @@
+using Grpc.Core;
+using RtCli.Grpc;
 using RtCli.Modules;
 using RtExtensionManager;
 using Spectre.Console;
-using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Text;
 using System.Threading.Tasks;
-using TouchSocket.Core;
-using TouchSocket.Sockets;
 
 namespace RtCli.Modules.Unit
 {
     internal class Connector
     {
-        private static TcpService? _server;
+        private static Server? _grpcServer;
         private static readonly ConcurrentDictionary<string, ClientInfo> _connectedClients = new();
+        private static readonly List<IServerStreamWriter<LogMessage>> _logSubscribers = new();
+        private static readonly object _subscribersLock = new();
 
         public static string ServerName => Config.App.ServerName;
         public static int ServerPort => Config.App.ServerPort;
-        public static bool IsRunning => _server?.ServerState == ServerState.Running;
+        public static bool IsRunning => _grpcServer != null;
         public static int ConnectedClientCount => _connectedClients.Count;
         public static IReadOnlyDictionary<string, ClientInfo> ConnectedClients => _connectedClients;
 
         public static async Task StartServerAsync()
         {
-            if (_server != null && _server.ServerState == ServerState.Running)
+            if (_grpcServer != null)
             {
-                Output.Log("暂时不支持在同个RtCli上开放多个管理端口", 2, "Connector");
+                Output.Log("gRPC服务器已在运行中", 2, "Connector");
                 return;
             }
 
             try
             {
-                _server = new TcpService();
-                
-                _server.Received = async (client, e) =>
+                var service = new RtCliServiceImpl();
+
+                _grpcServer = new Server
                 {
-                    var data = e.Memory.ToArray();
-                    await ProcessMessageAsync(client, data);
+                    Services = { RtCliService.BindService(service) },
+                    Ports = { new ServerPort("0.0.0.0", ServerPort, ServerCredentials.Insecure) }
                 };
 
-                await _server.SetupAsync(new TouchSocketConfig()
-                    .SetListenIPHosts(new IPHost[] 
-                    { 
-                        new IPHost($"0.0.0.0:{ServerPort}"),
-                        new IPHost($"[::]:{ServerPort}")
-                    })
-                    .SetServerName(ServerName)
-                    .SetMaxCount(1000)
-                    .ConfigurePlugins(a =>
-                    {
-                        a.Add<ServerConnectionPlugin>();
-                    }));
+                _grpcServer.Start();
 
-                await _server.StartAsync();
-                
-                Output.Log($"服务器 [[{ServerName}]] 已启动管理端口: {ServerPort} (IPv4/IPv6)", 1, "Connector");
+                Output.Log($"gRPC服务器 [[{ServerName}]] 已启动端口: {ServerPort}", 1, "Connector");
             }
             catch (Exception ex)
             {
-                Output.Log($"服务器启动失败: {ex.Message}", 3, "Connector");
+                Output.Log($"gRPC服务器启动失败: {ex.Message}", 3, "Connector");
             }
-        }
-
-        private static async Task ProcessMessageAsync(TcpSessionClient client, byte[] data)
-        {
-            try
-            {
-                var message = Encoding.UTF8.GetString(data);
-                var clientId = client.Id;
-
-                if (_connectedClients.TryGetValue(clientId, out var clientInfo))
-                {
-                    var safeIP = Markup.Escape(clientInfo.IP);
-                    
-                    if (message.StartsWith("CMD:"))
-                    {
-                        var command = message.Substring(4);
-                        Output.Log($"收到管理面板 ({safeIP}) 命令: {Markup.Escape(command)}", 1, "Connector");
-                        await HandleCommandAsync(client, command);
-                    }
-                    else if (message.StartsWith("EXT_GET:"))
-                    {
-                        Output.Log($"收到管理面板 ({safeIP}) 请求扩展列表", 1, "Connector");
-                        var json = RtExtensionManager.RtExtensionManager.GetExtensionsJson();
-                        await client.SendAsync($"EXT_LIST:{json}");
-                    }
-                    else if (message.StartsWith("EXT_UNLOAD:"))
-                    {
-                        var extensionKey = message.Substring(11);
-                        Output.Log($"收到管理面板 ({safeIP}) 卸载扩展请求: {Markup.Escape(extensionKey)}", 1, "Connector");
-                        bool success = RtExtensionManager.RtExtensionManager.UnloadExtensionByKey(extensionKey);
-                        await client.SendAsync($"EXT_UNLOAD_RESULT:{(success ? "SUCCESS" : "FAILED")}:{extensionKey}");
-                    }
-                    else
-                    {
-                        Output.Log($"收到管理面板 ({safeIP}) 消息: {Markup.Escape(message)}", 1, "Connector");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Output.Log($"处理消息异常: {ex.Message}", 2, "Connector");
-            }
-        }
-
-        private static async Task HandleCommandAsync(TcpSessionClient client, string command)
-        {
-            try
-            {
-                var parts = command.Split(' ', 2);
-                var cmd = parts[0].ToLower();
-                var args = parts.Length > 1 ? parts[1] : "";
-
-                switch (cmd)
-                {
-                    case "extensions":
-                        var json = RtExtensionManager.RtExtensionManager.GetExtensionsJson();
-                        await client.SendAsync($"RESULT:{json}");
-                        break;
-                    case "unload":
-                        if (!string.IsNullOrEmpty(args))
-                        {
-                            bool success = RtExtensionManager.RtExtensionManager.UnloadExtensionByKey(args);
-                            await client.SendAsync($"RESULT:{(success ? $"扩展 {args} 卸载成功" : $"扩展 {args} 卸载失败")}");
-                        }
-                        else
-                        {
-                            await client.SendAsync("RESULT:请指定要卸载的扩展Key");
-                        }
-                        break;
-                    default:
-                        await client.SendAsync($"RESULT:命令 '{command}' 执行完成");
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                await client.SendAsync($"RESULT:命令执行错误: {ex.Message}");
-            }
-        }
-
-        internal static string GetClientIP(TcpSessionClient client)
-        {
-            try
-            {
-                if (client.IP != null)
-                {
-                    return client.IP.ToString();
-                }
-            }
-            catch { }
-            return "未知";
         }
 
         public static async Task StopServerAsync()
         {
-            if (_server != null && _server.ServerState == ServerState.Running)
+            if (_grpcServer != null)
             {
-                await _server.StopAsync();
+                await _grpcServer.ShutdownAsync();
+                _grpcServer = null;
                 _connectedClients.Clear();
-                Output.Log($"服务器 [[{ServerName}]] 关闭", 1, "Connector");
+                Output.Log($"gRPC服务器 [[{ServerName}]] 已关闭", 1, "Connector");
             }
         }
 
-        public static async Task BroadcastDataAsync(string data)
+        public static async Task BroadcastLogAsync(string timestamp, int level, string source, string message)
         {
-            if (_server != null && _server.ServerState == ServerState.Running)
+            var logMsg = new LogMessage
             {
-                foreach (var clientId in _connectedClients.Keys)
+                Timestamp = timestamp,
+                Level = level,
+                Source = source,
+                Message = message
+            };
+
+            lock (_subscribersLock)
+            {
+                var brokenSubscribers = new List<IServerStreamWriter<LogMessage>>();
+                foreach (var subscriber in _logSubscribers)
                 {
-                    if (_server.Clients.TryGetClient(clientId, out var sessionClient))
+                    try
                     {
-                        await sessionClient.SendAsync(data);
+                        subscriber.WriteAsync(logMsg).Wait();
+                    }
+                    catch
+                    {
+                        brokenSubscribers.Add(subscriber);
                     }
                 }
-                Output.Log($"已广播数据到 {_connectedClients.Count} 个管理面板", 1, "Connector");
+                foreach (var broken in brokenSubscribers)
+                {
+                    _logSubscribers.Remove(broken);
+                }
             }
         }
 
-        internal static void OnClientConnected(string clientId, string clientIP)
+        internal static void AddLogSubscriber(IServerStreamWriter<LogMessage> subscriber)
         {
-            var safeIP = Markup.Escape(clientIP);
+            lock (_subscribersLock)
+            {
+                _logSubscribers.Add(subscriber);
+            }
+        }
+
+        internal static void RemoveLogSubscriber(IServerStreamWriter<LogMessage> subscriber)
+        {
+            lock (_subscribersLock)
+            {
+                _logSubscribers.Remove(subscriber);
+            }
+        }
+
+        internal static string RegisterClient(string peer)
+        {
+            var clientId = Guid.NewGuid().ToString("N")[..8];
+            var ip = ParseIPFromPeer(peer);
+            var safeIP = Markup.Escape(ip);
             _connectedClients[clientId] = new ClientInfo
             {
                 ConnectTime = DateTime.Now,
-                IP = clientIP
+                IP = ip,
+                Peer = peer
             };
             Output.Log($"管理面板 ({safeIP}) 已连接 (ID: {clientId})", 1, "Connector");
+            return clientId;
         }
 
-        internal static void OnClientDisconnected(string clientId)
+        internal static void UnregisterClient(string clientId)
         {
             if (_connectedClients.TryRemove(clientId, out var clientInfo))
             {
                 var safeIP = Markup.Escape(clientInfo.IP);
-                Output.Log($"管理面板 ({safeIP}) 已断开连接", 1, "Connector");
+                Output.Log($"管理面板 ({safeIP}) 已断开连接 (ID: {clientId})", 1, "Connector");
             }
+        }
+
+        private static string ParseIPFromPeer(string peer)
+        {
+            try
+            {
+                var parts = peer.Split(':');
+                if (parts.Length >= 2)
+                {
+                    var ipPart = string.Join(":", parts[..^1]);
+                    if (ipPart.StartsWith("//")) ipPart = ipPart[2..];
+                    return ipPart;
+                }
+            }
+            catch { }
+            return "未知";
         }
     }
 
@@ -206,31 +155,161 @@ namespace RtCli.Modules.Unit
     {
         public DateTime ConnectTime { get; set; }
         public string IP { get; set; } = "";
+        public string Peer { get; set; } = "";
     }
 
-    internal class ServerConnectionPlugin : PluginBase, ITcpConnectedPlugin, ITcpClosedPlugin
+    internal class RtCliServiceImpl : RtCliService.RtCliServiceBase
     {
-        public async Task OnTcpConnected(ITcpSession client, ConnectedEventArgs e)
+        public override Task<ServerInfoResponse> GetServerInfo(Empty request, ServerCallContext context)
         {
-            if (client is IIdClient idClient)
+            EnsureClientTracked(context);
+            var response = new ServerInfoResponse
             {
-                var clientIP = "未知";
-                if (client is TcpSessionClient sessionClient)
-                {
-                    clientIP = Connector.GetClientIP(sessionClient);
-                }
-                Connector.OnClientConnected(idClient.Id, clientIP);
-            }
-            await e.InvokeNext();
+                ServerName = Config.App.ServerName,
+                Version = Program.RtCliVersion,
+                Port = Config.App.ServerPort,
+                IsRunning = Connector.IsRunning
+            };
+            return Task.FromResult(response);
         }
 
-        public async Task OnTcpClosed(ITcpSession client, ClosedEventArgs e)
+        public override Task<ExtensionListResponse> GetExtensions(Empty request, ServerCallContext context)
         {
-            if (client is IIdClient idClient)
+            EnsureClientTracked(context);
+            var json = RtExtensionManager.RtExtensionManager.GetExtensionsJson();
+            var extensions = Newtonsoft.Json.JsonConvert.DeserializeObject<List<ExtensionData>>(json);
+
+            var response = new ExtensionListResponse();
+            if (extensions != null)
             {
-                Connector.OnClientDisconnected(idClient.Id);
+                foreach (var ext in extensions)
+                {
+                    response.Extensions.Add(new Grpc.ExtensionInfo
+                    {
+                        Key = ext.Key ?? "",
+                        Name = ext.Name ?? "",
+                        Version = ext.Version ?? "",
+                        Description = ext.Description ?? "",
+                        LoadTime = ext.LoadTime ?? ""
+                    });
+                }
             }
-            await e.InvokeNext();
+
+            return Task.FromResult(response);
         }
+
+        public override Task<UnloadExtensionResponse> UnloadExtension(UnloadExtensionRequest request, ServerCallContext context)
+        {
+            EnsureClientTracked(context);
+            bool success = RtExtensionManager.RtExtensionManager.UnloadExtensionByKey(request.ExtensionKey);
+            return Task.FromResult(new UnloadExtensionResponse
+            {
+                Success = success,
+                Message = success ? $"扩展 {request.ExtensionKey} 卸载成功" : $"扩展 {request.ExtensionKey} 卸载失败"
+            });
+        }
+
+        public override Task<LoadExtensionResponse> LoadExtension(LoadExtensionRequest request, ServerCallContext context)
+        {
+            EnsureClientTracked(context);
+            bool success = RtExtensionManager.RtExtensionManager.LoadExtensionByKey(request.ExtensionPath);
+            return Task.FromResult(new LoadExtensionResponse
+            {
+                Success = success,
+                Message = success ? "扩展加载成功" : "扩展加载失败"
+            });
+        }
+
+        public override Task<ExecuteCommandResponse> ExecuteCommand(ExecuteCommandRequest request, ServerCallContext context)
+        {
+            EnsureClientTracked(context);
+            return Task.FromResult(new ExecuteCommandResponse
+            {
+                Success = true,
+                Result = $"命令 '{request.Command}' 已接收"
+            });
+        }
+
+        public override async Task StreamLogs(Empty request, IServerStreamWriter<LogMessage> responseStream, ServerCallContext context)
+        {
+            var clientId = EnsureClientTracked(context);
+            Connector.AddLogSubscriber(responseStream);
+
+            try
+            {
+                await Task.Delay(Timeout.Infinite, context.CancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                Connector.RemoveLogSubscriber(responseStream);
+                Connector.UnregisterClient(clientId);
+            }
+        }
+
+        public override Task<ClientListResponse> GetClients(Empty request, ServerCallContext context)
+        {
+            EnsureClientTracked(context);
+            var response = new ClientListResponse();
+            foreach (var kvp in Connector.ConnectedClients)
+            {
+                response.Clients.Add(new Grpc.ClientInfo
+                {
+                    Id = kvp.Key,
+                    Ip = kvp.Value.IP,
+                    ConnectTime = kvp.Value.ConnectTime.ToString("yyyy-MM-dd HH:mm:ss")
+                });
+            }
+            return Task.FromResult(response);
+        }
+
+        public override Task<StatusResponse> GetStatus(Empty request, ServerCallContext context)
+        {
+            EnsureClientTracked(context);
+            return Task.FromResult(new StatusResponse
+            {
+                IsRunning = Connector.IsRunning,
+                ConnectedClientCount = Connector.ConnectedClientCount,
+                ExtensionCount = RtExtensionManager.RtExtensionManager.GetExtensionCount(),
+                ServerName = Config.App.ServerName
+            });
+        }
+
+        private static readonly ConcurrentDictionary<string, string> _peerToClientId = new();
+
+        private static string EnsureClientTracked(ServerCallContext context)
+        {
+            var peer = context.Peer;
+            if (_peerToClientId.TryGetValue(peer, out var existingId))
+            {
+                if (Connector.ConnectedClients.ContainsKey(existingId))
+                {
+                    return existingId;
+                }
+                _peerToClientId.TryRemove(peer, out _);
+            }
+
+            var clientId = Connector.RegisterClient(peer);
+            _peerToClientId[peer] = clientId;
+
+            context.CancellationToken.Register(() =>
+            {
+                _peerToClientId.TryRemove(peer, out _);
+                Connector.UnregisterClient(clientId);
+            });
+
+            return clientId;
+        }
+    }
+
+    internal class ExtensionData
+    {
+        public string? Key { get; set; }
+        public string? Name { get; set; }
+        public string? Version { get; set; }
+        public string? Description { get; set; }
+        public string? LoadTime { get; set; }
     }
 }

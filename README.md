@@ -1,6 +1,6 @@
 <p align="center">
  <h2 align="center">RtCli</h2>
- <p align="center">一个基于C#控制台程序的Minecraft服务器后期的维护、监测、管理器</p>
+ <p align="center">一个基于C#控制台程序的Minecraft服务器后期的自动化维护、监测、管理器</p>
 </p>
 
 <div align="center">
@@ -15,14 +15,17 @@
 
 ## 使用说明
 本项目是基于使用程序的人们会一定的MC服务端基础，需要您已经创建了服务端
-打开MC服务端后再打开程序通过命令或配置文件即可
-注意这个程序暂时不是开服器，只是您的服务端后期维护、检测和管理的工具
+如果实在不会可以通过.guide来快速入门
+
 目前服务端命令发送有RCON和RUN模式，一种是通过RCON输入+Log读取的方式；
 另一种是RUN获取和输入方式，如果想要精准控制建议使用RUN，如果RUN模式有问题则选择RCON模式
 
-当您需要以任何方式使用或为此项目扩展时，只需要把原作者名称和项目原地址标出即可，谢谢你对作者的尊重！ [GitHub](https://github.com/psoloi/RutCitrus)
+当您需要以任何方式使用或为此项目修改时，只需要把项目中原作者名称和项目原地址保留即可，谢谢你对作者的尊重！ [GitHub](https://github.com/psoloi/RutCitrus)
 
 ## 项目结构
+> [!WARNING]\
+> 注意请修改程序的开发者千万不要上传自己的AI API key要详细检查
+
 该项目为RtCli作为服务器来管理Minecraft服务器，RutCitrusServer为控制RtCli的面板，其次可选择Rt为扩展或自制扩展
 
 ## 面板使用方法
@@ -92,6 +95,8 @@
 2. 实现MC服务器配置文件配置
 3. 完善Rt扩展插件
 4. 实现对主流MC服务端核心的支持
+    - 新版本含config文件夹的
+    - 旧版本不含的
 5. 实现对MC速度代理的支持
 6. 完善Event以给扩展调用
 7. 实现对MC服务端插件的配置
@@ -100,12 +105,10 @@
     - TCP
     - UDP
 10. 实现常见MC服务端报错的分析器
-11. 更人性的配置（图形化）更安全的系统（连接固）更智能的管理（小龙虾？）
+11. 更人性的配置（图形化）更安全的系统（连接固）更智能的管理（自动化）
 12. 数据库等日志保存
 
 
 #### 建议及引用
 非常推荐您能对项目指出点评，程序使用了人工智能制作，有错误十分感谢您可以提出甚至改进，如果有时间拜托能点个Stars吗？
 ![GitHub Stars](https://img.shields.io/github/stars/psoloi/RutCitrus?logo=github)
-
-项目中作者主动引用了的一些库（无序排列）：Spectre.Console、Silk.NET.Core、TouchSocket、WPF-UI、Newtonsoft.Json、RestSharp、Serilog、YamlDotNet、MineStat、PacketDotNet、SharpPcap等

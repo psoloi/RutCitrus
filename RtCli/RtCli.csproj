@@ -11,11 +11,12 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationIcon>rc.ico</ApplicationIcon>
     
-    <!-- 版本号定义 - 程序版本号规则：主版本号.日期yy/mm.次版本号.编译号 -->
-    <VersionPrefix>1.2605.1.17</VersionPrefix>
-    <AssemblyVersion>$(VersionPrefix)</AssemblyVersion>
-    <FileVersion>$(VersionPrefix)</FileVersion>
+    <!-- 版本号定义 - 程序版本号规则：主版本号.日期yyyymmdd.次版本号.编译号 -->
+    <VersionPrefix>1.20260511.1.17</VersionPrefix>
+    <AssemblyVersion>1.2605.1.17</AssemblyVersion>
+    <FileVersion>1.2605.1.17</FileVersion>
     <InformationalVersion>$(VersionPrefix)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     
     <PackageProjectUrl>https://github.com/psoloi/RutCitrus</PackageProjectUrl>
     <Company>RutCitrus</Company>
@@ -28,14 +29,25 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.80.0" />
+    <PackageReference Include="Grpc.Core" Version="2.46.6" />
+    <PackageReference Include="Grpc.Tools" Version="2.80.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Google.Protobuf" Version="3.34.1" />
+    <PackageReference Include="IronPython" Version="3.4.2" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="RestSharp" Version="114.0.0" />
     <PackageReference Include="Serilog" Version="4.3.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
-    <PackageReference Include="System.Management" Version="10.0.7" />
-    <PackageReference Include="TouchSocket" Version="4.2.7" />
+    <PackageReference Include="System.Management" Version="10.0.8" />
     <PackageReference Include="YamlDotNet" Version="17.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\Protos\rtcli.proto" GrpcServices="Server" />
   </ItemGroup>
 
   <ItemGroup>

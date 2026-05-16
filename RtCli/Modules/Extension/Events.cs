@@ -19,6 +19,7 @@ namespace RtCli.Modules.Extension
         private static readonly Dictionary<Type, List<Delegate>> _handlers = new();
         private static readonly Dictionary<string, HashSet<Delegate>> _extensionHandlers = new();
         private static readonly object _lock = new();
+        [ThreadStatic] private static bool _isPublishing;
 
         public static void Subscribe<TEvent>(RtEventHandler<TEvent> handler, string? extensionName = null) where TEvent : RtEvent
         {
@@ -98,27 +99,36 @@ namespace RtCli.Modules.Extension
         {
             if (e == null) return;
 
-            List<Delegate> handlersCopy;
-            lock (_lock)
+            if (_isPublishing) return;
+            _isPublishing = true;
+            try
             {
-                if (!_handlers.TryGetValue(typeof(TEvent), out var delegates))
-                    return;
-                handlersCopy = new List<Delegate>(delegates);
-            }
-
-            foreach (var del in handlersCopy)
-            {
-                if (del is RtEventHandler<TEvent> handler)
+                List<Delegate> handlersCopy;
+                lock (_lock)
                 {
-                    try
+                    if (!_handlers.TryGetValue(typeof(TEvent), out var delegates))
+                        return;
+                    handlersCopy = new List<Delegate>(delegates);
+                }
+
+                foreach (var del in handlersCopy)
+                {
+                    if (del is RtEventHandler<TEvent> handler)
                     {
-                        handler(e);
-                    }
-                    catch (Exception ex)
-                    {
-                        Output.Log($"事件处理器执行异常 [{e.EventName}]: {ex.Message}", 3, "EventBus");
+                        try
+                        {
+                            handler(e);
+                        }
+                        catch (Exception ex)
+                        {
+                            Output.Log($"事件处理器执行异常 [{e.EventName}]: {ex.Message}", 3, "EventBus");
+                        }
                     }
                 }
+            }
+            finally
+            {
+                _isPublishing = false;
             }
         }
 

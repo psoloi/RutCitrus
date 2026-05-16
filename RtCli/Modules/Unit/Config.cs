@@ -13,6 +13,7 @@ namespace RtCli.Modules.Unit
         public bool CheckDotNet { get; set; } = true;
         [YamlMember(Alias = "check_os_bit")]
         public bool CheckOSBit { get; set; } = true;
+        public bool CheckUpdate { get; set; } = true;
         public bool SkipSelect { get; set; } = true;
 
         public string ServerName { get; set; } = "myserver";
@@ -24,6 +25,17 @@ namespace RtCli.Modules.Unit
         public string RconHost { get; set; } = "127.0.0.1";
         public int RconPort { get; set; } = 25575;
         public string RconPassword { get; set; } = "";
+
+        public List<string> PopularVersions { get; set; } = new List<string>
+        {
+            "26.1", "26.2",
+            "1.21.11", "1.21.4", "1.21.3", "1.21.1", "1.21",
+            "1.20.6", "1.20.4", "1.20.2", "1.20.1",
+            "1.19.4", "1.19.2",
+            "1.18.2",
+            "1.16.5",
+            "1.12.2",
+        };
 
         public string Debug { get; set; } = "No";
 
@@ -110,6 +122,7 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#    check_java      - 是否在启动时检查 Java 运行时环境 (true/false)");
             sb.AppendLine("#    check_dot_net   - 是否在启动时检查 .NET 运行时环境 (true/false)");
             sb.AppendLine("#    check_os_bit    - 是否检查操作系统位数 (true/false)");
+            sb.AppendLine("#    check_update    - 是否在启动时检查版本更新 (true/false)");
             sb.AppendLine("#    skip_select     - 是否跳过模式选择界面直接进入默认模式 (true/false)");
             sb.AppendLine("#    server_name     - 服务器名称，用于标识本服务器");
             sb.AppendLine("#    server_port     - 服务器监听端口号 (1-65535)");
@@ -120,7 +133,8 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#    run_server_flags- RUN模式下启动MC服务端的JVM参数");
             sb.AppendLine("#    rcon_host       - RCON模式下RCON服务地址");
             sb.AppendLine("#    rcon_port       - RCON模式下RCON服务端口");
-            sb.AppendLine("#    rcon_password   - RCON模式下RCON密码");
+            sb.AppendLine("#    rcon_password     - RCON模式下RCON密码");
+            sb.AppendLine("#    popular_versions  - 引导中显示的流行版本列表");
             sb.AppendLine("#");
             sb.AppendLine("# ==============================================================================");
             sb.AppendLine();
@@ -135,6 +149,8 @@ namespace RtCli.Modules.Unit
                     sb.AppendLine("# 是否检查 .NET 运行时环境");
                 else if (trimmedLine.StartsWith("check_os_bit:"))
                     sb.AppendLine("# 是否检查操作系统位数 (32位/64位)");
+                else if (trimmedLine.StartsWith("check_update:"))
+                    sb.AppendLine("# 是否在启动时检查版本更新");
                 else if (trimmedLine.StartsWith("server_name:"))
                     sb.AppendLine("# 服务器名称");
                 else if (trimmedLine.StartsWith("server_port:"))
@@ -153,6 +169,8 @@ namespace RtCli.Modules.Unit
                     sb.AppendLine("# RCON服务端口");
                 else if (trimmedLine.StartsWith("rcon_password:"))
                     sb.AppendLine("# RCON密码");
+                else if (trimmedLine.StartsWith("popular_versions:"))
+                    sb.AppendLine("# 引导中显示的流行版本列表");
                 else if (trimmedLine.StartsWith("debug:"))
                     sb.AppendLine("# 调试模式 (No)");
 

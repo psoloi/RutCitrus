@@ -16,7 +16,8 @@ namespace RtCli.Modules
     {
         private static bool _isEnd = false;
         private static bool _isInitialized = false;
-        private static readonly object _endLock = new object();
+        private static readonly object _endLock = new();
+        public static bool IsShuttingDown => _isEnd;
 
         public static void Initialize()
         {

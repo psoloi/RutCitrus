@@ -23,6 +23,7 @@ namespace RtCli.Modules.Function
         private static int _attachedProcessId = 0;
         private static string _attachedWindowTitle = "";
         private static string _connectedServerName = "";
+        private static readonly object _scanLock = new object();
         private static List<MinecraftServerInfo> _lastScanResults = new List<MinecraftServerInfo>();
         private static long _logFilePosition = 0;
         private static string _currentMode = "RCON";
@@ -30,7 +31,10 @@ namespace RtCli.Modules.Function
 
         private static RconClient? _rconClient;
 
-        public static IReadOnlyList<MinecraftServerInfo> LastScanResults => _lastScanResults;
+        public static IReadOnlyList<MinecraftServerInfo> LastScanResults
+        {
+            get { lock (_scanLock) { return _lastScanResults.ToList(); } }
+        }
         public static string CurrentMode => _currentMode;
         public static bool IsRunMode => _currentMode == "RUN";
         public static bool IsRconMode => _currentMode == "RCON";
@@ -113,7 +117,7 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                     {
-                        Output.Log(Markup.Escape(e.Data), 1, _connectedServerName);
+                        Output.Log(e.Data, 0, _connectedServerName);
                     }
                 };
 
@@ -121,7 +125,7 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                     {
-                        Output.Log(Markup.Escape(e.Data), 3, _connectedServerName);
+                        Output.Log(e.Data, 0, _connectedServerName);
                     }
                 };
 
@@ -195,7 +199,7 @@ namespace RtCli.Modules.Function
                     if (_serverProcess == null || _serverProcess.HasExited)
                     {
                         int exitCode = _serverProcess?.ExitCode ?? -1;
-                        Output.Log($"服务端进程已退出 (退出码: {exitCode})", 2, "Analyzer");
+                        Output.Log($"服务端进程已退出 (退出码: {exitCode})", 0, "Analyzer");
                         CleanupRunMode();
                         break;
                     }
@@ -268,7 +272,10 @@ namespace RtCli.Modules.Function
             string ThisProgramName = "Analyzer";
             Output.Log("正在扫描运行中的 Minecraft 服务端...", 1, ThisProgramName);
 
-            _lastScanResults = ScanMinecraftServers();
+            lock (_scanLock)
+            {
+                _lastScanResults = ScanMinecraftServers();
+            }
             if (_lastScanResults.Count == 0)
             {
                 Output.Log("未找到运行中的 Minecraft 服务端。", 2, ThisProgramName);
@@ -308,19 +315,22 @@ namespace RtCli.Modules.Function
                 return;
             }
 
-            if (_lastScanResults.Count == 0)
+            List<MinecraftServerInfo> scanResults;
+            lock (_scanLock) { scanResults = _lastScanResults; }
+
+            if (scanResults.Count == 0)
             {
                 Output.Log("没有可用的服务端列表，请先使用 .server get 扫描。", 2, ThisProgramName);
                 return;
             }
 
-            if (index < 1 || index > _lastScanResults.Count)
+            if (index < 1 || index > scanResults.Count)
             {
-                Output.Log($"无效的序号，请输入 1 到 {_lastScanResults.Count} 之间的数字。", 2, ThisProgramName);
+                Output.Log($"无效的序号，请输入 1 到 {scanResults.Count} 之间的数字。", 2, ThisProgramName);
                 return;
             }
 
-            var selectedServer = _lastScanResults[index - 1];
+            var selectedServer = scanResults[index - 1];
             AttachToServerRcon(selectedServer, index.ToString());
         }
 
@@ -334,7 +344,8 @@ namespace RtCli.Modules.Function
                 return;
             }
 
-            var server = _lastScanResults.FirstOrDefault(s => s.ProcessId == pid);
+            MinecraftServerInfo? server;
+            lock (_scanLock) { server = _lastScanResults.FirstOrDefault(s => s.ProcessId == pid); }
             if (server != null)
             {
                 AttachToServerRcon(server, $"PID:{pid}");
@@ -365,7 +376,7 @@ namespace RtCli.Modules.Function
             string ThisProgramName = "Analyzer";
             lock (_attachLock)
             {
-                Detach();
+                DetachCore();
 
                 try
                 {
@@ -481,7 +492,7 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrWhiteSpace(line))
                     {
-                        Output.Log(Markup.Escape(line), 1, serverName);
+                        Output.Log(line, 0, serverName);
                     }
                 }
 
@@ -569,25 +580,30 @@ namespace RtCli.Modules.Function
         {
             lock (_attachLock)
             {
-                _outputCts?.Cancel();
-                _outputCts?.Dispose();
-                _outputCts = null;
+                DetachCore();
+            }
+        }
 
-                if (_rconClient != null)
-                {
-                    _rconClient.Disconnect();
-                    _rconClient = null;
-                }
+        private static void DetachCore()
+        {
+            _outputCts?.Cancel();
+            _outputCts?.Dispose();
+            _outputCts = null;
 
-                _attachedProcessId = 0;
-                _attachedWindowTitle = "";
-                _connectedServerName = "";
-                Interlocked.Exchange(ref _logFilePosition, 0);
+            if (_rconClient != null)
+            {
+                _rconClient.Disconnect();
+                _rconClient = null;
+            }
 
-                if (!_isRunModeActive && _currentMode != "RUN")
-                {
-                    Output.Log("断开与 Minecraft 服务端的连接。", 1, "Analyzer");
-                }
+            _attachedProcessId = 0;
+            _attachedWindowTitle = "";
+            _connectedServerName = "";
+            Interlocked.Exchange(ref _logFilePosition, 0);
+
+            if (!_isRunModeActive && _currentMode != "RUN")
+            {
+                Output.Log("断开与 Minecraft 服务端的连接。", 1, "Analyzer");
             }
         }
 

@@ -18,9 +18,14 @@ namespace RtCli
     internal class Program
     {
         // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器，将捕获控制台方式加强rcon或management来发送未来主要run，未来使用Base64和密钥加密通信
+        // SQLlite、日志分析、Microsoft.OpenApi(Polly)、cs-script、内容管理验证插件安全
         // 版本号在 RtCli.csproj 的 VersionPrefix 中修改
-        public static string RtCliVersion { get; } = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
+        public static string RtCliVersion { get; } =
+            Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "unknown";
         public static string ThisProgramName { get; } = "RtCli";
+        public static readonly string RtCliInformation = "Author by psoloi on https://github.com/psoloi/RutCitrus";
 
         private static readonly string[] BaseCommands = new string[]
         {
@@ -76,8 +81,7 @@ namespace RtCli
             catch (Exception ex)
             {
                 Output.ReportError(ex);
-                //return Task.CompletedTask;
-                return Task.FromResult(ex);
+                return Task.CompletedTask;
             }
             finally
             {
@@ -95,7 +99,7 @@ namespace RtCli
             ex.SetObserved();
         }
 
-        private static async Task MainInternal(string[] args)
+        private static Task MainInternal(string[] args)
         {
             Console.OutputEncoding = System.Text.Encoding.UTF8;
             Console.Title = "RtCli";
@@ -152,6 +156,8 @@ namespace RtCli
             Output.Log($"{Modules.Unit.I18n.Get("main_loadfinsih")}（{stopwatch.ElapsedMilliseconds}ms）", 1, ThisProgramName);
             EventBus.Publish(new ProgramStartupEvent(args));
 
+            #region 模式选择
+
             var modeChoices = new (string Key, string DisplayName)[]
             {
                 ("default", I18n.Get("main_selmode_default")),
@@ -182,7 +188,7 @@ namespace RtCli
                     Output.Log("正在运行扩展内容...", 1, ThisProgramName);
                     RtExtensionManager.RtExtensionManager.DisplayLoadedExtensions();
                     RtExtensionManager.RtExtensionManager.Run();
-                    await Continued();
+                    Continued();
                     break;
 
                 case "debug":
@@ -206,12 +212,15 @@ namespace RtCli
 
                 default:
                     Output.Log(I18n.Get("main_selmode_no"), 3, ThisProgramName);
-                    return;
+                    return Task.CompletedTask;
             }
+
+            #endregion
 
             EventBus.Publish(new ProgramShutdownEvent("正常退出"));
 
             Reload.End();
+            return Task.CompletedTask;
         }
 
         private static void UpdateAllCommands()
@@ -502,17 +511,26 @@ namespace RtCli
 
         #endregion
 
-        public static async Task Continued()
+        public static void Continued()
         {
             try
             {
                 Output.Log("[yellow]注意：目前已将通信验证删除！程序仅能在本机或局域网运行否则安全无法保障！[/]", 2, ThisProgramName);
                 Output.Log("[yellow]注意：该分支为测试分支，可能包含未测试的功能！[/]", 2, ThisProgramName);
-                await Connector.StartServerAsync();
+                try
+                {
+                    Connector.StartServerAsync().GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    Output.ReportError(ex, false, "启动管理端口失败");
+                }
 
                 string? cmd_input = ReadLineWithTabCompletion();
                 while (true)
                 {
+                    if (Reload.IsShuttingDown) goto endpage;
+
                     bool handled = false;
 
                     try
@@ -525,7 +543,7 @@ namespace RtCli
                         switch (cmd_input)
                         {
                             case var cmd when cmd == "rt":
-                                Output.Log($"RtCli版本：{Markup.Escape(RtCliVersion)} 输入rt help查看命令列表，按 TAB 键自动补全命令", 1, ThisProgramName);
+                                Output.Log($"RtCli版本：{Markup.Escape(RtCliVersion)} {RtCliInformation} 输入rt help查看命令列表，按 TAB 键自动补全命令", 1, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd == "rt help":
@@ -590,11 +608,11 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == "rt start":
-                                await Connector.StartServerAsync();
+                                Connector.StartServerAsync().GetAwaiter().GetResult();
                                 handled = true;
                                 break;
                             case var cmd when cmd == "rt stop":
-                                await Connector.StopServerAsync();
+                                Connector.StopServerAsync().GetAwaiter().GetResult();
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".help":
@@ -767,7 +785,7 @@ namespace RtCli
                 .AddRow("[white]rt start[/]", "启动管理端口")
                 .AddRow("[white]rt stop[/]", "关闭管理端口")
                 .AddRow("[green].help[/]", "显示扩展命令列表")
-                .AddRow("[white].guide[/]", "新手引导")
+                .AddRow("[white].guide[/]", "MC服务端安装引导")
                 .AddRow("[white].auto[/]", "自动化")
                 .AddRow("[white].server[/]", "MC控制台相关命令 (模式取决于配置)")
                 .AddRow("[white].server get[/]", "[[[DarkOrange]RCON[/]]] 扫描并列出运行中的MC服务端")

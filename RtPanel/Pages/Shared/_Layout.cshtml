@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - RtPanel</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <style>
+        .toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; }
+        .custom-toast {
+            min-width: 300px; max-width: 450px; padding: 14px 20px; margin-bottom: 10px;
+            border-radius: 8px; color: #fff; opacity: 0; transform: translateX(100%);
+            transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .custom-toast.show { opacity: 1; transform: translateX(0); }
+        .custom-toast.success { background: #28a745; }
+        .custom-toast.error { background: #dc3545; }
+        .custom-toast.warning { background: #ffc107; color: #333; }
+        .custom-toast.info { background: #17a2b8; }
+        .custom-toast .close-btn { cursor: pointer; margin-left: 12px; font-size: 18px; opacity: 0.7; }
+        .custom-toast .close-btn:hover { opacity: 1; }
+
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 10000;
+            display: flex; justify-content: center; align-items: center;
+        }
+        .modal-box {
+            background: #16213e; border-radius: 12px; padding: 24px; min-width: 360px; max-width: 500px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.4); border: 1px solid #2a2a4a;
+        }
+        .modal-box h5 { margin-bottom: 12px; color: #e0e0e0; }
+        .modal-box p { margin-bottom: 20px; color: #b0b0b0; }
+        .modal-box input {
+            width: 100%; padding: 8px 12px; border: 1px solid #2a2a4a; border-radius: 6px;
+            margin-bottom: 16px; font-size: 14px; background-color: #1a1a2e; color: #e0e0e0;
+        }
+        .modal-box input:focus { outline: none; border-color: #6c63ff; box-shadow: 0 0 0 3px rgba(108,99,255,0.15); }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-dark border-bottom box-shadow mb-3">
+            <div class="container">
+                <a class="navbar-brand" asp-area="" asp-page="/Index">RtPanel</a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse" aria-controls="navbarSupportedContent"
+                        aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
+                    <ul class="navbar-nav flex-grow-1">
+                        <li class="nav-item">
+                            <a class="nav-link" asp-area="" asp-page="/Index">主页</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-area="" asp-page="/Connect">连接</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-area="" asp-page="/Extensions">扩展</a>
+                        </li>
+                    </ul>
+                    <ul class="navbar-nav">
+                        <li class="nav-item">
+                            <span id="globalConnStatus" class="badge bg-secondary" style="font-size:0.85em;padding:6px 12px;border-radius:12px;">未连接</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <div id="globalDisconnectAlert" class="alert alert-warning text-center mb-0" style="display:none;">
+        与服务器的连接已断开，请前往 <a href="/Connect">连接页面</a> 重新连接。
+    </div>
+
+    <div class="container flex-grow-1">
+        <main role="main" class="pb-3">
+            @RenderBody()
+        </main>
+    </div>
+
+    <footer class="border-top footer text-muted">
+        <div class="container">
+            &copy; 2026 - RtPanel - RutCitrus 管理面板
+        </div>
+    </footer>
+
+    <div class="toast-container" id="toastContainer"></div>
+    <div id="modalContainer"></div>
+
+    <script src="~/lib/jquery/dist/jquery.min.js"></script>
+    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="~/js/site.js" asp-append-version="true"></script>
+
+    <script>
+        window.RtPanel = {
+            showToast(message, type = 'info', duration = 3000) {
+                const container = document.getElementById('toastContainer');
+                const toast = document.createElement('div');
+                toast.className = `custom-toast ${type}`;
+                toast.innerHTML = `<span>${message}</span><span class="close-btn" onclick="this.parentElement.remove()">&times;</span>`;
+                container.appendChild(toast);
+                requestAnimationFrame(() => toast.classList.add('show'));
+                setTimeout(() => {
+                    toast.classList.remove('show');
+                    setTimeout(() => toast.remove(), 300);
+                }, duration);
+            },
+
+            showConfirm(title, message) {
+                return new Promise(resolve => {
+                    const container = document.getElementById('modalContainer');
+                    const overlay = document.createElement('div');
+                    overlay.className = 'modal-overlay';
+                    overlay.innerHTML = `
+                        <div class="modal-box">
+                            <h5>${title}</h5>
+                            <p>${message}</p>
+                            <div class="modal-actions">
+                                <button class="btn btn-secondary btn-sm" id="modalCancel">取消</button>
+                                <button class="btn btn-primary btn-sm" id="modalConfirm">确定</button>
+                            </div>
+                        </div>`;
+                    container.appendChild(overlay);
+                    overlay.querySelector('#modalConfirm').onclick = () => { overlay.remove(); resolve(true); };
+                    overlay.querySelector('#modalCancel').onclick = () => { overlay.remove(); resolve(false); };
+                    overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+                });
+            },
+
+            showPrompt(title, placeholder = '') {
+                return new Promise(resolve => {
+                    const container = document.getElementById('modalContainer');
+                    const overlay = document.createElement('div');
+                    overlay.className = 'modal-overlay';
+                    overlay.innerHTML = `
+                        <div class="modal-box">
+                            <h5>${title}</h5>
+                            <input type="text" id="modalInput" placeholder="${placeholder}" />
+                            <div class="modal-actions">
+                                <button class="btn btn-secondary btn-sm" id="modalCancel">取消</button>
+                                <button class="btn btn-primary btn-sm" id="modalConfirm">确定</button>
+                            </div>
+                        </div>`;
+                    container.appendChild(overlay);
+                    const input = overlay.querySelector('#modalInput');
+                    input.focus();
+                    input.onkeydown = (e) => { if (e.key === 'Enter') { overlay.remove(); resolve(input.value); } };
+                    overlay.querySelector('#modalConfirm').onclick = () => { overlay.remove(); resolve(input.value); };
+                    overlay.querySelector('#modalCancel').onclick = () => { overlay.remove(); resolve(null); };
+                    overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(null); } };
+                });
+            },
+
+            updateConnectionStatus(connected) {
+                const badge = document.getElementById('globalConnStatus');
+                const alert = document.getElementById('globalDisconnectAlert');
+                const prev = badge.dataset.connected === 'true';
+
+                if (connected) {
+                    badge.textContent = '已连接';
+                    badge.className = 'badge bg-success';
+                    badge.style.cssText = 'font-size:0.85em;padding:6px 12px;border-radius:12px;';
+                    badge.dataset.connected = 'true';
+                    alert.style.display = 'none';
+                } else {
+                    badge.textContent = '未连接';
+                    badge.className = 'badge bg-secondary';
+                    badge.style.cssText = 'font-size:0.85em;padding:6px 12px;border-radius:12px;';
+                    badge.dataset.connected = 'false';
+                    if (prev) alert.style.display = '';
+                }
+            },
+
+            async checkConnection() {
+                try {
+                    const r = await fetch('/api/connect/status');
+                    if (r.ok) {
+                        const info = await r.json();
+                        this.updateConnectionStatus(info.connected);
+                        return info.connected;
+                    }
+                } catch {}
+                this.updateConnectionStatus(false);
+                return false;
+            }
+        };
+
+        setInterval(() => RtPanel.checkConnection(), 8000);
+        RtPanel.checkConnection();
+    </script>
+
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

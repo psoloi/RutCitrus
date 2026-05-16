@@ -113,17 +113,22 @@ namespace RtCli.Modules
         }
 
         /// <summary>
-        /// 该方法用于所有的非错误日志输出
+        /// 该方法用于所有的非错误日志输出,普通输出类型为1,警告类型为2,错误类型为3,兼容类型为0
         /// 基础输出的格式[时;分;秒] |信息| [线程Main/XXX - Task] (调用程序名称) 消息
         /// </summary>
-        public static void Log(string msg, int msg_type, string name)
+        public static void Log(string msg, int msg_type, string? names)
         {
             string time = DateTime.Now.ToString("HH:mm:ss");
             string plainMsg = StripMarkup(msg);
-            string threadName = Thread.CurrentThread.Name ?? "Unknown";
+            string name = string.IsNullOrEmpty(names) ? "Null" : names;
+            string threadName = Thread.CurrentThread.Name ?? "Null";
             
             switch (msg_type)
             {
+                case 0:
+                    AnsiConsole.Markup($"[white][[{time}]][/] " + c_info + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + Markup.Escape(msg) + "\n");
+                    _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
+                    break;
                 case 1:
                     AnsiConsole.Markup($"[white][[{time}]][/] " + c_info + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + msg + "\n");
                     _logger?.Information("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);

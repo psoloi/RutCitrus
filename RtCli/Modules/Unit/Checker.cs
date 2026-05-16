@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
+using Newtonsoft.Json.Linq;
+using Spectre.Console;
 
 namespace RtCli.Modules.Unit
 {
@@ -7,6 +10,8 @@ namespace RtCli.Modules.Unit
     {
         private static string? _cachedJavaResult;
         private static string? _cachedDotNetResult;
+
+        private const string GitHubRepoApi = "https://api.github.com/repos/psoloi/RutCitrus/releases/latest";
 
         public static string CheckJava()
         {
@@ -87,6 +92,87 @@ namespace RtCli.Modules.Unit
             }
         }
 
+        private static long ExtractVersionDate()
+        {
+            var match = Regex.Match(Program.RtCliVersion, @"(\d{8})");
+            if (match.Success && long.TryParse(match.Groups[1].Value, out long date))
+            {
+                return date;
+            }
+            return 0;
+        }
+
+        public static void CheckUpdateVersion()
+        {
+            var updateTask = Task.Run(async () =>
+            {
+                try
+                {
+                    using var httpClient = new HttpClient();
+                    httpClient.DefaultRequestHeaders.Add("User-Agent", "RtCli-UpdateCheck");
+                    httpClient.Timeout = TimeSpan.FromSeconds(10);
+
+                    var response = await httpClient.GetStringAsync(GitHubRepoApi);
+                    var json = JObject.Parse(response);
+                    var tagName = json["tag_name"]?.ToString();
+                    var htmlUrl = json["html_url"]?.ToString();
+
+                    if (string.IsNullOrEmpty(tagName))
+                    {
+                        Output.Log("无法获取最新版本信息", 0, "Checker");
+                        return;
+                    }
+
+                    var match = Regex.Match(tagName, @"(\d{8})");
+                    if (!match.Success)
+                    {
+                        Output.Log($"无法解析版本标签: {tagName}", 0, "Checker");
+                        return;
+                    }
+
+                    long remoteDate = long.Parse(match.Groups[1].Value);
+                    long localDate = ExtractVersionDate();
+
+                    if (localDate == 0)
+                    {
+                        Output.Log($"无法解析当前版本号: {Program.RtCliVersion}", 0, "Checker");
+                        return;
+                    }
+
+                    if (remoteDate > localDate)
+                    {
+                        Output.Log($"发现新版本 {match.Groups[1].Value} (当前版本: {Program.RtCliVersion})", 0, "Checker");
+                        if (!string.IsNullOrEmpty(htmlUrl))
+                        {
+                            Output.Log($"{htmlUrl}", 0, "Checker");
+                        }
+                    }
+                    else
+                    {
+                        Output.Log("当前已是最新版本", 0, "Checker");
+                    }
+                }
+                catch (TaskCanceledException)
+                {
+                    Output.Log("版本检查超时", 0, "Checker");
+                }
+                catch (HttpRequestException ex)
+                {
+                    Output.Log($"版本检查网络错误: {ex.Message}", 0, "Checker");
+                }
+                catch (Exception ex)
+                {
+                    Output.Log($"版本检查失败: {ex.Message}", 0, "Checker");
+                }
+            });
+            _ = updateTask.ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                {
+                    Output.Log($"版本检查内部错误: {t.Exception.InnerException?.Message}", 0, "Checker");
+                }
+            }, TaskContinuationOptions.OnlyOnFaulted);
+        }
 
         public static void CheckOS()
         {
@@ -97,17 +183,22 @@ namespace RtCli.Modules.Unit
                 PlatformID.MacOSX => "macOS",
                 _ => "Unknown"
             };
-            Output.Log($"ϵͳΪ {os}", 1, "Checker");
+            Output.Log($"当前系统为 {os}", 1, "Checker");
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                Output.Log("Windows֧�ִ��������", 1, "Checker");
+                Output.Log("当前系统支持全部功能", 1, "Checker");
             }
-            var osNameAndVersion = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+            else 
+            {
+                var osNameAndVersion = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+                Output.Log($"当前 {osNameAndVersion} 可能存在兼容性问题，部分功能可能无法使用", 2, "Checker");
+            }
+            
         }
         public static void CheckOSBit()
         {
             bool is64Bit = Environment.Is64BitOperatingSystem;
-            Output.Log($"{(is64Bit ? "��ǰϵͳΪ64λ" : $"{I18n.Get("checker_osbit")}")}", 1, "Checker");
+            Output.Log($"{(is64Bit ? "当前系统为64位" : $"{I18n.Get("checker_osbit")}")}", 1, "Checker");
         }
         public static void CheckAll()
         {
@@ -124,6 +215,10 @@ namespace RtCli.Modules.Unit
             if (Config.App.CheckOSBit)
             {
                 CheckOSBit();
+            }
+            if (Config.App.CheckUpdate)
+            {
+                CheckUpdateVersion();
             }
         }
     }

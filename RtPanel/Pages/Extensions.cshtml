@@ -1,0 +1,195 @@
+@page
+@model RtPanel.Pages.ExtensionsModel
+@{
+    ViewData["Title"] = "扩展管理";
+}
+
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>扩展管理</h2>
+        <div>
+            <button class="btn btn-primary btn-sm" id="refreshBtn" onclick="refreshExtensions()">刷新</button>
+            <button class="btn btn-outline-secondary btn-sm ms-2" onclick="loadExtension()">加载扩展</button>
+        </div>
+    </div>
+
+    <div id="connectionStatus" class="alert alert-warning" style="display:none;">
+        未连接到服务器，请先在 <a href="/Connect">连接页面</a> 连接服务器。
+    </div>
+
+    <div id="extensionList">
+        <div class="text-center text-muted py-4">点击右上角"刷新"获取扩展列表</div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    const CACHE_KEY = 'rtPanel_extensions';
+    const CACHE_TIME_KEY = 'rtPanel_extensions_time';
+    const CACHE_TTL = 60000;
+    const COOLDOWN_MS = 100;
+    let lastRefreshTime = 0;
+
+    function getCachedExtensions() {
+        try {
+            const time = sessionStorage.getItem(CACHE_TIME_KEY);
+            if (time && Date.now() - parseInt(time) < CACHE_TTL) {
+                const data = sessionStorage.getItem(CACHE_KEY);
+                if (data) return JSON.parse(data);
+            }
+        } catch {}
+        return null;
+    }
+
+    function setCachedExtensions(data) {
+        try {
+            sessionStorage.setItem(CACHE_KEY, JSON.stringify(data));
+            sessionStorage.setItem(CACHE_TIME_KEY, Date.now().toString());
+        } catch {}
+    }
+
+    function clearCachedExtensions() {
+        try {
+            sessionStorage.removeItem(CACHE_KEY);
+            sessionStorage.removeItem(CACHE_TIME_KEY);
+        } catch {}
+    }
+
+    async function checkConnection() {
+        try {
+            const response = await fetch('/api/connect/status');
+            if (response.ok) {
+                const info = await response.json();
+                const statusEl = document.getElementById('connectionStatus');
+                if (!info.connected) {
+                    statusEl.style.display = '';
+                    document.getElementById('extensionList').innerHTML = '<div class="text-center text-muted py-4">未连接到服务器</div>';
+                    return false;
+                } else {
+                    statusEl.style.display = 'none';
+                    return true;
+                }
+            }
+        } catch {}
+        return false;
+    }
+
+    async function refreshExtensions(force = false) {
+        const now = Date.now();
+        if (!force && now - lastRefreshTime < COOLDOWN_MS) return;
+        lastRefreshTime = now;
+
+        const btn = document.getElementById('refreshBtn');
+        btn.disabled = true;
+
+        const connected = await checkConnection();
+        if (!connected) {
+            btn.disabled = false;
+            return;
+        }
+
+        if (!force) {
+            const cached = getCachedExtensions();
+            if (cached) {
+                renderExtensions(cached);
+                btn.disabled = false;
+                return;
+            }
+        }
+
+        try {
+            const response = await fetch('/api/extensions');
+            if (response.ok) {
+                const data = await response.json();
+                setCachedExtensions(data);
+                renderExtensions(data);
+            } else {
+                document.getElementById('extensionList').innerHTML = '<div class="alert alert-danger">获取扩展列表失败</div>';
+            }
+        } catch {
+            document.getElementById('extensionList').innerHTML = '<div class="alert alert-danger">请求失败</div>';
+        }
+
+        setTimeout(() => { btn.disabled = false; }, COOLDOWN_MS);
+    }
+
+    function renderExtensions(extensions) {
+        const container = document.getElementById('extensionList');
+        if (!extensions || extensions.length === 0) {
+            container.innerHTML = '<div class="text-center text-muted py-4">暂无已加载的扩展</div>';
+            return;
+        }
+
+        let html = '<div class="list-group">';
+        extensions.forEach(ext => {
+            html += `
+                <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="mb-1">${ext.name} <small class="text-muted">v${ext.version}</small></h6>
+                        <p class="mb-1 text-muted small">${ext.description || '无描述'}</p>
+                        <small class="text-muted">Key: ${ext.key} | 加载时间: ${ext.loadTime}</small>
+                    </div>
+                    <button class="btn btn-outline-danger btn-sm" onclick="unloadExtension('${ext.key}', '${ext.name}')">卸载</button>
+                </div>`;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    async function unloadExtension(key, name) {
+        const confirmed = await RtPanel.showConfirm('确认卸载', `确定要卸载扩展 "${name}" 吗？<br><br>此操作将卸载服务器上的扩展。`);
+        if (!confirmed) return;
+
+        const response = await fetch('/api/extensions/unload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ extensionKey: key })
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            if (result.success) {
+                RtPanel.showToast('卸载成功', 'success');
+            } else {
+                RtPanel.showToast('卸载失败: ' + result.message, 'error');
+            }
+            clearCachedExtensions();
+            refreshExtensions(true);
+        }
+    }
+
+    async function loadExtension() {
+        const path = await RtPanel.showPrompt('加载扩展', '请输入扩展文件路径（相对于扩展目录或绝对路径）');
+        if (!path) return;
+
+        const response = await fetch('/api/extensions/load', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ extensionPath: path })
+        });
+
+        if (response.ok) {
+            const result = await response.json();
+            if (result.success) {
+                RtPanel.showToast('加载成功', 'success');
+            } else {
+                RtPanel.showToast('加载失败: ' + result.message, 'error');
+            }
+            clearCachedExtensions();
+            refreshExtensions(true);
+        }
+    }
+
+    (async function init() {
+        const connected = await checkConnection();
+        if (connected) {
+            const cached = getCachedExtensions();
+            if (cached) {
+                renderExtensions(cached);
+            } else {
+                document.getElementById('extensionList').innerHTML = '<div class="text-center text-muted py-4">点击右上角"刷新"获取扩展列表</div>';
+            }
+        }
+    })();
+</script>
+}
