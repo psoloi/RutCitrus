@@ -17,8 +17,18 @@ namespace RtCli
 {
     internal class Program
     {
-        // 目前修改方向：部分代码捕获不要阻止加上try，MC控制台分析器，将捕获控制台方式加强rcon或management来发送未来主要run，未来使用Base64和密钥加密通信
-        // SQLlite、日志分析、Microsoft.OpenApi(Polly)、cs-script、内容管理验证插件安全
+        // 目前修改方向：MC控制台分析器，将捕获控制台方式加强rcon或management来发送未来主要run，未来验证通信
+        // SQLlite、日志分析、Microsoft.OpenApi(Polly)、cs-script或Roslyn 编译器、内容管理验证插件安全
+
+        // 实现一个简单的调度器，解析表达式并在指定时间执行任务
+        // 例如，可以使用Hangfire或其他调度库来实现复杂的调度功能
+        // 检查服务端在线情况及安全情况、检查服务端TPS情况、检查服务端玩家数量、内存使用、服务端备份
+
+        // 检查表达式的格式，计算下次执行时间，并使用Timer或类似机制来执行任务
+        // 表达式匹配任务附加cs-script功能
+        // 脚本之类的是很多的可直接配置的附加功能
+
+        // readme.md参考 github-readme-stats-master
         // 版本号在 RtCli.csproj 的 VersionPrefix 中修改
         public static string RtCliVersion { get; } =
             Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -43,6 +53,16 @@ namespace RtCli
             ".help",
             ".guide",
             ".auto",
+            ".fx",
+            ".fx get",
+            ".fx list",
+            ".fx del",
+            ".fx clientguide",
+            ".fx base",
+            ".fx ai",
+            ".fx filter",
+            ".fx filter config",
+            ".fx filter plugin",
             ".server",
             ".server get",
             ".server connect",
@@ -140,6 +160,7 @@ namespace RtCli
             Modules.Unit.I18n.Init();
             Output.InitializeLogging();
             Analyzer.Initialize();
+            ContentManager.Initialize();
 
             if (Config.App.Debug.ToLower() != "No")
             {
@@ -629,6 +650,107 @@ namespace RtCli
                                 Intelligence.Auto();
                                 handled = true;
                                 break;
+                            case var cmd when cmd == ".fx":
+                                Output.Log(".fx 子命令：get、list、del、clientguide、base、ai、filter", 1, ThisProgramName);
+                                Output.Log("  .fx get              - 分析MC服务端错误日志", 1, ThisProgramName);
+                                Output.Log("  .fx list             - 列出所有错误分析结果", 1, ThisProgramName);
+                                Output.Log("  .fx list <n>         - 列出第n次的分析结果", 1, ThisProgramName);
+                                Output.Log("  .fx del              - 删除所有错误分析结果", 1, ThisProgramName);
+                                Output.Log("  .fx clientguide      - 客户端连接问题诊断", 1, ThisProgramName);
+                                Output.Log("  .fx clientguide <n>  - 查看第n个匹配项的详细解决方案", 1, ThisProgramName);
+                                Output.Log("  .fx filter           - 过滤问题备份工具", 1, ThisProgramName);
+                                Output.Log("  .fx filter config    - 备份/对照/还原配置文件", 1, ThisProgramName);
+                                Output.Log("  .fx filter config <n>- 还原第n个差异文件(0删除备份)", 1, ThisProgramName);
+                                Output.Log("  .fx filter plugin    - 列出/禁用/启用插件", 1, ThisProgramName);
+                                Output.Log("  .fx filter plugin <n>- 切换第n个插件启用/禁用(0重启)", 1, ThisProgramName);
+                                Output.Log("  .fx base             - (尚未实现)", 1, ThisProgramName);
+                                Output.Log("  .fx ai               - (尚未实现)", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx get":
+                                Analyzer.AnalyzeErrors();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx list":
+                                Analyzer.ListErrors(null);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx del":
+                                Analyzer.DeleteErrors();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx clientguide":
+                                Analyzer.ClientGuide(null);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx base":
+                                Output.Log("该功能尚未实现。", 2, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx ai":
+                                Output.Log("该功能尚未实现。", 2, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx filter":
+                                Analyzer.FilterInfo();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx filter config":
+                                Analyzer.FilterConfig(null);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".fx filter plugin":
+                                Analyzer.FilterPlugin(null);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".fx list "):
+                                string listArg = cmd.Substring(".fx list ".Length).Trim();
+                                if (int.TryParse(listArg, out int listIndex))
+                                {
+                                    Analyzer.ListErrors(listIndex);
+                                }
+                                else
+                                {
+                                    Output.Log("无效的参数，请输入数字。用法: .fx list <n>", 2, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".fx clientguide "):
+                                string cgArg = cmd.Substring(".fx clientguide ".Length).Trim();
+                                if (int.TryParse(cgArg, out int cgIndex))
+                                {
+                                    Analyzer.ClientGuide(cgIndex);
+                                }
+                                else
+                                {
+                                    Output.Log("无效的参数，请输入数字。用法: .fx clientguide <n>", 2, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".fx filter config "):
+                                string fcArg = cmd.Substring(".fx filter config ".Length).Trim();
+                                if (int.TryParse(fcArg, out int fcIndex))
+                                {
+                                    Analyzer.FilterConfig(fcIndex);
+                                }
+                                else
+                                {
+                                    Output.Log("无效的参数，请输入数字。用法: .fx filter config <n>", 2, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".fx filter plugin "):
+                                string fpArg = cmd.Substring(".fx filter plugin ".Length).Trim();
+                                if (int.TryParse(fpArg, out int fpIndex))
+                                {
+                                    Analyzer.FilterPlugin(fpIndex);
+                                }
+                                else
+                                {
+                                    Output.Log("无效的参数，请输入数字。用法: .fx filter plugin <n>", 2, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
                             case var cmd when cmd == ".server":
                                 if (Analyzer.IsRunMode)
                                     Output.Log("当前为 RUN 模式，子命令：start、stop、status", 1, ThisProgramName);
@@ -789,9 +911,21 @@ namespace RtCli
                 .AddRow("[green].help[/]", "显示扩展命令列表")
                 .AddRow("[white].guide[/]", "MC服务端安装引导")
                 .AddRow("[white].auto[/]", "自动化")
+                .AddRow("[white].fx[/]", "错误分析/客户端诊断 (输入 .fx 查看子命令)")
+                .AddRow("[white].fx get[/]", "分析MC服务端错误日志")
+                .AddRow("[white].fx list[/]", "列出所有错误分析结果")
+                .AddRow("[white].fx list <n>[/]", "列出第n次的分析结果")
+                .AddRow("[white].fx del[/]", "删除所有错误分析结果")
+                .AddRow("[white].fx clientguide[/]", "客户端连接问题诊断")
+                .AddRow("[white].fx clientguide <n>[/]", "查看第n个匹配项的详细解决方案")
+                .AddRow("[white].fx filter[/]", "过滤问题备份工具")
+                .AddRow("[white].fx filter config[/]", "备份/对照/还原配置文件")
+                .AddRow("[white].fx filter config <n>[/]", "还原第n个差异文件(0删除备份)")
+                .AddRow("[white].fx filter plugin[/]", "列出/禁用/启用插件")
+                .AddRow("[white].fx filter plugin <n>[/]", "切换第n个插件启用/禁用(0重启)")
                 .AddRow("[white].server[/]", "MC控制台相关命令 (模式取决于配置)")
                 .AddRow("[white].server get[/]", "[[[DarkOrange]RCON[/]]] 扫描并列出运行中的MC服务端")
-                .AddRow("[white].server connect <序号|pid:进程ID>[/]", "[[[DarkOrange]RCON[/]]] 连接到指定的MC服务端")
+                .AddRow("[white].server connect <序号>[/]", "[[[DarkOrange]RCON[/]]] 连接到指定的MC服务端")
                 .AddRow("[white].server detach[/]", "[[[DarkOrange]RCON[/]]] 断开与MC服务端的连接")
                 .AddRow("[white].server start[/]", "[[[green]RUN[/]]] 启动MC服务端作为子进程")
                 .AddRow("[white].server stop[/]", "[[[green]RUN[/]]] 停止MC服务端")

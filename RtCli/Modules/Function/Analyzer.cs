@@ -9,6 +9,7 @@ using System.Management;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -28,6 +29,20 @@ namespace RtCli.Modules.Function
         private static long _logFilePosition = 0;
         private static string _currentMode = "RCON";
         private static bool _isRunModeActive = false;
+
+        private static readonly object _logBufferLock = new object();
+        private static readonly List<string> _logBuffer = new List<string>();
+        private const int MaxLogBufferSize = 5000;
+
+        private static CancellationTokenSource? _clientGuideCts;
+        private static volatile bool _clientGuideActive = false;
+        private static readonly List<ClientGuideMatch> _lastClientGuideMatches = new List<ClientGuideMatch>();
+        private static readonly object _clientGuideLock = new object();
+
+        private static readonly List<ConfigDiffEntry> _lastConfigDiffs = new List<ConfigDiffEntry>();
+        private static readonly object _filterLock = new object();
+        private static readonly List<PluginEntry> _lastPluginList = new List<PluginEntry>();
+        private static readonly string ConfigBackupDir = Path.Combine(Path.GetDirectoryName(Config.DataPath)!, "config_backup");
 
         private static RconClient? _rconClient;
 
@@ -107,8 +122,8 @@ namespace RtCli.Modules.Function
                         RedirectStandardError = true,
                         RedirectStandardInput = true,
                         CreateNoWindow = true,
-                        StandardOutputEncoding = Encoding.UTF8,
-                        StandardErrorEncoding = Encoding.UTF8
+                        StandardOutputEncoding = Encoding.GetEncoding(0),
+                        StandardErrorEncoding = Encoding.GetEncoding(0)
                     },
                     EnableRaisingEvents = true
                 };
@@ -117,6 +132,7 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                     {
+                        AddToLogBuffer(e.Data);
                         Output.Log(e.Data, 0, _connectedServerName);
                     }
                 };
@@ -125,6 +141,7 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                     {
+                        AddToLogBuffer(e.Data);
                         Output.Log(e.Data, 0, _connectedServerName);
                     }
                 };
@@ -485,7 +502,7 @@ namespace RtCli.Modules.Function
                     return;
 
                 fs.Seek(currentPos, SeekOrigin.Begin);
-                using var reader = new StreamReader(fs, Encoding.UTF8);
+                using var reader = new StreamReader(fs, Encoding.GetEncoding(0));
 
                 string? line;
                 while ((line = reader.ReadLine()) != null)
@@ -584,8 +601,901 @@ namespace RtCli.Modules.Function
             }
         }
 
+        public static void AnalyzeErrors()
+        {
+            string ThisProgramName = "Analyzer";
+
+            if (!IsRunModeActive && !IsAttached)
+            {
+                Output.Log("未连接到 MC 服务端，无法分析错误日志。", 2, ThisProgramName);
+                return;
+            }
+
+            ContentManager.Initialize();
+
+            string handlerPattern = ContentManager.Regex.Console_Error.Handler;
+            int limit = ContentManager.Regex.Console_Error.Limit;
+
+            if (string.IsNullOrWhiteSpace(handlerPattern))
+            {
+                Output.Log("正则表达式配置为空，无法分析。", 2, ThisProgramName);
+                return;
+            }
+
+            Regex handlerRegex;
+            try
+            {
+                handlerRegex = new Regex(handlerPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"正则表达式无效: {ex.Message}", 3, ThisProgramName);
+                return;
+            }
+
+            List<string> logLines;
+            lock (_logBufferLock)
+            {
+                logLines = _logBuffer.ToList();
+            }
+
+            if (logLines.Count == 0)
+            {
+                if (IsRunModeActive && !string.IsNullOrWhiteSpace(Config.App.WorkPath))
+                {
+                    string logFile = Path.Combine(Config.App.WorkPath, "logs", "latest.log");
+                    if (File.Exists(logFile))
+                    {
+                        try
+                        {
+                            logLines = File.ReadAllLines(logFile).ToList();
+                            Output.Log($"从日志文件读取了 {logLines.Count} 行。", 1, ThisProgramName);
+                        }
+                        catch (Exception ex)
+                        {
+                            Output.Log($"读取日志文件失败: {ex.Message}", 3, ThisProgramName);
+                            return;
+                        }
+                    }
+                }
+
+                if (logLines.Count == 0)
+                {
+                    Output.Log("没有可分析的日志内容。", 2, ThisProgramName);
+                    return;
+                }
+            }
+
+            var errors = new Dictionary<int, string>();
+            int errorIndex = 1;
+            var currentError = new StringBuilder();
+            bool inError = false;
+
+            var existingErrors = ContentManager.LoadErrorLog();
+            if (existingErrors.Count > 0)
+            {
+                errorIndex = existingErrors.Keys.Max() + 1;
+                foreach (var kv in existingErrors)
+                {
+                    errors[kv.Key] = kv.Value;
+                }
+            }
+
+            for (int i = 0; i < logLines.Count; i++)
+            {
+                string line = logLines[i];
+
+                if (handlerRegex.IsMatch(line))
+                {
+                    if (inError && currentError.Length > 0)
+                    {
+                        string errorText = currentError.ToString().Trim();
+                        if (errorText.Length > limit)
+                            errorText = errorText.Substring(0, limit) + "...";
+
+                        if (!errors.Values.Contains(errorText))
+                        {
+                            errors[errorIndex++] = errorText;
+                        }
+                        currentError.Clear();
+                    }
+
+                    inError = true;
+                    currentError.AppendLine(line);
+                }
+                else if (inError)
+                {
+                    bool isContinuation = line.TrimStart().StartsWith("at ")
+                        || line.TrimStart().StartsWith("Caused by")
+                        || line.TrimStart().StartsWith("...")
+                        || string.IsNullOrWhiteSpace(line)
+                        || line.Contains("Suppressed")
+                        || handlerRegex.IsMatch(line);
+
+                    if (isContinuation)
+                    {
+                        currentError.AppendLine(line);
+                    }
+                    else
+                    {
+                        string errorText = currentError.ToString().Trim();
+                        if (errorText.Length > limit)
+                            errorText = errorText.Substring(0, limit) + "...";
+
+                        if (!errors.Values.Contains(errorText))
+                        {
+                            errors[errorIndex++] = errorText;
+                        }
+                        currentError.Clear();
+                        inError = false;
+                    }
+                }
+            }
+
+            if (inError && currentError.Length > 0)
+            {
+                string errorText = currentError.ToString().Trim();
+                if (errorText.Length > limit)
+                    errorText = errorText.Substring(0, limit) + "...";
+
+                if (!errors.Values.Contains(errorText))
+                {
+                    errors[errorIndex++] = errorText;
+                }
+            }
+
+            int newCount = errors.Count - existingErrors.Count;
+
+            if (errors.Count == 0)
+            {
+                Output.Log("未检测到错误日志。", 1, ThisProgramName);
+                return;
+            }
+
+            ContentManager.SaveErrorLog(errors);
+
+            var table = new Table()
+                .Border(TableBorder.Rounded)
+                .AddColumn("编号", c => c.Alignment(Justify.Center).Width(8))
+                .AddColumn("错误摘要", c => c.Width(80));
+
+            foreach (var kv in errors)
+            {
+                string summary = kv.Value.Split('\n').FirstOrDefault() ?? "";
+                if (summary.Length > 80)
+                    summary = summary.Substring(0, 77) + "...";
+
+                table.AddRow(kv.Key.ToString(), Markup.Escape(summary));
+            }
+
+            AnsiConsole.Write(table);
+            Output.Log($"共识别 {errors.Count} 个错误（新增 {newCount} 个），结果已保存到 fx_save_error.yml。", 1, ThisProgramName);
+        }
+
+        public static void ListErrors(int? index)
+        {
+            string ThisProgramName = "Analyzer";
+            var errors = ContentManager.LoadErrorLog();
+
+            if (errors.Count == 0)
+            {
+                Output.Log("没有已保存的错误分析结果。", 1, ThisProgramName);
+                return;
+            }
+
+            if (index.HasValue)
+            {
+                if (errors.TryGetValue(index.Value, out string? errorText))
+                {
+                    var panel = new Panel(Markup.Escape(errorText))
+                        .Header($"[[第 {index.Value} 次分析结果]]")
+                        .Border(BoxBorder.Rounded);
+                    AnsiConsole.Write(panel);
+                }
+                else
+                {
+                    Output.Log($"没有编号为 {index.Value} 的分析结果。", 2, ThisProgramName);
+                }
+                return;
+            }
+
+            var table = new Table()
+                .Border(TableBorder.Rounded)
+                .AddColumn("编号", c => c.Alignment(Justify.Center).Width(8))
+                .AddColumn("错误摘要", c => c.Width(80));
+
+            foreach (var kv in errors.OrderBy(kv => kv.Key))
+            {
+                string summary = kv.Value.Split('\n').FirstOrDefault() ?? "";
+                if (summary.Length > 80)
+                    summary = summary.Substring(0, 77) + "...";
+
+                table.AddRow(kv.Key.ToString(), Markup.Escape(summary));
+            }
+
+            AnsiConsole.Write(table);
+            Output.Log($"共 {errors.Count} 条错误分析结果。", 1, ThisProgramName);
+        }
+
+        public static void DeleteErrors()
+        {
+            ContentManager.DeleteErrorLog();
+        }
+
+        public static void ClientGuide(int? selectedIndex)
+        {
+            string ThisProgramName = "Analyzer";
+
+            if (selectedIndex.HasValue && selectedIndex.Value >= 0)
+            {
+                lock (_clientGuideLock)
+                {
+                    if (_lastClientGuideMatches.Count == 0)
+                    {
+                        Output.Log("没有已匹配的客户端错误结果，请先使用 .fx clientguide 开始诊断。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    int idx = selectedIndex.Value - 1;
+                    if (idx < 0 || idx >= _lastClientGuideMatches.Count)
+                    {
+                        Output.Log($"无效的序号，请输入 1 到 {_lastClientGuideMatches.Count} 之间的数字。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    var match = _lastClientGuideMatches[idx];
+                    ShowClientGuideSolution(match);
+                }
+                return;
+            }
+
+            if (!IsRunModeActive && !IsAttached)
+            {
+                Output.Log("未连接到 MC 服务端，无法使用客户端诊断功能。", 2, ThisProgramName);
+                return;
+            }
+
+            ContentManager.Initialize();
+
+            if (_clientGuideActive)
+            {
+                Output.Log("客户端诊断已在运行中，请等待结果或使用 .fx clientguide <序号> 查看已匹配的结果。", 2, ThisProgramName);
+                return;
+            }
+
+            lock (_clientGuideLock)
+            {
+                _clientGuideCts?.Cancel();
+                _clientGuideCts?.Dispose();
+                _clientGuideCts = new CancellationTokenSource();
+                _lastClientGuideMatches.Clear();
+            }
+
+            _clientGuideActive = true;
+
+            int startBufferCount;
+            lock (_logBufferLock)
+            {
+                startBufferCount = _logBuffer.Count;
+            }
+
+            int timeout = ContentManager.Regex.ClientGuide.Timeout;
+            Output.Log($"正在等待玩家加入服务端... (超时: {timeout}秒)", 1, ThisProgramName);
+            Output.Log("当玩家加入或断开连接时，将自动匹配客户端错误并给出解决方案。", 1, ThisProgramName);
+
+            var token = _clientGuideCts.Token;
+            _ = Task.Run(() => MonitorClientGuide(startBufferCount, timeout, token), token);
+        }
+
+        private static void MonitorClientGuide(int startBufferCount, int timeout, CancellationToken cancellationToken)
+        {
+            try
+            {
+                string joinPattern = ContentManager.Regex.ClientGuide.PlayerJoin;
+                string disconnectPattern = ContentManager.Regex.ClientGuide.PlayerDisconnect;
+                string clientErrorPattern = ContentManager.Regex.ClientGuide.ClientError;
+                string errorHandlerPattern = ContentManager.Regex.ClientGuide.ErrorHandler;
+
+                Regex joinRegex = new Regex(joinPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                Regex disconnectRegex = new Regex(disconnectPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                Regex clientErrorRegex = new Regex(clientErrorPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                Regex errorHandlerRegex = new Regex(errorHandlerPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+                DateTime startTime = DateTime.Now;
+                List<string> capturedMessages = new List<string>();
+                int lastCheckedIndex = startBufferCount;
+
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    if ((DateTime.Now - startTime).TotalSeconds > timeout)
+                    {
+                        Output.Log("似乎玩家未加入已经超时，请看下表检查服务端方面问题：", 2, "ClientGuide");
+                        ShowTimeoutTroubleshootTable();
+                        return;
+                    }
+
+                    List<string> newLines = new List<string>();
+                    lock (_logBufferLock)
+                    {
+                        int currentCount = _logBuffer.Count;
+                        if (lastCheckedIndex > currentCount)
+                            lastCheckedIndex = 0;
+
+                        for (int i = lastCheckedIndex; i < currentCount; i++)
+                        {
+                            newLines.Add(_logBuffer[i]);
+                        }
+                        lastCheckedIndex = currentCount;
+                    }
+
+                    foreach (var line in newLines)
+                    {
+                        if (joinRegex.IsMatch(line))
+                        {
+                            Output.Log($"[[检测到玩家加入]] {Markup.Escape(line)}", 1, "ClientGuide");
+                        }
+
+                        if (disconnectRegex.IsMatch(line) || clientErrorRegex.IsMatch(line) || errorHandlerRegex.IsMatch(line))
+                        {
+                            capturedMessages.Add(line);
+                            Output.Log($"[[检测到断开/错误]] {Markup.Escape(line)}", 1, "ClientGuide");
+                        }
+                    }
+
+                    if (capturedMessages.Count > 0)
+                    {
+                        break;
+                    }
+
+                    Thread.Sleep(500);
+                }
+
+                if (capturedMessages.Count > 0 && !cancellationToken.IsCancellationRequested)
+                {
+                    MatchClientErrors(capturedMessages);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Output.ReportError(ex, false, "客户端诊断出错");
+            }
+            finally
+            {
+                _clientGuideActive = false;
+            }
+        }
+
+        private static void MatchClientErrors(List<string> messages)
+        {
+            string combinedMessage = string.Join("\n", messages);
+
+            var matches = new List<ClientGuideMatch>();
+            var allErrors = ContentManager.GetAllClientErrors();
+
+            foreach (var entry in allErrors)
+            {
+                double similarity = CalculateSimilarity(combinedMessage, entry.Keyword);
+                if (similarity >= 0.3)
+                {
+                    matches.Add(new ClientGuideMatch
+                    {
+                        Index = matches.Count + 1,
+                        Entry = entry,
+                        Similarity = similarity,
+                        MatchedMessage = combinedMessage
+                    });
+                }
+            }
+
+            matches = matches.OrderByDescending(m => m.Similarity).ToList();
+
+            for (int i = 0; i < matches.Count; i++)
+            {
+                matches[i].Index = i + 1;
+            }
+
+            lock (_clientGuideLock)
+            {
+                _lastClientGuideMatches.Clear();
+                _lastClientGuideMatches.AddRange(matches);
+            }
+
+            if (matches.Count == 0)
+            {
+                Output.Log("未匹配到已知的客户端错误类型。", 2, "ClientGuide");
+                Output.Log("原始消息:", 1, "ClientGuide");
+                foreach (var msg in messages)
+                {
+                    Output.Log(msg, 0, "ClientGuide");
+                }
+                return;
+            }
+
+            Output.Log($"共匹配 {matches.Count} 个可能的错误：", 1, "ClientGuide");
+            foreach (var match in matches)
+            {
+                Output.Log($"  {match.Index}. {Markup.Escape(match.Entry.Keyword)} (匹配度: {match.Similarity:P0}) - {Markup.Escape(match.Entry.Description)}", 1, "ClientGuide");
+            }
+            Output.Log("使用 .fx clientguide <序号> 查看详细解决方案。", 1, "ClientGuide");
+        }
+
+        private static double CalculateSimilarity(string message, string keyword)
+        {
+            if (string.IsNullOrEmpty(message) || string.IsNullOrEmpty(keyword))
+                return 0;
+
+            if (message.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
+                return 1.0;
+
+            string[] keywordParts = keyword.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            int matchedParts = 0;
+            foreach (var part in keywordParts)
+            {
+                if (message.IndexOf(part, StringComparison.OrdinalIgnoreCase) >= 0)
+                    matchedParts++;
+            }
+
+            if (keywordParts.Length > 0 && matchedParts > 0)
+                return (double)matchedParts / keywordParts.Length * 0.7;
+
+            return 0;
+        }
+
+        private static void ShowClientGuideSolution(ClientGuideMatch match)
+        {
+            var rule = new Rule($"[cyan]客户端错误诊断 - 匹配项 {match.Index}[/]");
+            AnsiConsole.Write(rule);
+
+            var table = new Table()
+                .Border(TableBorder.Rounded)
+                .AddColumn("项目", c => c.Width(15))
+                .AddColumn("内容", c => c.Width(65));
+
+            table.AddRow("错误关键词", Markup.Escape(match.Entry.Keyword));
+            table.AddRow("错误描述", Markup.Escape(match.Entry.Description));
+            table.AddRow("解决方案", Markup.Escape(match.Entry.Solution));
+            table.AddRow("匹配度", $"{match.Similarity:P0}");
+
+            string displayMessage = match.MatchedMessage.Length > 200
+                ? match.MatchedMessage.Substring(0, 197) + "..."
+                : match.MatchedMessage;
+            table.AddRow("原始消息", Markup.Escape(displayMessage));
+
+            AnsiConsole.Write(table);
+        }
+
+        private static void ShowTimeoutTroubleshootTable()
+        {
+            var root = new Tree("[yellow]服务端方面问题检查[/]");
+
+            foreach (var item in ContentManager.GetAllTroubleshoot())
+            {
+                var node = root.AddNode($"[cyan]{Markup.Escape(item.Title)}[/]");
+                node.AddNode($"[white]问题:[/] {Markup.Escape(item.Problem)}");
+                node.AddNode($"[green]解决:[/] {Markup.Escape(item.Solution)}");
+            }
+
+            AnsiConsole.Write(root);
+        }
+
+        #region Filter
+
+        public static void FilterInfo()
+        {
+            Output.Log("[yellow].fx filter 是帮助过滤问题的备份工具[/]", 1, "Filter");
+            Output.Log("推荐在问题发生前使用，可备份配置文件并在修改后对照差异。", 1, "Filter");
+            Output.Log("子命令：", 1, "Filter");
+            Output.Log("  config  - 备份/对照/还原配置文件", 1, "Filter");
+            Output.Log("  plugin  - 列出/禁用/启用插件", 1, "Filter");
+        }
+
+        public static void FilterConfig(int? selectedIndex)
+        {
+            string ThisProgramName = "Filter";
+
+            if (selectedIndex.HasValue && selectedIndex.Value == 0)
+            {
+                if (Directory.Exists(ConfigBackupDir))
+                {
+                    Directory.Delete(ConfigBackupDir, true);
+                    Output.Log("已删除配置备份。", 1, ThisProgramName);
+                }
+                else
+                {
+                    Output.Log("没有配置备份可删除。", 2, ThisProgramName);
+                }
+                return;
+            }
+
+            if (selectedIndex.HasValue && selectedIndex.Value > 0)
+            {
+                lock (_filterLock)
+                {
+                    if (_lastConfigDiffs.Count == 0)
+                    {
+                        Output.Log("没有配置差异记录，请先使用 .fx filter config 对照。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    int idx = selectedIndex.Value - 1;
+                    if (idx >= _lastConfigDiffs.Count)
+                    {
+                        Output.Log($"无效的序号，请输入 1 到 {_lastConfigDiffs.Count} 之间的数字。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    var diff = _lastConfigDiffs[idx];
+                    try
+                    {
+                        string? dir = Path.GetDirectoryName(diff.CurrentPath);
+                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                            Directory.CreateDirectory(dir);
+
+                        File.Copy(diff.BackupPath, diff.CurrentPath, true);
+                        Output.Log($"已还原: {Markup.Escape(diff.RelativePath)}", 1, ThisProgramName);
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"还原失败: {ex.Message}", 3, ThisProgramName);
+                    }
+                }
+                return;
+            }
+
+            string workPath = GetWorkPath();
+            if (string.IsNullOrEmpty(workPath) || !Directory.Exists(workPath))
+            {
+                Output.Log("无法获取 MC 服务端工作目录。", 2, ThisProgramName);
+                return;
+            }
+
+            if (!Directory.Exists(ConfigBackupDir))
+            {
+                BackupConfigFiles(workPath);
+                return;
+            }
+
+            CompareConfigFiles(workPath);
+        }
+
+        private static void BackupConfigFiles(string workPath)
+        {
+            string ThisProgramName = "Filter";
+            string[] extensions = { ".yml", ".yaml", ".json", ".properties" };
+
+            try
+            {
+                if (Directory.Exists(ConfigBackupDir))
+                    Directory.Delete(ConfigBackupDir, true);
+
+                Directory.CreateDirectory(ConfigBackupDir);
+
+                int count = 0;
+
+                count += CopyConfigFiles(workPath, ConfigBackupDir, extensions, 2);
+
+                string pluginsDir = Path.Combine(workPath, "plugins");
+                if (Directory.Exists(pluginsDir))
+                {
+                    string backupPluginsDir = Path.Combine(ConfigBackupDir, "plugins");
+                    count += CopyConfigFiles(pluginsDir, backupPluginsDir, extensions, 2);
+                }
+
+                Output.Log($"配置文件备份完成，共备份 {count} 个文件到 {ConfigBackupDir}", 1, ThisProgramName);
+                Output.Log("请修改配置文件后再次输入 .fx filter config 来对照差异。", 1, ThisProgramName);
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"备份失败: {ex.Message}", 3, ThisProgramName);
+            }
+        }
+
+        private static int CopyConfigFiles(string sourceDir, string targetDir, string[] extensions, int maxDepth, int currentDepth = 0)
+        {
+            int count = 0;
+
+            if (!Directory.Exists(sourceDir))
+                return 0;
+
+            if (!Directory.Exists(targetDir))
+                Directory.CreateDirectory(targetDir);
+
+            foreach (var file in Directory.GetFiles(sourceDir))
+            {
+                string ext = Path.GetExtension(file).ToLowerInvariant();
+                if (extensions.Contains(ext))
+                {
+                    string fileName = Path.GetFileName(file);
+                    string targetPath = Path.Combine(targetDir, fileName);
+                    File.Copy(file, targetPath, true);
+                    count++;
+                }
+            }
+
+            if (currentDepth < maxDepth)
+            {
+                foreach (var dir in Directory.GetDirectories(sourceDir))
+                {
+                    string dirName = Path.GetFileName(dir);
+                    string targetSubDir = Path.Combine(targetDir, dirName);
+                    count += CopyConfigFiles(dir, targetSubDir, extensions, maxDepth, currentDepth + 1);
+                }
+            }
+
+            return count;
+        }
+
+        private static void CompareConfigFiles(string workPath)
+        {
+            string ThisProgramName = "Filter";
+
+            lock (_filterLock)
+            {
+                _lastConfigDiffs.Clear();
+            }
+
+            var diffs = new List<ConfigDiffEntry>();
+            int diffIndex = 1;
+
+            CompareDirectory(ConfigBackupDir, workPath, "", ref diffs, ref diffIndex);
+
+            string pluginsBackupDir = Path.Combine(ConfigBackupDir, "plugins");
+            string pluginsSourceDir = Path.Combine(workPath, "plugins");
+            if (Directory.Exists(pluginsBackupDir) && Directory.Exists(pluginsSourceDir))
+            {
+                CompareDirectory(pluginsBackupDir, pluginsSourceDir, "plugins", ref diffs, ref diffIndex);
+            }
+
+            lock (_filterLock)
+            {
+                _lastConfigDiffs.AddRange(diffs);
+            }
+
+            if (diffs.Count == 0)
+            {
+                Output.Log("配置文件与备份一致，没有发现差异。", 1, ThisProgramName);
+                return;
+            }
+
+            var table = new Table()
+                .Border(TableBorder.Rounded)
+                .AddColumn("序号", c => c.Alignment(Justify.Center).Width(6))
+                .AddColumn("文件路径", c => c.Width(60))
+                .AddColumn("状态", c => c.Alignment(Justify.Center).Width(12));
+
+            foreach (var diff in diffs)
+            {
+                string status = !File.Exists(diff.CurrentPath) ? "[red]已删除[/]" : "[yellow]已修改[/]";
+                table.AddRow(diff.Index.ToString(), Markup.Escape(diff.RelativePath), status);
+            }
+
+            AnsiConsole.Write(table);
+            Output.Log($"共发现 {diffs.Count} 个差异。使用 .fx filter config <序号> 还原，输入.fx filter config 0 删除备份。", 1, ThisProgramName);
+        }
+
+        private static void CompareDirectory(string backupDir, string currentDir, string relativePrefix, ref List<ConfigDiffEntry> diffs, ref int diffIndex)
+        {
+            if (!Directory.Exists(backupDir))
+                return;
+
+            foreach (var backupFile in Directory.GetFiles(backupDir))
+            {
+                string fileName = Path.GetFileName(backupFile);
+                string relativePath = string.IsNullOrEmpty(relativePrefix) ? fileName : Path.Combine(relativePrefix, fileName);
+                string currentFile = Path.Combine(currentDir, fileName);
+
+                bool isDifferent = false;
+
+                if (!File.Exists(currentFile))
+                {
+                    isDifferent = true;
+                }
+                else
+                {
+                    try
+                    {
+                        string backupContent = File.ReadAllText(backupFile);
+                        string currentContent = File.ReadAllText(currentFile);
+                        if (backupContent != currentContent)
+                            isDifferent = true;
+                    }
+                    catch
+                    {
+                        isDifferent = true;
+                    }
+                }
+
+                if (isDifferent)
+                {
+                    diffs.Add(new ConfigDiffEntry
+                    {
+                        Index = diffIndex++,
+                        RelativePath = relativePath,
+                        BackupPath = backupFile,
+                        CurrentPath = currentFile
+                    });
+                }
+            }
+
+            foreach (var backupSubDir in Directory.GetDirectories(backupDir))
+            {
+                string dirName = Path.GetFileName(backupSubDir);
+                string currentSubDir = Path.Combine(currentDir, dirName);
+                string subRelative = string.IsNullOrEmpty(relativePrefix) ? dirName : Path.Combine(relativePrefix, dirName);
+                CompareDirectory(backupSubDir, currentSubDir, subRelative, ref diffs, ref diffIndex);
+            }
+        }
+
+        public static void FilterPlugin(int? selectedIndex)
+        {
+            string ThisProgramName = "Filter";
+
+            if (selectedIndex.HasValue && selectedIndex.Value == 0)
+            {
+                Output.Log("正在重启 MC 服务端...", 1, ThisProgramName);
+                StopServer();
+                Thread.Sleep(2000);
+                StartServer();
+                return;
+            }
+
+            if (selectedIndex.HasValue && selectedIndex.Value > 0)
+            {
+                lock (_filterLock)
+                {
+                    if (_lastPluginList.Count == 0)
+                    {
+                        Output.Log("没有插件列表，请先使用 .fx filter plugin 查看。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    int idx = selectedIndex.Value - 1;
+                    if (idx >= _lastPluginList.Count)
+                    {
+                        Output.Log($"无效的序号，请输入 1 到 {_lastPluginList.Count} 之间的数字。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    var plugin = _lastPluginList[idx];
+                    try
+                    {
+                        if (plugin.IsDisabled)
+                        {
+                            string newPath = plugin.FullPath.Substring(0, plugin.FullPath.Length - 7) + ".jar";
+                            File.Move(plugin.FullPath, newPath);
+                            Output.Log($"已启用插件: {Markup.Escape(plugin.FileName)} -> {Markup.Escape(Path.GetFileName(newPath))}", 1, ThisProgramName);
+                        }
+                        else
+                        {
+                            string newPath = plugin.FullPath.Substring(0, plugin.FullPath.Length - 4) + ".disjar";
+                            File.Move(plugin.FullPath, newPath);
+                            Output.Log($"已禁用插件: {Markup.Escape(plugin.FileName)} -> {Markup.Escape(Path.GetFileName(newPath))}", 1, ThisProgramName);
+                        }
+
+                        ListPlugins();
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"操作失败: {ex.Message}", 3, ThisProgramName);
+                    }
+                }
+                return;
+            }
+
+            ListPlugins();
+        }
+
+        private static void ListPlugins()
+        {
+            string ThisProgramName = "Filter";
+            string workPath = GetWorkPath();
+            if (string.IsNullOrEmpty(workPath) || !Directory.Exists(workPath))
+            {
+                Output.Log("无法获取 MC 服务端工作目录。", 2, ThisProgramName);
+                return;
+            }
+
+            string pluginsDir = Path.Combine(workPath, "plugins");
+            if (!Directory.Exists(pluginsDir))
+            {
+                Output.Log("plugins 目录不存在。", 2, ThisProgramName);
+                return;
+            }
+
+            lock (_filterLock)
+            {
+                _lastPluginList.Clear();
+            }
+
+            var jarFiles = new List<FileInfo>();
+            try
+            {
+                var dirInfo = new DirectoryInfo(pluginsDir);
+                jarFiles.AddRange(dirInfo.GetFiles("*.jar"));
+                jarFiles.AddRange(dirInfo.GetFiles("*.disjar"));
+                jarFiles = jarFiles.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"读取插件目录失败: {ex.Message}", 3, ThisProgramName);
+                return;
+            }
+
+            if (jarFiles.Count == 0)
+            {
+                Output.Log("plugins 目录中没有找到插件文件。", 2, ThisProgramName);
+                return;
+            }
+
+            var plugins = new List<PluginEntry>();
+            int index = 1;
+            foreach (var file in jarFiles)
+            {
+                bool isDisabled = file.Extension.Equals(".disjar", StringComparison.OrdinalIgnoreCase);
+                plugins.Add(new PluginEntry
+                {
+                    Index = index++,
+                    FileName = file.Name,
+                    FullPath = file.FullName,
+                    IsDisabled = isDisabled
+                });
+            }
+
+            lock (_filterLock)
+            {
+                _lastPluginList.Clear();
+                _lastPluginList.AddRange(plugins);
+            }
+
+            var table = new Table()
+                .Border(TableBorder.Rounded)
+                .AddColumn("序号", c => c.Alignment(Justify.Center).Width(6))
+                .AddColumn("插件文件名", c => c.Width(50))
+                .AddColumn("状态", c => c.Alignment(Justify.Center).Width(12));
+
+            foreach (var plugin in plugins)
+            {
+                string status = plugin.IsDisabled ? "[red]已禁用[/]" : "[green]正常[/]";
+                table.AddRow(plugin.Index.ToString(), Markup.Escape(plugin.FileName), status);
+            }
+
+            AnsiConsole.Write(table);
+            Output.Log($"共 {plugins.Count} 个插件。使用 .fx filter plugin <序号> 切换启用/禁用，使用.fx filter plugin 0 重启服务端。", 1, ThisProgramName);
+        }
+
+        private static string GetWorkPath()
+        {
+            string workPath = Config.App.WorkPath;
+
+            if (!string.IsNullOrWhiteSpace(workPath) && Directory.Exists(workPath))
+                return workPath;
+
+            if (IsRunModeActive && !string.IsNullOrWhiteSpace(Config.App.WorkPath))
+                return Config.App.WorkPath;
+
+            workPath = FindServerPathFromScan();
+            return workPath ?? "";
+        }
+
+        #endregion
+
+        private static void AddToLogBuffer(string line)
+        {
+            lock (_logBufferLock)
+            {
+                _logBuffer.Add(line);
+                while (_logBuffer.Count > MaxLogBufferSize)
+                {
+                    _logBuffer.RemoveAt(0);
+                }
+            }
+        }
+
         private static void DetachCore()
         {
+            _clientGuideCts?.Cancel();
+
             _outputCts?.Cancel();
             _outputCts?.Dispose();
             _outputCts = null;
@@ -1016,5 +1926,29 @@ namespace RtCli.Modules.Function
             public int Type { get; set; }
             public string Body { get; set; } = "";
         }
+    }
+
+    internal class ClientGuideMatch
+    {
+        public int Index { get; set; }
+        public ClientGuideEntry Entry { get; set; } = null!;
+        public double Similarity { get; set; }
+        public string MatchedMessage { get; set; } = "";
+    }
+
+    internal class ConfigDiffEntry
+    {
+        public int Index { get; set; }
+        public string RelativePath { get; set; } = "";
+        public string BackupPath { get; set; } = "";
+        public string CurrentPath { get; set; } = "";
+    }
+
+    internal class PluginEntry
+    {
+        public int Index { get; set; }
+        public string FileName { get; set; } = "";
+        public string FullPath { get; set; } = "";
+        public bool IsDisabled { get; set; }
     }
 }

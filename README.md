@@ -26,10 +26,10 @@
 > [!WARNING]\
 > 注意请修改程序的开发者千万不要上传自己的AI API key要详细检查
 
-该项目为RtCli作为服务器来管理Minecraft服务器，RutCitrusServer为控制RtCli的面板，其次可选择Rt为扩展或自制扩展
+该项目为RtCli作为服务器来管理Minecraft服务器，RtPanel为控制RtCli的面板，其次可选择Rt为扩展或自制扩展
 
 ## 面板使用方法
-给RtCli设置服务器端口再打开RutCitrusServer连接就可以了
+给RtCli设置服务器端口再打开RtPanel连接就可以了
 如果您觉得面板不好用或不美观，欢迎任何作者制作
 
 ## RtCli 扩展
