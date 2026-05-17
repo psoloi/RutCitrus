@@ -1,10 +1,96 @@
-﻿@page
+@page
 @model IndexModel
 @{
     ViewData["Title"] = "主页";
 }
 
-<div class="text-center">
-    <h1 class="display-4">欢迎</h1>
-    <p>可在 <a href="https://github.com/psoloi/RutCitrus">获取最新版本</a>.</p>
+<div class="text-center mt-4">
+    <h1 class="display-4 text-info">RtPanel</h1>
+    <p class="text-muted">RutCitrus 管理面板</p>
 </div>
+
+<div id="dashboardInfo" class="card bg-dark text-light border-secondary mt-4">
+    <div class="card-body">
+        <div class="row text-center">
+            <div class="col-md-3">
+                <div class="card bg-dark border-secondary">
+                    <div class="card-body">
+                        <h5 id="statServer" class="text-info">-</h5>
+                        <small class="text-muted">服务器</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-dark border-secondary">
+                    <div class="card-body">
+                        <h5 id="statStatus" class="text-warning">-</h5>
+                        <small class="text-muted">运行状态</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-dark border-secondary">
+                    <div class="card-body">
+                        <h5 id="statClients" class="text-success">-</h5>
+                        <small class="text-muted">已连接面板</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-dark border-secondary">
+                    <div class="card-body">
+                        <h5 id="statExts" class="text-primary">-</h5>
+                        <small class="text-muted">扩展数量</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-4 mb-3">
+        <a href="/Console" class="card bg-dark text-light border-secondary text-decoration-none">
+            <div class="card-body text-center">
+                <h5 class="text-primary">控制台</h5>
+                <p class="text-muted small mb-0">执行命令、查看实时日志</p>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-4 mb-3">
+        <a href="/Config" class="card bg-dark text-light border-secondary text-decoration-none">
+            <div class="card-body text-center">
+                <h5 class="text-warning">配置编辑</h5>
+                <p class="text-muted small mb-0">编辑 config.yml 并热重载</p>
+            </div>
+        </a>
+    </div>
+    <div class="col-md-4 mb-3">
+        <a href="/Extensions" class="card bg-dark text-light border-secondary text-decoration-none">
+            <div class="card-body text-center">
+                <h5 class="text-info">扩展管理</h5>
+                <p class="text-muted small mb-0">加载/卸载扩展插件</p>
+            </div>
+        </a>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    async function loadDashboard() {
+        try {
+            const res = await fetch('/api/auth/status');
+            if (res.ok) {
+                const data = await res.json();
+                document.getElementById('statServer').textContent = data.serverName || '-';
+                document.getElementById('statStatus').innerHTML = data.isRunning
+                    ? '<span class="text-success">运行中</span>' : '<span class="text-danger">未运行</span>';
+                document.getElementById('statClients').textContent = data.connectedClientCount;
+                document.getElementById('statExts').textContent = data.extensionCount;
+            }
+        } catch (e) { }
+    }
+    loadDashboard();
+    setInterval(loadDashboard, 5000);
+</script>
+}

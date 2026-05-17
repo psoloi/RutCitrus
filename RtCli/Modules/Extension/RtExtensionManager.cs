@@ -7,10 +7,8 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using RtCli.Modules;
-using RtCli.Modules.Extension;
 
-//namespace RtCli.Modules.Extension
-namespace RtExtensionManager
+namespace RtCli.Modules.Extension
 {
     /// <summary>
     /// 运行时扩展管理器
@@ -451,6 +449,41 @@ namespace RtExtensionManager
 
         protected override Assembly? Load(AssemblyName assemblyName)
         {
+            // 框架程序集(System.*, Microsoft.*, netstandard)优先使用运行时内置版本，
+            // 避免从NuGet缓存加载不兼容的高版本(如 .NET9 的 System.Text.Encoding.CodePages 9.0
+            // 在 .NET8 宿主上无法加载)
+            string? name = assemblyName.Name;
+            if (!string.IsNullOrEmpty(name) &&
+                (name.StartsWith("System.") || name.StartsWith("Microsoft.") ||
+                 name.StartsWith("netstandard") || name == "mscorlib"))
+            {
+                // 1. 优先复用已加载的框架程序集(任意版本均可)
+                try
+                {
+                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        if (asm.GetName().Name == name)
+                            return asm;
+                    }
+                }
+                catch { }
+
+                // 2. 从运行时目录加载对应DLL(版本兼容，CLR会统一)
+                try
+                {
+                    string? runtimeDir = System.IO.Path.GetDirectoryName(typeof(object).Assembly.Location);
+                    if (!string.IsNullOrEmpty(runtimeDir))
+                    {
+                        string dllPath = System.IO.Path.Combine(runtimeDir, name + ".dll");
+                        if (System.IO.File.Exists(dllPath))
+                            return LoadFromAssemblyPath(dllPath);
+                    }
+                }
+                catch { }
+
+                return null;
+            }
+
             string? assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
             if (assemblyPath != null)
             {
@@ -480,6 +513,27 @@ namespace RtExtensionManager
             if (libraryPath != null)
             {
                 return LoadUnmanagedDllFromPath(libraryPath);
+            }
+
+            // 可回收上下文中返回 IntPtr.Zero 的默认回退可能无法解析系统目录中的原生库
+            // (如 SharpPcap 依赖的 wpcap.dll)，因此显式从系统目录尝试加载
+            string fileName = unmanagedDllName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+                ? unmanagedDllName : unmanagedDllName + ".dll";
+
+            string[] candidateDirs = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.Windows)
+                ? new[] { Environment.SystemDirectory, Environment.GetFolderPath(Environment.SpecialFolder.System) }
+                : new[] { "/usr/lib", "/usr/lib/x86_64-linux-gnu", "/lib" };
+
+            foreach (string dir in candidateDirs)
+            {
+                string full = System.IO.Path.Combine(dir, fileName);
+                try
+                {
+                    if (System.IO.File.Exists(full))
+                        return LoadUnmanagedDllFromPath(full);
+                }
+                catch { }
             }
 
             return IntPtr.Zero;

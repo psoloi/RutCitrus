@@ -1,0 +1,118 @@
+@page
+@model RtPanel.Pages.ConfigModel
+@{
+    ViewData["Title"] = "配置编辑";
+}
+
+<div class="card bg-dark text-light border-secondary">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>配置文件编辑 (config.yml)</span>
+        <div>
+            <button class="btn btn-sm btn-outline-info" onclick="loadConfig()" id="reloadBtn">重新加载</button>
+            <button class="btn btn-sm btn-outline-warning" onclick="hotReload()">热重载(不保存)</button>
+            <button class="btn btn-sm btn-primary" onclick="saveConfig()" id="saveBtn">保存并重载</button>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <div id="statusMsg" class="p-2" style="display:none;"></div>
+        <textarea id="configEditor" class="form-control bg-dark text-light border-0"
+                  style="height: 600px; font-family: 'Consolas','Courier New',monospace; font-size: 13px; border-radius: 0;"
+                  placeholder="加载中..." spellcheck="false"></textarea>
+    </div>
+    <div class="card-footer text-muted small">
+        <span>修改后点击「保存并重载」将自动备份原配置并热重载。也可使用「热重载(不保存)」直接从磁盘重新加载配置文件。</span>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    let originalContent = '';
+
+    async function loadConfig() {
+        const editor = document.getElementById('configEditor');
+        const btn = document.getElementById('reloadBtn');
+        btn.disabled = true;
+        editor.value = '加载中...';
+
+        try {
+            const res = await fetch('/api/config');
+            const data = await res.json();
+            if (data.success) {
+                editor.value = data.content;
+                originalContent = data.content;
+                showStatus('配置已加载', 'success');
+            } else {
+                editor.value = '';
+                showStatus(data.message || '加载失败', 'danger');
+            }
+        } catch (e) {
+            editor.value = '';
+            showStatus('网络错误: ' + e.message, 'danger');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function saveConfig() {
+        const content = document.getElementById('configEditor').value;
+        const btn = document.getElementById('saveBtn');
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('/api/config/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+            const data = await res.json();
+            if (data.success) {
+                originalContent = content;
+                showStatus(data.message || '保存成功', 'success');
+            } else {
+                showStatus(data.message || '保存失败', 'danger');
+            }
+        } catch (e) {
+            showStatus('网络错误: ' + e.message, 'danger');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function hotReload() {
+        try {
+            const res = await fetch('/api/console/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: '.cfg reload' })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showStatus('热重载命令已发送', 'success');
+                setTimeout(loadConfig, 1500);
+            } else {
+                showStatus(data.message || '热重载失败', 'danger');
+            }
+        } catch (e) {
+            showStatus('网络错误: ' + e.message, 'danger');
+        }
+    }
+
+    function showStatus(msg, type) {
+        const el = document.getElementById('statusMsg');
+        el.className = `p-2 alert alert-${type} mb-0`;
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => { el.style.display = 'none'; }, 4000);
+    }
+
+    // 离开前提示未保存
+    window.addEventListener('beforeunload', function(e) {
+        if (document.getElementById('configEditor').value !== originalContent) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
+
+    loadConfig();
+</script>
+}

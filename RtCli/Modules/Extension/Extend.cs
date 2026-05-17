@@ -4,9 +4,10 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace RtCli.Modules.Function
+namespace RtCli.Modules.Extension
 {
-    internal class Trigger
+    internal class Extend
     {
+        // Safe
     }
 }

@@ -1,31 +1,26 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyVersion>1.1.5</AssemblyVersion>
-    <FileVersion>1.1.5</FileVersion>
+    <AssemblyVersion>1.7.0</AssemblyVersion>
+    <FileVersion>1.7.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="Common\MineStat.dll" />
-    <None Remove="MineStat.dll" />
+    <None Remove="PacketDotNet.dll" />
+    <None Remove="SharpPcap.dll" />
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="MineStat.dll" />
+    <EmbeddedResource Include="PacketDotNet.dll" />
+    <EmbeddedResource Include="SharpPcap.dll" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="MineStat" Version="3.1.2" />
     <PackageReference Include="PacketDotNet" Version="1.4.8" />
     <PackageReference Include="SharpPcap" Version="6.3.1" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Common\" />
-    <Folder Include="Core\" />
   </ItemGroup>
 
   <ItemGroup>

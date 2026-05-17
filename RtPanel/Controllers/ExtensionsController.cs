@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RtPanel.Services;
 
@@ -5,6 +6,7 @@ namespace RtPanel.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize]
     public class ExtensionsController : ControllerBase
     {
         private readonly RtCliClientService _client;

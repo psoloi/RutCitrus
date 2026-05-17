@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RtPanel.Services;
 
@@ -5,6 +6,7 @@ namespace RtPanel.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize]
     public class ConnectController : ControllerBase
     {
         private readonly RtCliClientService _client;
@@ -12,25 +14,6 @@ namespace RtPanel.Controllers
         public ConnectController(RtCliClientService client)
         {
             _client = client;
-        }
-
-        [HttpPost]
-        public async Task<IActionResult> Connect([FromBody] ConnectRequest request)
-        {
-            if (_client.IsConnected)
-            {
-                return Ok(new { success = false, message = "已有活动连接，请先断开" });
-            }
-
-            var success = await _client.ConnectAsync(request.Host, request.Port);
-            return Ok(new { success, message = success ? "连接成功" : "连接失败，请检查服务器是否运行" });
-        }
-
-        [HttpPost("disconnect")]
-        public async Task<IActionResult> Disconnect()
-        {
-            await _client.DisconnectAsync();
-            return Ok(new { success = true });
         }
 
         [HttpGet("status")]
@@ -75,11 +58,5 @@ namespace RtPanel.Controllers
                 extensionCount = status?.ExtensionCount ?? 0
             });
         }
-    }
-
-    public class ConnectRequest
-    {
-        public string Host { get; set; } = "127.0.0.1";
-        public int Port { get; set; } = 7789;
     }
 }

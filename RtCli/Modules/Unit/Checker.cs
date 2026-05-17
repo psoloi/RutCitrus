@@ -10,6 +10,7 @@ namespace RtCli.Modules.Unit
     {
         private static string? _cachedJavaResult;
         private static string? _cachedDotNetResult;
+        private static string? _cachedPythonResult;
 
         private const string GitHubRepoApi = "https://api.github.com/repos/psoloi/RutCitrus/releases/latest";
 
@@ -89,6 +90,41 @@ namespace RtCli.Modules.Unit
             catch
             {
                 return _cachedDotNetResult = I18n.Get("checker_nodotnet");
+            }
+        }
+
+        public static string CheckPython()
+        {
+            if (_cachedPythonResult != null) return _cachedPythonResult;
+
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "python",
+                    Arguments = "--version",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var process = Process.Start(startInfo);
+                if (process == null)
+                {
+                    return _cachedPythonResult = I18n.Get("checker_nopython");
+                }
+                string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
+                {
+                    return _cachedPythonResult = I18n.Get("checker_nopython");
+                }
+                string version = output.Trim();
+                return _cachedPythonResult = $"{I18n.Get("checker_python")} {version}";
+            }
+            catch
+            {
+                return _cachedPythonResult = I18n.Get("checker_nopython");
             }
         }
 
@@ -211,6 +247,11 @@ namespace RtCli.Modules.Unit
             {
                 string dotNetResult = CheckDotNet();
                 Output.Log(dotNetResult, 1, "Checker");
+            }
+            if (Config.App.CheckPython)
+            {
+                string pythonResult = CheckPython();
+                Output.Log(pythonResult, 1, "Checker");
             }
             if (Config.App.CheckOSBit)
             {
