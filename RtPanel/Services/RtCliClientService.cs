@@ -19,12 +19,30 @@ namespace RtPanel.Services
 
         public bool IsConnected { get; private set; }
         public string? ConnectedServerName => _connectedServerName;
+        public string? AuthKey { get; private set; }
+        public string? Host { get; private set; }
+        public int Port { get; private set; }
 
         public event Action<string>? OnLogReceived;
         public event Action? OnConnected;
         public event Action? OnDisconnected;
 
-        public async Task<bool> ConnectAsync(string host, int port)
+        // 日志环形缓冲：保留最近 500 条日志供面板轮询
+        private const int LogBufferSize = 500;
+        private readonly object _logBufferLock = new();
+        private readonly List<string> _logBuffer = new();
+        private int _logSequence = 0;
+
+        /// <summary>
+        /// 构建携带认证密钥的 gRPC 请求头。
+        /// </summary>
+        private Metadata? GetAuthHeaders()
+        {
+            if (string.IsNullOrEmpty(AuthKey)) return null;
+            return new Metadata { { "authorization", AuthKey } };
+        }
+
+        public async Task<bool> ConnectAsync(string host, int port, string authKey)
         {
             lock (_connectLock)
             {
@@ -40,15 +58,22 @@ namespace RtPanel.Services
                 }
 
                 _manuallyDisconnected = false;
+                Host = host;
+                Port = port;
+                AuthKey = authKey;
+
                 var address = $"http://{host}:{port}";
                 _channel = GrpcChannel.ForAddress(address);
                 _client = new RtCliService.RtCliServiceClient(_channel);
 
-                var info = await _client.GetServerInfoAsync(new Empty(), deadline: DateTime.UtcNow.AddSeconds(5));
+                var info = await _client.GetServerInfoAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
                 _connectedServerName = info.ServerName;
                 IsConnected = true;
 
                 StartConnectionMonitor();
+                StartLogStream();
                 OnConnected?.Invoke();
                 return true;
             }
@@ -70,6 +95,9 @@ namespace RtPanel.Services
         {
             _manuallyDisconnected = true;
             IsConnected = false;
+            AuthKey = null;
+            Host = null;
+            Port = 0;
             CleanupConnection();
             OnDisconnected?.Invoke();
             DisposeChannel();
@@ -140,7 +168,9 @@ namespace RtPanel.Services
                                 return;
                             }
 
-                            await _client.GetStatusAsync(new Empty(), deadline: DateTime.UtcNow.AddSeconds(5));
+                            await _client.GetStatusAsync(new Empty(),
+                                headers: GetAuthHeaders(),
+                                deadline: DateTime.UtcNow.AddSeconds(5));
                         }
                         catch
                         {
@@ -166,7 +196,9 @@ namespace RtPanel.Services
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.GetServerInfoAsync(new Empty(), deadline: DateTime.UtcNow.AddSeconds(5));
+                return await _client.GetServerInfoAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
             }
             catch { MarkDisconnected(); return null; }
         }
@@ -176,7 +208,9 @@ namespace RtPanel.Services
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.GetExtensionsAsync(new Empty(), deadline: DateTime.UtcNow.AddSeconds(5));
+                return await _client.GetExtensionsAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
             }
             catch { MarkDisconnected(); return null; }
         }
@@ -186,7 +220,9 @@ namespace RtPanel.Services
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.UnloadExtensionAsync(new UnloadExtensionRequest { ExtensionKey = extensionKey }, deadline: DateTime.UtcNow.AddSeconds(5));
+                return await _client.UnloadExtensionAsync(new UnloadExtensionRequest { ExtensionKey = extensionKey },
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
             }
             catch { MarkDisconnected(); return null; }
         }
@@ -196,7 +232,9 @@ namespace RtPanel.Services
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.LoadExtensionAsync(new LoadExtensionRequest { ExtensionPath = extensionPath }, deadline: DateTime.UtcNow.AddSeconds(5));
+                return await _client.LoadExtensionAsync(new LoadExtensionRequest { ExtensionPath = extensionPath },
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
             }
             catch { MarkDisconnected(); return null; }
         }
@@ -206,7 +244,9 @@ namespace RtPanel.Services
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.ExecuteCommandAsync(new ExecuteCommandRequest { Command = command }, deadline: DateTime.UtcNow.AddSeconds(5));
+                return await _client.ExecuteCommandAsync(new ExecuteCommandRequest { Command = command },
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(30));
             }
             catch { MarkDisconnected(); return null; }
         }
@@ -216,7 +256,9 @@ namespace RtPanel.Services
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.GetStatusAsync(new Empty(), deadline: DateTime.UtcNow.AddSeconds(5));
+                return await _client.GetStatusAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
             }
             catch { MarkDisconnected(); return null; }
         }
@@ -226,7 +268,45 @@ namespace RtPanel.Services
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.GetClientsAsync(new Empty(), deadline: DateTime.UtcNow.AddSeconds(5));
+                return await _client.GetClientsAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<ConfigResponse?> GetConfigAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.GetConfigAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SaveConfigResponse?> SaveConfigAsync(string content)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.SaveConfigAsync(new SaveConfigRequest { Content = content },
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<CommandListResponse?> GetCommandListAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.GetCommandListAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
             }
             catch { MarkDisconnected(); return null; }
         }
@@ -237,7 +317,7 @@ namespace RtPanel.Services
 
             StopLogStream();
             _logCts = new CancellationTokenSource();
-            _logStream = _client.StreamLogs(new Empty());
+            _logStream = _client.StreamLogs(new Empty(), headers: GetAuthHeaders());
 
             _ = Task.Run(async () =>
             {
@@ -252,7 +332,9 @@ namespace RtPanel.Services
                             3 => "错误",
                             _ => "调试"
                         };
-                        OnLogReceived?.Invoke($"[{log.Timestamp}] |{levelStr}| ({log.Source}) {log.Message}");
+                        var line = $"[{log.Timestamp}] |{levelStr}| ({log.Source}) {log.Message}";
+                        BufferLog(line);
+                        OnLogReceived?.Invoke(line);
                     }
                 }
                 catch (OperationCanceledException) { }
@@ -264,6 +346,41 @@ namespace RtPanel.Services
                     }
                 }
             });
+        }
+
+        private void BufferLog(string line)
+        {
+            lock (_logBufferLock)
+            {
+                _logSequence++;
+                _logBuffer.Add($"#{_logSequence} {line}");
+                if (_logBuffer.Count > LogBufferSize)
+                    _logBuffer.RemoveAt(0);
+            }
+        }
+
+        /// <summary>
+        /// 获取自指定序号之后的日志。返回 (日志行列表, 最新序号)。
+        /// </summary>
+        public (List<string> lines, int latestSeq) GetRecentLogs(int afterSeq = 0)
+        {
+            lock (_logBufferLock)
+            {
+                var lines = new List<string>();
+                foreach (var entry in _logBuffer)
+                {
+                    // 解析序号
+                    var spaceIdx = entry.IndexOf(' ');
+                    if (spaceIdx > 1 && entry[0] == '#')
+                    {
+                        if (int.TryParse(entry[1..spaceIdx], out var seq) && seq > afterSeq)
+                        {
+                            lines.Add(entry[(spaceIdx + 1)..]);
+                        }
+                    }
+                }
+                return (lines, _logSequence);
+            }
         }
 
         public void StopLogStream()

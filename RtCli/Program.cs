@@ -17,18 +17,19 @@ namespace RtCli
 {
     internal class Program
     {
-        // 目前修改方向：MC控制台分析器，将捕获控制台方式加强rcon或management来发送未来主要run，未来验证通信
-        // SQLlite、日志分析、Microsoft.OpenApi(Polly)、cs-script或Roslyn 编译器、内容管理验证插件安全
+        // 目前修改方向：MC控制台日志分析器完善，MC服务端信息获取，未来验证通信
+        // AI扩展更多功能、内容管理 Mono.Cecil 扫描验证插件安全
 
-        // 实现一个简单的调度器，解析表达式并在指定时间执行任务
-        // 例如，可以使用Hangfire或其他调度库来实现复杂的调度功能
-        // 检查服务端在线情况及安全情况、检查服务端TPS情况、检查服务端玩家数量、内存使用、服务端备份
+        // 优化文字和命令整理及I18n
 
-        // 检查表达式的格式，计算下次执行时间，并使用Timer或类似机制来执行任务
-        // 表达式匹配任务附加cs-script功能
-        // 脚本之类的是很多的可直接配置的附加功能
+        // BlueMap和Litebans支持、配置文件翻译、玩家监控、自动监控服务器性能并提供优化建议
 
-        // readme.md参考 github-readme-stats-master
+        // Rt改为安全类程序及安全扫描延申至服务端安全
+
+        // .auto
+
+        // readme.md参考 github-readme-stats-master 并且中英文分开
+
         // 版本号在 RtCli.csproj 的 VersionPrefix 中修改
         public static string RtCliVersion { get; } =
             Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -42,17 +43,24 @@ namespace RtCli
             "rt reload",
             "rt status",
             "rt clients",
+            "rt clients kick",
             "rt extensions",
-            "rt extension load",
-            "rt extension unload",
+            "rt extensions load",
+            "rt extensions unload",
             "rt end",
             "rt stop",
             "rt start",
             "rt help",
+            "rt about",
             "rt",
             ".help",
             ".guide",
             ".auto",
+            ".auto on",
+            ".auto off",
+            ".auto list",
+            ".auto start",
+            ".auto stop",
             ".fx",
             ".fx get",
             ".fx list",
@@ -63,13 +71,24 @@ namespace RtCli
             ".fx filter",
             ".fx filter config",
             ".fx filter plugin",
+            ".cfg",
+            ".cfg reload",
+            ".cfg clear",
+            ".status",
             ".server",
+            ".server list",
+            ".server add",
+            ".server del",
+            ".server change",
             ".server get",
             ".server connect",
             ".server start",
             ".server stop",
             ".server detach",
             ".server status",
+            "ct",
+            "ct list",
+            "ct unpack",
             "/"
         };
 
@@ -129,7 +148,7 @@ namespace RtCli
             Output.TextBlock("启动主线程", 1, "Task#0");
 
             TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
-            Thread.CurrentThread.Name = "MainThread";
+            Thread.CurrentThread.Name = "Main";
 
             bool createdNew;
             _appMutex = new Mutex(true, "RtCli_SingleInstance", out createdNew);
@@ -161,13 +180,19 @@ namespace RtCli
             Output.InitializeLogging();
             Analyzer.Initialize();
             ContentManager.Initialize();
+            Scheduler.Initialize();
+            Intelligence.StartAutoBackup();
+            Backend.Initialize();
 
             if (Config.App.Debug.ToLower() != "No")
             {
                 Commands.Execute(Config.App.Debug);
             }
 
-            RtExtensionManager.RtExtensionManager.LoadAll();
+            RtExtensionManager.LoadAll();
+
+            Scripts.Initialize();
+            Scripts.LoadSettingsAndSubscribe();
 
             Checker.CheckAll();
 
@@ -209,8 +234,8 @@ namespace RtCli
                 case "default":
                     EventBus.Publish(new ModeSelectedEvent(I18n.Get("main_selmode_default")));
                     Output.Log("正在运行扩展内容...", 1, ThisProgramName);
-                    RtExtensionManager.RtExtensionManager.DisplayLoadedExtensions();
-                    RtExtensionManager.RtExtensionManager.Run();
+                    RtExtensionManager.DisplayLoadedExtensions();
+                    RtExtensionManager.Run();
                     Continued();
                     break;
 
@@ -538,8 +563,7 @@ namespace RtCli
         {
             try
             {
-                Output.Log("[yellow]注意：目前已将通信验证删除！程序仅能在本机或局域网运行否则安全无法保障！[/]", 2, ThisProgramName);
-                Output.Log("[yellow]注意：该分支为测试分支，可能包含未测试的功能！[/]", 2, ThisProgramName);
+                Output.Log("[yellow]注意：功能还未完善！程序仅能在本机或局域网运行否则安全无法保障！[/]", 2, ThisProgramName);
                 try
                 {
                     Connector.StartServerAsync().GetAwaiter().GetResult();
@@ -573,6 +597,10 @@ namespace RtCli
                                 ShowHelp();
                                 handled = true;
                                 break;
+                            case var cmd when cmd == "rt about":
+                                ShowAbout();
+                                handled = true;
+                                break;
                             case var cmd when cmd == "rt end":
                                 goto endpage;
                             case var cmd when cmd == "rt reload":
@@ -581,17 +609,38 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == "rt status":
-                                Output.Log($"管理端口状态：{(Connector.IsRunning ? "运行中" : "未运行")}，已连接客户端数量：{Connector.ConnectedClientCount}", 1, ThisProgramName);
+                                var rtStatusTable = new Table().Border(TableBorder.Rounded).Title("[cyan]RtCli 状态[/]");
+                                rtStatusTable.AddColumn("项目").AddColumn("状态");
+                                rtStatusTable.AddRow("管理端口", Connector.IsRunning ? "[green]运行中[/]" : "[red]未运行[/]");
+                                rtStatusTable.AddRow("已连接面板", Connector.ConnectedClientCount.ToString());
+                                rtStatusTable.AddRow("当前服务端", $"[cyan]{Markup.Escape(Config.App.CurrentServer)}[/] ({Markup.Escape(Config.CurrentServer.ServerName)})");
+                                rtStatusTable.AddRow("MC模式", $"[cyan]{Analyzer.CurrentMode}[/]");
+                                if (Analyzer.NeedsRunServer)
+                                {
+                                    rtStatusTable.AddRow("MC服务端", Analyzer.IsRunModeActive ? "[green]运行中[/]" : "[red]未运行[/]");
+                                }
+                                else
+                                {
+                                    rtStatusTable.AddRow("MC连接", Analyzer.IsAttached ? "[green]已连接[/]" : "[red]未连接[/]");
+                                }
+                                rtStatusTable.AddRow("自动提示", Intelligence.IsTipsRunning ? "[green]运行中[/]" : "[grey]未运行[/]");
+                                AnsiConsole.Write(rtStatusTable);
                                 handled = true;
                                 break;
                             case var cmd when cmd == "rt clients":
                                 Output.Log("已连接面板列表：", 1, ThisProgramName);
                                 if (Connector.ConnectedClientCount > 0)
                                 {
-                                    foreach (var client in Connector.ConnectedClients.Values)
+                                    var clientsTable = new Table().Border(TableBorder.Rounded);
+                                    clientsTable.AddColumn("序号").AddColumn("ID").AddColumn("IP").AddColumn("连接时间");
+                                    int idx = 1;
+                                    foreach (var kvp in Connector.ConnectedClients)
                                     {
-                                        Output.Log($"- {client.IP} (连接时间: {client.ConnectTime:HH:mm:ss})", 1, ThisProgramName);
+                                        clientsTable.AddRow($"[cyan]{idx}[/]", Markup.Escape(kvp.Key), Markup.Escape(kvp.Value.IP), kvp.Value.ConnectTime.ToString("HH:mm:ss"));
+                                        idx++;
                                     }
+                                    AnsiConsole.Write(clientsTable);
+                                    Output.Log("输入 rt clients kick <序号> 断开指定客户端", 1, ThisProgramName);
                                 }
                                 else
                                 {
@@ -599,34 +648,67 @@ namespace RtCli
                                 }
                                 handled = true;
                                 break;
-                            case var cmd when cmd == "rt extensions":
-                                Output.Log("已加载的扩展列表：", 1, ThisProgramName);
-                                RtExtensionManager.RtExtensionManager.DisplayLoadedExtensions();
-                                handled = true;
-                                break;
-                            case var cmd when cmd == "rt extension load":
-                                Output.Log("用法: rt extension load <扩展文件路径或文件名>", 1, ThisProgramName);
-                                Output.Log($"扩展目录: {RtExtensionManager.RtExtensionManager.GetExtensionsDirectory()}", 1, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd == "rt extension unload":
-                                Output.Log("用法: rt extension unload <扩展Key>", 1, ThisProgramName);
-                                Output.Log("使用 rt extensions 查看已加载的扩展列表", 1, ThisProgramName);
-                                handled = true;
-                                break;
-                            case var cmd when cmd != null && cmd.StartsWith("rt extension load "):
-                                string loadPath = cmd.Substring(18).Trim();
-                                if (!string.IsNullOrWhiteSpace(loadPath))
+                            case var cmd when cmd == "rt clients kick":
+                                if (Connector.ConnectedClientCount == 0)
                                 {
-                                    RtExtensionManager.RtExtensionManager.LoadExtensionByKey(loadPath);
+                                    Output.Log("当前没有已连接的管理面板", 1, ThisProgramName);
+                                }
+                                else
+                                {
+                                    Output.Log("用法: rt clients kick <序号>，使用 rt clients 查看列表", 1, ThisProgramName);
                                 }
                                 handled = true;
                                 break;
-                            case var cmd when cmd != null && cmd.StartsWith("rt extension unload "):
+                            case var cmd when cmd != null && cmd.StartsWith("rt clients kick "):
+                                string kickArg = cmd.Substring(16).Trim();
+                                if (int.TryParse(kickArg, out int kickIndex) && kickIndex >= 1)
+                                {
+                                    var clientList = Connector.ConnectedClients.ToList();
+                                    if (kickIndex <= clientList.Count)
+                                    {
+                                        var target = clientList[kickIndex - 1];
+                                        Connector.UnregisterClient(target.Key);
+                                        Output.Log($"已断开面板 {target.Key} ({target.Value.IP})", 1, ThisProgramName);
+                                    }
+                                    else
+                                    {
+                                        Output.Log($"序号超出范围，当前共 {clientList.Count} 个面板。", 2, ThisProgramName);
+                                    }
+                                }
+                                else
+                                {
+                                    Output.Log("无效的序号，请输入正整数。用法: rt clients kick <序号>", 2, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd == "rt extensions":
+                                Output.Log("已加载的扩展列表：", 1, ThisProgramName);
+                                RtExtensionManager.DisplayLoadedExtensions();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == "rt extensions load":
+                                Output.Log("用法: rt extensions load <扩展文件路径或文件名>", 1, ThisProgramName);
+                                Output.Log($"扩展目录: {RtExtensionManager.GetExtensionsDirectory()}", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == "rt extensions unload":
+                                Output.Log("用法: rt extensions unload <扩展Key>", 1, ThisProgramName);
+                                Output.Log("使用 rt extensions 查看已加载的扩展列表", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith("rt extensions load "):
+                                string loadPath = cmd.Substring(18).Trim();
+                                if (!string.IsNullOrWhiteSpace(loadPath))
+                                {
+                                    RtExtensionManager.LoadExtensionByKey(loadPath);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith("rt extensions unload "):
                                 string unloadKey = cmd.Substring(20).Trim();
                                 if (!string.IsNullOrWhiteSpace(unloadKey))
                                 {
-                                    RtExtensionManager.RtExtensionManager.UnloadExtensionByKey(unloadKey);
+                                    RtExtensionManager.UnloadExtensionByKey(unloadKey);
                                 }
                                 handled = true;
                                 break;
@@ -643,32 +725,93 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".guide":
+                                Output.Log("服务端搭建教程：https://zh.minecraft.wiki/w/%E6%95%99%E7%A8%8B", 1, ThisProgramName);
                                 Intelligence.Guide().GetAwaiter().GetResult();
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".auto":
-                                Intelligence.Auto();
+                                var autoRoot = new Tree("[cyan].auto 命令[/]");
+                                autoRoot.AddNode("[green]on <任务名>[/] - 启用指定任务");
+                                autoRoot.AddNode("[green]off <任务名>[/] - 禁用指定任务");
+                                autoRoot.AddNode("[green]list[/] - 列出所有计划任务");
+                                autoRoot.AddNode("[green]start[/] - 启动调度器");
+                                autoRoot.AddNode("[green]stop[/] - 停止调度器");
+                                AnsiConsole.Write(autoRoot);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".auto on "):
+                                string onTaskName = cmd.Substring(".auto on ".Length).Trim();
+                                Scheduler.SetTaskEnabled(onTaskName, true);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".auto on":
+                                Output.Log("用法: .auto on <任务名>", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".auto off "):
+                                string offTaskName = cmd.Substring(".auto off ".Length).Trim();
+                                Scheduler.SetTaskEnabled(offTaskName, false);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".auto off":
+                                Output.Log("用法: .auto off <任务名>", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".auto list":
+                                Scheduler.ListTasks();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".auto start":
+                                Scheduler.Start();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".auto stop":
+                                Scheduler.Stop();
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".fx":
-                                Output.Log(".fx 子命令：get、list、del、clientguide、base、ai、filter", 1, ThisProgramName);
-                                Output.Log("  .fx get              - 分析MC服务端错误日志", 1, ThisProgramName);
-                                Output.Log("  .fx list             - 列出所有错误分析结果", 1, ThisProgramName);
-                                Output.Log("  .fx list <n>         - 列出第n次的分析结果", 1, ThisProgramName);
-                                Output.Log("  .fx del              - 删除所有错误分析结果", 1, ThisProgramName);
-                                Output.Log("  .fx clientguide      - 客户端连接问题诊断", 1, ThisProgramName);
-                                Output.Log("  .fx clientguide <n>  - 查看第n个匹配项的详细解决方案", 1, ThisProgramName);
-                                Output.Log("  .fx filter           - 过滤问题备份工具", 1, ThisProgramName);
-                                Output.Log("  .fx filter config    - 备份/对照/还原配置文件", 1, ThisProgramName);
-                                Output.Log("  .fx filter config <n>- 还原第n个差异文件(0删除备份)", 1, ThisProgramName);
-                                Output.Log("  .fx filter plugin    - 列出/禁用/启用插件", 1, ThisProgramName);
-                                Output.Log("  .fx filter plugin <n>- 切换第n个插件启用/禁用(0重启)", 1, ThisProgramName);
-                                Output.Log("  .fx base             - (尚未实现)", 1, ThisProgramName);
-                                Output.Log("  .fx ai               - (尚未实现)", 1, ThisProgramName);
+                                var fxRoot = new Tree("[cyan].fx 命令[/]");
+
+                                var getNode = fxRoot.AddNode("[green]get[/] - 错误日志分析");
+                                getNode.AddNode(".fx get - 获取MC服务端错误日志");
+                                getNode.AddNode(".fx get <路径> - 获取外部日志文件");
+
+                                var listNode = fxRoot.AddNode("[green]list[/] - 查看分析结果");
+                                listNode.AddNode(".fx list - 列出所有错误分析结果");
+                                listNode.AddNode(".fx list <n> - 列出第n次的分析结果");
+
+                                fxRoot.AddNode("[green]del[/] - 删除所有错误分析结果");
+
+                                var cgNode = fxRoot.AddNode("[green]clientguide[/] - 客户端连接问题诊断");
+                                cgNode.AddNode(".fx clientguide - 开始诊断");
+                                cgNode.AddNode(".fx clientguide <n> - 查看第n个匹配项的详细解决方案");
+
+                                var baseNode = fxRoot.AddNode("[green]base[/] - 基础错误分析");
+                                baseNode.AddNode(".fx base <n> - 分析第n个错误");
+                                baseNode.AddNode(".fx base <n-m> - 合并第n到m个错误后分析");
+
+                                var filterNode = fxRoot.AddNode("[green]filter[/] - 过滤问题备份工具");
+                                var configNode = filterNode.AddNode("[yellow]config[/] - 配置文件管理");
+                                configNode.AddNode(".fx filter config - 备份/对照配置文件");
+                                configNode.AddNode(".fx filter config <n> - 还原第n个差异文件(0删除备份)");
+                                var pluginNode = filterNode.AddNode("[yellow]plugin[/] - 插件管理");
+                                pluginNode.AddNode(".fx filter plugin - 列出插件及状态");
+                                pluginNode.AddNode(".fx filter plugin <n> - 切换启用/禁用(0重启)");
+
+                                var aiNode = fxRoot.AddNode("[green]ai[/] - AI智能分析");
+                                aiNode.AddNode(".fx ai <n> - 将第n个错误发送给AI分析");
+                                aiNode.AddNode(".fx ai <n-m> - 合并第n到m个错误后发送给AI分析");
+
+                                AnsiConsole.Write(fxRoot);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".fx get":
                                 Analyzer.AnalyzeErrors();
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".fx get "):
+                                string getArg = cmd.Substring(".fx get ".Length).Trim().Trim('"');
+                                Analyzer.AnalyzeErrors(getArg);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".fx list":
@@ -684,11 +827,11 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".fx base":
-                                Output.Log("该功能尚未实现。", 2, ThisProgramName);
+                                Analyzer.BaseAnalyze(null);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".fx ai":
-                                Output.Log("该功能尚未实现。", 2, ThisProgramName);
+                                Task.Run(() => Analyzer.AiAnalyze(null));
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".fx filter":
@@ -713,6 +856,16 @@ namespace RtCli
                                 {
                                     Output.Log("无效的参数，请输入数字。用法: .fx list <n>", 2, ThisProgramName);
                                 }
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".fx base "):
+                                string baseArg = cmd.Substring(".fx base ".Length).Trim();
+                                Analyzer.BaseAnalyze(baseArg);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".fx ai "):
+                                string aiArg = cmd.Substring(".fx ai ".Length).Trim();
+                                Task.Run(() => Analyzer.AiAnalyze(aiArg));
                                 handled = true;
                                 break;
                             case var cmd when cmd != null && cmd.StartsWith(".fx clientguide "):
@@ -751,31 +904,159 @@ namespace RtCli
                                 }
                                 handled = true;
                                 break;
+                            case var cmd when cmd == ".cfg":
+                                var cfgRoot = new Tree("[cyan].cfg 命令[/]");
+                                cfgRoot.AddNode("[green]reload[/] - 热重载所有配置文件(包括语言脚本等)");
+                                cfgRoot.AddNode("[green]clear[/] - 删除Content文件夹并冷重载");
+                                AnsiConsole.Write(cfgRoot);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".cfg reload":
+                                Config.ReloadAll();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".cfg clear":
+                                Config.ClearContent();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".status":
+                                Output.Log(".status 命令暂未实现。", 1, ThisProgramName);
+                                handled = true;
+                                break;
                             case var cmd when cmd == ".server":
-                                if (Analyzer.IsRunMode)
-                                    Output.Log("当前为 RUN 模式，子命令：start、stop、status", 1, ThisProgramName);
+                                Output.Log($"当前服务端: [cyan]{Markup.Escape(Config.App.CurrentServer)}[/] (模式: {Analyzer.CurrentMode})", 1, ThisProgramName);
+                                Output.Log("子命令：list、add、del、change、start、stop、status", 1, ThisProgramName);
+                                if (!Analyzer.NeedsRunServer)
+                                    Output.Log("OnlyRcon模式额外子命令：get、connect、detach", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server list":
+                                var serverListTable = new Table().Border(TableBorder.Rounded).Title("[cyan]服务端列表[/]");
+                                serverListTable.AddColumn("标识").AddColumn("名称").AddColumn("模式").AddColumn("工作目录").AddColumn("当前");
+                                foreach (var kvp in Config.App.ServerList)
+                                {
+                                    string isCurrent = kvp.Key == Config.App.CurrentServer ? "[green]*[/]" : "";
+                                    string workDir = string.IsNullOrWhiteSpace(kvp.Value.WorkPath) ? "[grey]未配置[/]" : Markup.Escape(kvp.Value.WorkPath);
+                                    serverListTable.AddRow(
+                                        Markup.Escape(kvp.Key),
+                                        Markup.Escape(kvp.Value.ServerName),
+                                        Markup.Escape(kvp.Value.AnalyzerMode),
+                                        workDir,
+                                        isCurrent);
+                                }
+                                AnsiConsole.Write(serverListTable);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server add":
+                                Output.Log("添加新的MC服务端配置：", 1, ThisProgramName);
+                                string? newKey = AnsiConsole.Ask<string>("请输入服务端 [cyan]标识[/]（英文）：");
+                                if (string.IsNullOrWhiteSpace(newKey))
+                                {
+                                    Output.Log("标识不能为空。", 2, ThisProgramName);
+                                }
+                                else if (Config.App.ServerList.ContainsKey(newKey))
+                                {
+                                    Output.Log($"标识 '{Markup.Escape(newKey)}' 已存在。", 2, ThisProgramName);
+                                }
                                 else
-                                    Output.Log("当前为 RCON 模式，子命令：get、connect、detach、status", 1, ThisProgramName);
+                                {
+                                    var newEntry = new ServerEntry();
+                                    newEntry.ServerName = AnsiConsole.Ask("服务端 [cyan]名称[/]（显示名称）：", newKey);
+                                    string inputWorkPath = AnsiConsole.Ask("服务端 [cyan]工作目录[/]（留空稍后配置）：", "");
+                                    if (!string.IsNullOrWhiteSpace(inputWorkPath))
+                                        newEntry.WorkPath = inputWorkPath;
+
+                                    var modeSelect = AnsiConsole.Prompt(
+                                        new SelectionPrompt<string>()
+                                            .Title("选择 [cyan]控制台模式[/]：")
+                                            .AddChoices("Management (推荐)", "Run", "Rcon", "OnlyRcon"));
+                                    newEntry.AnalyzerMode = modeSelect.Split(' ')[0];
+
+                                    if (newEntry.AnalyzerMode == "Management")
+                                    {
+                                        Output.Log("[yellow]Management模式需要MC 1.21.9+，服务端需开启management-server-enabled[/]", 1, ThisProgramName);
+                                    }
+
+                                    Config.App.ServerList[newKey] = newEntry;
+                                    Config.SaveCurrentConfig();
+                                    Output.Log($"已添加服务端 '{newKey}'，使用 .server change {newKey} 切换。", 1, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server del":
+                                if (Config.App.ServerList.Count <= 1)
+                                {
+                                    Output.Log("至少需要保留一个服务端配置。", 2, ThisProgramName);
+                                }
+                                else
+                                {
+                                    string delTarget = AnsiConsole.Prompt(
+                                        new SelectionPrompt<string>()
+                                            .Title("选择要 [red]删除[/] 的服务端：")
+                                            .AddChoices(Config.App.ServerList.Keys.ToList()));
+                                    if (delTarget == Config.App.CurrentServer)
+                                    {
+                                        Output.Log("不能删除当前正在使用的服务端，请先 .server change 切换。", 2, ThisProgramName);
+                                    }
+                                    else
+                                    {
+                                        bool confirmDel = AnsiConsole.Confirm($"确定删除服务端 '{delTarget}'？", false);
+                                        if (confirmDel)
+                                        {
+                                            Config.App.ServerList.Remove(delTarget);
+                                            Config.SaveCurrentConfig();
+                                            Output.Log($"已删除服务端 '{delTarget}'。", 1, ThisProgramName);
+                                        }
+                                    }
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server change":
+                                Output.Log("用法: .server change <服务端标识>", 1, ThisProgramName);
+                                Output.Log("已配置的服务端:", 1, ThisProgramName);
+                                foreach (var kvp in Config.App.ServerList)
+                                {
+                                    string marker = kvp.Key == Config.App.CurrentServer ? " [green]<- 当前[/]" : "";
+                                    Output.Log($"  {Markup.Escape(kvp.Key)}: {Markup.Escape(kvp.Value.ServerName)} (模式: {Markup.Escape(kvp.Value.AnalyzerMode)}){marker}", 1, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".server change "):
+                                string changeArg = cmd.Substring(".server change ".Length).Trim();
+                                if (string.IsNullOrWhiteSpace(changeArg))
+                                {
+                                    Output.Log("请指定服务端标识。", 2, ThisProgramName);
+                                }
+                                else if (Config.SwitchServer(changeArg))
+                                {
+                                    Analyzer.Initialize();
+                                    Output.Log($"已切换到服务端: {Markup.Escape(changeArg)} ({Markup.Escape(Config.CurrentServer.ServerName)}) 模式: {Markup.Escape(Analyzer.CurrentMode)}", 1, ThisProgramName);
+                                }
+                                else
+                                {
+                                    Output.Log($"未找到服务端标识: {Markup.Escape(changeArg)}", 2, ThisProgramName);
+                                    Output.Log("已配置的标识: " + string.Join(", ", Config.App.ServerList.Keys), 1, ThisProgramName);
+                                }
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server get":
-                                if (Analyzer.IsRunMode)
-                                    Output.Log("RUN 模式下不支持 .server get，请使用 .server start 启动服务端。", 2, ThisProgramName);
+                                if (Analyzer.NeedsRunServer)
+                                    Output.Log("当前模式下不支持 .server get，请使用 .server start 启动服务端。", 2, ThisProgramName);
                                 else
                                     Analyzer.ScanAndListServers();
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server connect":
-                                if (Analyzer.IsRunMode)
-                                    Output.Log("RUN 模式下不支持 .server connect，请使用 .server start 启动服务端。", 2, ThisProgramName);
+                                if (Analyzer.NeedsRunServer)
+                                    Output.Log("当前模式下不支持 .server connect，请使用 .server start 启动服务端。", 2, ThisProgramName);
                                 else
                                     Output.Log("用法: .server connect <序号|pid:进程ID>", 1, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd != null && cmd.StartsWith(".server connect "):
-                                if (Analyzer.IsRunMode)
+                                if (Analyzer.NeedsRunServer)
                                 {
-                                    Output.Log("RUN 模式下不支持 .server connect，请使用 .server start 启动服务端。", 2, ThisProgramName);
+                                    Output.Log("当前模式下不支持 .server connect，请使用 .server start 启动服务端。", 2, ThisProgramName);
                                 }
                                 else
                                 {
@@ -811,31 +1092,46 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server detach":
-                                if (Analyzer.IsRunMode)
-                                    Output.Log("RUN 模式下不支持 .server detach，请使用 .server stop 停止服务端。", 2, ThisProgramName);
+                                if (Analyzer.NeedsRunServer)
+                                    Output.Log("当前模式下不支持 .server detach，请使用 .server stop 停止服务端。", 2, ThisProgramName);
                                 else
                                     Analyzer.Detach();
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server start":
-                                if (Analyzer.IsRunMode)
+                                if (Analyzer.NeedsRunServer)
                                     Analyzer.StartServer();
                                 else
-                                    Output.Log("RCON 模式下不支持 .server start，请使用 .server get + .server connect 连接。", 2, ThisProgramName);
+                                    Output.Log("OnlyRcon模式下不支持 .server start，请使用 .server get + .server connect 连接。", 2, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server stop":
-                                if (Analyzer.IsRunMode)
+                                if (Analyzer.NeedsRunServer)
                                     Analyzer.StopServer();
                                 else
-                                    Output.Log("RCON 模式下不支持 .server stop。", 2, ThisProgramName);
+                                    Output.Log("OnlyRcon模式下不支持 .server stop。", 2, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server status":
-                                if (Analyzer.IsRunMode)
+                                if (Analyzer.NeedsRunServer)
                                     Output.Log(Analyzer.IsRunModeActive ? "服务端运行中。" : "服务端未运行。", 1, ThisProgramName);
                                 else
                                     Output.Log(Analyzer.IsAttached ? "已连接到 Minecraft 服务端。" : "未连接到 Minecraft 服务端。", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == "ct":
+                                Output.Log("[cyan]ct[/] - 内嵌资源管理", 1, ThisProgramName);
+                                Output.Log("  [green]ct list[/] - 列出所有内嵌资源", 1, ThisProgramName);
+                                Output.Log("  [green]ct unpack <名称>[/] - 释放指定资源到程序根目录", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == "ct list":
+                                ListEmbeddedResources();
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith("ct unpack "):
+                                string resourceName = cmd.Substring("ct unpack ".Length).Trim();
+                                UnpackEmbeddedResource(resourceName);
                                 handled = true;
                                 break;
                             case var cmd when cmd != null && cmd.StartsWith("/"):
@@ -850,9 +1146,9 @@ namespace RtCli
 
                         if (!handled && !string.IsNullOrWhiteSpace(cmd_input))
                         {
-                            if (CommandRegistry.HasCommand(cmd_input))
+                            if (CommandRegistry.TryExecuteWithArgs(cmd_input))
                             {
-                                CommandRegistry.TryExecute(cmd_input, Array.Empty<string>());
+                                // 扩展命令(含参数)已执行
                             }
                             else
                             {
@@ -891,6 +1187,63 @@ namespace RtCli
             }
         }
 
+        private static void ShowAbout()
+        {
+            string runtimeVersion = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
+            string osDescription = System.Runtime.InteropServices.RuntimeInformation.OSDescription;
+            string architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString().ToLower();
+
+            AnsiConsole.Write(new Rule("[dodgerblue1]RutCitrus RtCli[/]").RuleStyle("dodgerblue1").Centered());
+
+            var infoTable = new Table().NoBorder().HideHeaders().AddColumn("").AddColumn("");
+            infoTable.AddRow("[yellow]版本[/]", $"[white]{Markup.Escape(RtCliVersion)}[/]");
+            infoTable.AddRow("[yellow]作者[/]", "[white]psoloi[/]");
+            infoTable.AddRow("[yellow]项目[/]", "[link]https://github.com/psoloi/RutCitrus[/]");
+            infoTable.AddRow("[yellow]环境[/]", $"[white]{Markup.Escape(runtimeVersion)}[/]");
+            infoTable.AddRow("[yellow]系统[/]", $"[white]{Markup.Escape(osDescription)}[/]");
+            infoTable.AddRow("[yellow]架构[/]", $"[white]{architecture}[/]");
+            infoTable.AddRow("[yellow]Java[/]", $"[white]{Markup.Escape(Checker.CheckJava())}[/]");
+            infoTable.AddRow("[yellow].NET[/]", $"[white]{Markup.Escape(Checker.CheckDotNet())}[/]");
+            infoTable.AddRow("[yellow]Python[/]", $"[white]{Markup.Escape(Checker.CheckPython())}[/]");
+            infoTable.AddRow("[yellow]系统位数[/]", $"[white]{(Environment.Is64BitOperatingSystem ? "64位" : "32位")}[/]");
+            AnsiConsole.Write(infoTable);
+
+            AnsiConsole.WriteLine();
+
+            var libTable = new Table().Border(TableBorder.Rounded).Title("[yellow]依赖库[/]");
+            libTable.AddColumn("库");
+            libTable.AddColumn("版本");
+
+            var libs = new (string Name, string Version)[]
+            {
+                ("Spectre.Console", "0.55.2"),
+                ("Newtonsoft.Json", "13.0.4"),
+                ("Serilog", "4.3.1"),
+                ("Serilog.Sinks.File", "7.0.0"),
+                ("YamlDotNet", "18.0.0"),
+                ("Grpc.AspNetCore", "2.80.0"),
+                ("Grpc.Core", "2.46.6"),
+                ("Google.Protobuf", "3.35.0"),
+                ("RestSharp", "114.0.0"),
+                ("System.Management", "10.0.8"),
+                ("TouchSocket", "2.3.6"),
+                ("Polly", "8.6.6"),
+                ("Mono.Cecil", "0.11.6"),
+                ("Microsoft.Extensions.AI", "10.6.0"),
+                ("Hangfire.Core", "1.8.23"),
+                ("CS-Script", "4.14.9"),
+                ("CSnakes.Runtime", "1.2.1"),
+            };
+
+            foreach (var lib in libs)
+            {
+                libTable.AddRow($"[cyan]{lib.Name}[/]", $"[grey]{lib.Version}[/]");
+            }
+
+            AnsiConsole.Write(libTable);
+            AnsiConsole.Write(new Rule().RuleStyle("dodgerblue1"));
+        }
+
         private static void ShowHelp()
         {
             Output.Log("RtCli程序命令列表：", 1, ThisProgramName);
@@ -899,38 +1252,57 @@ namespace RtCli
                 .AddColumn("描述")
                 .AddRow("[green]rt[/]", "显示版本信息")
                 .AddRow("[green]rt help[/]", "显示此列表")
+                .AddRow("[green]rt about[/]", "显示程序信息")
                 .AddRow("[white]rt end[/]", "关闭程序")
                 .AddRow("[white]rt reload[/]", "重新加载")
-                .AddRow("[white]rt status[/]", "管理端口状态")
+                .AddRow("[white]rt status[/]", "查看RtCli运行状态")
                 .AddRow("[white]rt clients[/]", "已连接面板列表")
+                .AddRow("[white]rt clients kick <序号>[/]", "断开指定客户端连接")
                 .AddRow("[white]rt extensions[/]", "已加载的扩展列表")
-                .AddRow("[white]rt extension load <路径>[/]", "加载指定扩展")
-                .AddRow("[white]rt extension unload <Key>[/]", "卸载指定扩展")
+                .AddRow("[white]rt extensions load <路径>[/]", "加载指定扩展")
+                .AddRow("[white]rt extensions unload <Key>[/]", "卸载指定扩展")
                 .AddRow("[white]rt start[/]", "启动管理端口")
                 .AddRow("[white]rt stop[/]", "关闭管理端口")
                 .AddRow("[green].help[/]", "显示扩展命令列表")
                 .AddRow("[white].guide[/]", "MC服务端安装引导")
-                .AddRow("[white].auto[/]", "自动化")
+                .AddRow("[white].auto[/]", "调度器 (输入 .auto 查看子命令)")
+                .AddRow("[white].auto on <任务名>[/]", "启用指定计划任务")
+                .AddRow("[white].auto off <任务名>[/]", "禁用指定计划任务")
+                .AddRow("[white].auto list[/]", "列出所有计划任务")
+                .AddRow("[white].auto start[/]", "启动调度器")
+                .AddRow("[white].auto stop[/]", "停止调度器")
                 .AddRow("[white].fx[/]", "错误分析/客户端诊断 (输入 .fx 查看子命令)")
-                .AddRow("[white].fx get[/]", "分析MC服务端错误日志")
+                .AddRow("[white].fx get[/]", "获取MC服务端错误日志")
                 .AddRow("[white].fx list[/]", "列出所有错误分析结果")
                 .AddRow("[white].fx list <n>[/]", "列出第n次的分析结果")
                 .AddRow("[white].fx del[/]", "删除所有错误分析结果")
                 .AddRow("[white].fx clientguide[/]", "客户端连接问题诊断")
                 .AddRow("[white].fx clientguide <n>[/]", "查看第n个匹配项的详细解决方案")
+                .AddRow("[white].fx base[/]", "基础错误分析")
+                .AddRow("[white].fx base <n>[/]", "分析第n次的基础错误")
+                .AddRow("[white].fx ai[/]", "AI 错误分析")
+                .AddRow("[white].fx ai <n>[/]", "AI 分析第n次的错误")
                 .AddRow("[white].fx filter[/]", "过滤问题备份工具")
                 .AddRow("[white].fx filter config[/]", "备份/对照/还原配置文件")
                 .AddRow("[white].fx filter config <n>[/]", "还原第n个差异文件(0删除备份)")
                 .AddRow("[white].fx filter plugin[/]", "列出/禁用/启用插件")
                 .AddRow("[white].fx filter plugin <n>[/]", "切换第n个插件启用/禁用(0重启)")
-                .AddRow("[white].server[/]", "MC控制台相关命令 (模式取决于配置)")
-                .AddRow("[white].server get[/]", "[[[DarkOrange]RCON[/]]] 扫描并列出运行中的MC服务端")
-                .AddRow("[white].server connect <序号>[/]", "[[[DarkOrange]RCON[/]]] 连接到指定的MC服务端")
-                .AddRow("[white].server detach[/]", "[[[DarkOrange]RCON[/]]] 断开与MC服务端的连接")
-                .AddRow("[white].server start[/]", "[[[green]RUN[/]]] 启动MC服务端作为子进程")
-                .AddRow("[white].server stop[/]", "[[[green]RUN[/]]] 停止MC服务端")
+                .AddRow("[white].cfg[/]", "配置管理 (输入 .cfg 查看子命令)")
+                .AddRow("[white].cfg reload[/]", "热重载所有配置文件")
+                .AddRow("[white].cfg clear[/]", "删除Content文件夹并冷重载")
+                .AddRow("[white].status[/]", "查看RtCli运行状态")
+                .AddRow("[white].server[/]", "MC控制台相关命令 (输入 .server 查看子命令)")
+                .AddRow("[white].server list[/]", "列出所有已配置的MC服务端")
+                .AddRow("[white].server add[/]", "添加新的MC服务端配置")
+                .AddRow("[white].server del[/]", "删除MC服务端配置")
+                .AddRow("[white].server change <标识>[/]", "切换当前MC服务端")
+                .AddRow("[white].server get[/]", "[[[DarkOrange]OnlyRcon[/]]] 扫描并列出运行中的MC服务端")
+                .AddRow("[white].server connect <序号|pid:进程ID>[/]", "[[[DarkOrange]OnlyRcon[/]]] 连接到指定的MC服务端")
+                .AddRow("[white].server detach[/]", "[[[DarkOrange]OnlyRcon[/]]] 断开与MC服务端的连接")
+                .AddRow("[white].server start[/]", "[[[green]Run/Rcon/Mgmt[/]]] 启动MC服务端作为子进程")
+                .AddRow("[white].server stop[/]", "[[[green]Run/Rcon/Mgmt[/]]] 停止MC服务端")
                 .AddRow("[white].server status[/]", "查看MC服务端连接/运行状态")
-                .AddRow("[green]/<命令>[/]", "发送命令到MC服务端执行");
+                .AddRow("[green]/<命令>[/]", "发送命令到MC服务端");
             AnsiConsole.Write(table);
         }
 
@@ -954,6 +1326,162 @@ namespace RtCli
             else
             {
                 Output.Log("没有扩展注册的命令", 1, ThisProgramName);
+            }
+        }
+
+        /// <summary>
+        /// 列出程序集内嵌的资源（Content文件夹下的文件）
+        /// </summary>
+        private static void ListEmbeddedResources()
+        {
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var names = asm.GetManifestResourceNames();
+
+                // 筛选Content文件夹下的资源（嵌入后资源名以程序集名.Content.开头）
+                var contentResources = names
+                    .Where(n => n.Contains(".Content.", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (contentResources.Count == 0)
+                {
+                    Output.Log("没有找到内嵌资源。", 1, ThisProgramName);
+                    return;
+                }
+
+                var table = new Table().Border(TableBorder.Rounded).Title("[cyan]内嵌资源列表[/]");
+                table.AddColumn("名称");
+                table.AddColumn("大小");
+
+                foreach (var name in contentResources)
+                {
+                    using var stream = asm.GetManifestResourceStream(name);
+                    long size = stream?.Length ?? 0;
+                    string sizeStr = size >= 1024 ? $"{size / 1024.0:F1} KB" : $"{size} B";
+                    // 显示简短名称：去掉前缀，将.替换为路径分隔符
+                    string displayName = name;
+                    int contentIdx = displayName.IndexOf(".Content.", StringComparison.OrdinalIgnoreCase);
+                    if (contentIdx >= 0)
+                    {
+                        displayName = displayName.Substring(contentIdx + ".Content.".Length);
+                    }
+                    table.AddRow($"[cyan]{Markup.Escape(displayName)}[/]", sizeStr);
+                }
+
+                AnsiConsole.Write(table);
+                Output.Log("使用 [green]ct unpack <名称>[/] 释放资源到程序根目录", 1, ThisProgramName);
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"列出内嵌资源失败: {ex.Message}", 2, ThisProgramName);
+            }
+        }
+
+        /// <summary>
+        /// 释放指定内嵌资源到程序根目录
+        /// </summary>
+        private static void UnpackEmbeddedResource(string resourceName)
+        {
+            if (string.IsNullOrWhiteSpace(resourceName))
+            {
+                Output.Log("用法: ct unpack <资源名称>", 1, ThisProgramName);
+                return;
+            }
+
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var names = asm.GetManifestResourceNames();
+
+                // 查找匹配的资源：支持简短名称或完整名称
+                string? targetName = null;
+
+                // 先尝试精确匹配
+                foreach (var name in names)
+                {
+                    if (string.Equals(name, resourceName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetName = name;
+                        break;
+                    }
+                }
+
+                // 再尝试简短名称匹配（用户输入如 Rt.dll）
+                if (targetName == null)
+                {
+                    foreach (var name in names)
+                    {
+                        // 将嵌入资源名中的.替换为.但保留文件扩展名
+                        // 嵌入格式: RtCli.Content.Rt.dll → 用户输入 Rt.dll
+                        int contentIdx = name.IndexOf(".Content.", StringComparison.OrdinalIgnoreCase);
+                        if (contentIdx >= 0)
+                        {
+                            string shortName = name.Substring(contentIdx + ".Content.".Length);
+                            // 资源名中的目录分隔符是. 但文件名本身也含.（如Rt.dll）
+                            // 所以直接比较
+                            if (string.Equals(shortName, resourceName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                targetName = name;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // 最后尝试模糊匹配（包含）
+                if (targetName == null)
+                {
+                    foreach (var name in names)
+                    {
+                        if (name.Contains(resourceName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            targetName = name;
+                            break;
+                        }
+                    }
+                }
+
+                if (targetName == null)
+                {
+                    Output.Log($"未找到资源: {Markup.Escape(resourceName)}", 2, ThisProgramName);
+                    Output.Log("使用 [green]ct list[/] 查看可用资源", 1, ThisProgramName);
+                    return;
+                }
+
+                // 计算输出文件名：取Content.之后的部分，还原为文件路径
+                string outputFileName = targetName;
+                int contentIdx2 = outputFileName.IndexOf(".Content.", StringComparison.OrdinalIgnoreCase);
+                if (contentIdx2 >= 0)
+                {
+                    outputFileName = outputFileName.Substring(contentIdx2 + ".Content.".Length);
+                }
+
+                // 输出到程序根目录
+                string outputPath = Path.Combine(AppContext.BaseDirectory, outputFileName);
+                string? outputDir = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
+                {
+                    Directory.CreateDirectory(outputDir);
+                }
+
+                using var stream = asm.GetManifestResourceStream(targetName);
+                if (stream == null)
+                {
+                    Output.Log($"无法读取资源流: {Markup.Escape(targetName)}", 2, ThisProgramName);
+                    return;
+                }
+
+                using var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write);
+                stream.CopyTo(fs);
+
+                long size = stream.Length;
+                string sizeStr = size >= 1024 ? $"{size / 1024.0:F1} KB" : $"{size} B";
+                Output.Log($"已释放资源: [cyan]{Markup.Escape(outputFileName)}[/] → {Markup.Escape(outputPath)} ({sizeStr})", 1, ThisProgramName);
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"释放资源失败: {ex.Message}", 2, ThisProgramName);
             }
         }
     }

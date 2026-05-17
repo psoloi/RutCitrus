@@ -23,6 +23,12 @@ namespace RtCli.Modules
         private static bool _isLoggingInitialized = false;
         private static readonly object _logLock = new object();
 
+        /// <summary>
+        /// 日志广播钩子：参数依次为 timestamp, level, source, message。
+        /// 由 Backend.Initialize 挂载，将日志推送到已连接的 gRPC 面板。
+        /// </summary>
+        public static Action<string, int, string, string>? OnLogBroadcast;
+
         public static void InitializeLogging()
         {
             if (_isLoggingInitialized) return;
@@ -88,27 +94,43 @@ namespace RtCli.Modules
             string info = $"[white on dodgerblue2][[{time}]][/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + " [black on green]信息[/] ";
             string error = $"[white on dodgerblue2][[{time}]][/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + " [black on red]错误[/] ";
             string warn = $"[white on dodgerblue2][[{time}]][/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + " [black on gold1]警告[/] ";
-            
+
             string plainMsg = StripMarkup(msg);
-            
-            switch (msg_type)
+
+            try
             {
-                case 1:
-                    AnsiConsole.Markup(info + msg + "\n");
-                    _logger?.Information("[MainThread - {Task}] {Message}", Task, plainMsg);
-                    break;
-                case 2:
-                    AnsiConsole.Markup(warn + msg + "\n");
-                    _logger?.Warning("[MainThread - {Task}] {Message}", Task, plainMsg);
-                    break;
-                case 3:
-                    AnsiConsole.Markup(error + msg + "\n");
-                    _logger?.Error("[MainThread - {Task}] {Message}", Task, plainMsg);
-                    break;
-                default:
-                    AnsiConsole.Markup($"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on white]调试[/] " + msg + "\n");
-                    _logger?.Debug("[MainThread - {Task}] {Message}", Task, plainMsg);
-                    break;
+                switch (msg_type)
+                {
+                    case 1:
+                        AnsiConsole.Markup(info + msg + "\n");
+                        _logger?.Information("[MainThread - {Task}] {Message}", Task, plainMsg);
+                        break;
+                    case 2:
+                        AnsiConsole.Markup(warn + msg + "\n");
+                        _logger?.Warning("[MainThread - {Task}] {Message}", Task, plainMsg);
+                        break;
+                    case 3:
+                        AnsiConsole.Markup(error + msg + "\n");
+                        _logger?.Error("[MainThread - {Task}] {Message}", Task, plainMsg);
+                        break;
+                    default:
+                        AnsiConsole.Markup($"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on white]调试[/] " + msg + "\n");
+                        _logger?.Debug("[MainThread - {Task}] {Message}", Task, plainMsg);
+                        break;
+                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("Could not find color or style"))
+            {
+                // 消息包含无效的Spectre标记，回退到安全转义输出
+                string safeMsg = Markup.Escape(plainMsg);
+                switch (msg_type)
+                {
+                    case 1: AnsiConsole.Markup(info + safeMsg + "\n"); break;
+                    case 2: AnsiConsole.Markup(warn + safeMsg + "\n"); break;
+                    case 3: AnsiConsole.Markup(error + safeMsg + "\n"); break;
+                    default: AnsiConsole.Markup($"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on white]调试[/] " + safeMsg + "\n"); break;
+                }
+                _logger?.Warning("[MainThread - {Task}] 输出消息包含无效Spectre标记，已回退转义: {Message}", Task, plainMsg);
             }
         }
 
@@ -122,29 +144,64 @@ namespace RtCli.Modules
             string plainMsg = StripMarkup(msg);
             string name = string.IsNullOrEmpty(names) ? "Null" : names;
             string threadName = Thread.CurrentThread.Name ?? "Null";
-            
-            switch (msg_type)
+
+            string prefix = $"[white][[{time}]][/] " + (msg_type switch
             {
-                case 0:
-                    AnsiConsole.Markup($"[white][[{time}]][/] " + c_info + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + Markup.Escape(msg) + "\n");
-                    _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
-                    break;
-                case 1:
-                    AnsiConsole.Markup($"[white][[{time}]][/] " + c_info + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + msg + "\n");
-                    _logger?.Information("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
-                    break;
-                case 2:
-                    AnsiConsole.Markup($"[white][[{time}]][/] " + c_warn + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + msg + "\n");
-                    _logger?.Warning("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
-                    break;
-                case 3:
-                    AnsiConsole.Markup($"[white][[{time}]][/] " + c_error + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + msg + "\n");
-                    _logger?.Error("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
-                    break;
-                default:
-                    AnsiConsole.Markup($"[white][[{time}]][/] " + "[white]|[/][yellow]调试[/][white]| [/]" + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + Markup.Escape(msg) + "\n");
-                    _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
-                    break;
+                2 => c_warn,
+                3 => c_error,
+                _ => c_info
+            }) + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] ";
+
+            try
+            {
+                switch (msg_type)
+                {
+                    case 0:
+                        AnsiConsole.Markup(prefix + Markup.Escape(msg) + "\n");
+                        _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
+                        break;
+                    case 1:
+                        AnsiConsole.Markup(prefix + msg + "\n");
+                        _logger?.Information("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
+                        break;
+                    case 2:
+                        AnsiConsole.Markup(prefix + msg + "\n");
+                        _logger?.Warning("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
+                        break;
+                    case 3:
+                        AnsiConsole.Markup(prefix + msg + "\n");
+                        _logger?.Error("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
+                        break;
+                    default:
+                        AnsiConsole.Markup($"[white][[{time}]][/] " + "[white]|[/][yellow]调试[/][white]| [/]" + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + Markup.Escape(msg) + "\n");
+                        _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
+                        break;
+                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("Could not find color or style"))
+            {
+                // 消息包含无效的Spectre标记，回退到安全转义输出
+                string safeMsg = Markup.Escape(plainMsg);
+                try
+                {
+                    switch (msg_type)
+                    {
+                        case 0: AnsiConsole.Markup(prefix + safeMsg + "\n"); break;
+                        case 1: AnsiConsole.Markup(prefix + safeMsg + "\n"); break;
+                        case 2: AnsiConsole.Markup(prefix + safeMsg + "\n"); break;
+                        case 3: AnsiConsole.Markup(prefix + safeMsg + "\n"); break;
+                        default: AnsiConsole.Markup($"[white][[{time}]][/] " + "[white]|[/][yellow]调试[/][white]| [/]" + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + safeMsg + "\n"); break;
+                    }
+                }
+                catch { Console.WriteLine($"[{time}] ({name}) {plainMsg}"); }
+                _logger?.Warning("[{Thread}-{ThreadId}] ({Name}) 输出消息包含无效Spectre标记，已回退转义: {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
+            }
+
+            // 广播日志到已连接的 gRPC 面板
+            if (OnLogBroadcast != null)
+            {
+                try { OnLogBroadcast(time, msg_type, name, plainMsg); }
+                catch { }
             }
         }
 
@@ -307,6 +364,10 @@ namespace RtCli.Modules
                 case OutOfMemoryException:
                     severity = "[white on red]内存不足[/]";
                     suggestion = "程序内存不足，请关闭其他占用内存的程序，或增加系统可用内存。";
+                    break;
+            case InvalidOperationException invalidOpEx when invalidOpEx.Message.Contains("Could not find color or style"):
+                    severity = "[white on magenta]格式兼容错误[/]";
+                    suggestion = "此错误通常由扩展或脚本输出的消息包含不兼容的Spectre.Console颜色标记导致。请检查最近使用的扩展是否正确转义了输出文本（使用 Markup.Escape），或在 github.com/psoloi/RutCitrus/issues 提交反馈。";
                     break;
                 default:
                     suggestion = "错误可能未知，可通过github.com/psoloi/RutCitrus/issues提供反馈";

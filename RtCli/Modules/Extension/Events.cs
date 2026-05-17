@@ -19,7 +19,6 @@ namespace RtCli.Modules.Extension
         private static readonly Dictionary<Type, List<Delegate>> _handlers = new();
         private static readonly Dictionary<string, HashSet<Delegate>> _extensionHandlers = new();
         private static readonly object _lock = new();
-        [ThreadStatic] private static bool _isPublishing;
 
         public static void Subscribe<TEvent>(RtEventHandler<TEvent> handler, string? extensionName = null) where TEvent : RtEvent
         {
@@ -99,36 +98,27 @@ namespace RtCli.Modules.Extension
         {
             if (e == null) return;
 
-            if (_isPublishing) return;
-            _isPublishing = true;
-            try
+            List<Delegate> handlersCopy;
+            lock (_lock)
             {
-                List<Delegate> handlersCopy;
-                lock (_lock)
-                {
-                    if (!_handlers.TryGetValue(typeof(TEvent), out var delegates))
-                        return;
-                    handlersCopy = new List<Delegate>(delegates);
-                }
+                if (!_handlers.TryGetValue(typeof(TEvent), out var delegates))
+                    return;
+                handlersCopy = new List<Delegate>(delegates);
+            }
 
-                foreach (var del in handlersCopy)
+            foreach (var del in handlersCopy)
+            {
+                if (del is RtEventHandler<TEvent> handler)
                 {
-                    if (del is RtEventHandler<TEvent> handler)
+                    try
                     {
-                        try
-                        {
-                            handler(e);
-                        }
-                        catch (Exception ex)
-                        {
-                            Output.Log($"事件处理器执行异常 [{e.EventName}]: {ex.Message}", 3, "EventBus");
-                        }
+                        handler(e);
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"事件处理器执行异常 [{e.EventName}]: {ex.Message}", 3, "EventBus");
                     }
                 }
-            }
-            finally
-            {
-                _isPublishing = false;
             }
         }
 
@@ -179,12 +169,67 @@ namespace RtCli.Modules.Extension
     public class ServerStartEvent : RtEvent
     {
         public int Port { get; set; }
-        public ServerStartEvent(int port = 0) { Port = port; }
+        public string ServerKey { get; set; }
+        public ServerStartEvent(int port = 0, string serverKey = "") { Port = port; ServerKey = serverKey; }
     }
 
     public class ServerStopEvent : RtEvent
     {
-        public ServerStopEvent() { }
+        public string ServerKey { get; set; }
+        public ServerStopEvent(string serverKey = "") { ServerKey = serverKey; }
+    }
+
+    public class ServerDoneEvent : RtEvent
+    {
+        public string ServerKey { get; set; }
+        public string RawMessage { get; set; }
+        public ServerDoneEvent(string serverKey = "", string rawMessage = "") { ServerKey = serverKey; RawMessage = rawMessage; }
+    }
+
+    public class ServerCrashEvent : RtEvent
+    {
+        public string ServerKey { get; set; }
+        public int ExitCode { get; set; }
+        public ServerCrashEvent(string serverKey = "", int exitCode = -1) { ServerKey = serverKey; ExitCode = exitCode; }
+    }
+
+    public class AutoRestartEvent : RtEvent
+    {
+        public string ServerKey { get; set; }
+        public int AttemptCount { get; set; }
+        public int MaxRetries { get; set; }
+        public AutoRestartEvent(string serverKey = "", int attemptCount = 0, int maxRetries = 0) { ServerKey = serverKey; AttemptCount = attemptCount; MaxRetries = maxRetries; }
+    }
+
+    public class BackupStartEvent : RtEvent
+    {
+        public string ServerKey { get; set; }
+        public BackupStartEvent(string serverKey = "") { ServerKey = serverKey; }
+    }
+
+    public class BackupCompleteEvent : RtEvent
+    {
+        public string ServerKey { get; set; }
+        public string BackupPath { get; set; }
+        public long SizeBytes { get; set; }
+        public BackupCompleteEvent(string serverKey = "", string backupPath = "", long sizeBytes = 0) { ServerKey = serverKey; BackupPath = backupPath; SizeBytes = sizeBytes; }
+    }
+
+    public class TaskExecuteEvent : RtEvent
+    {
+        public string TaskName { get; set; }
+        public string ExecuteContent { get; set; }
+        public TaskExecuteEvent(string taskName = "", string executeContent = "") { TaskName = taskName; ExecuteContent = executeContent; }
+    }
+
+    public class SchedulerStartEvent : RtEvent
+    {
+        public SchedulerStartEvent() { }
+    }
+
+    public class SchedulerStopEvent : RtEvent
+    {
+        public SchedulerStopEvent() { }
     }
 
     public class CommandExecuteEvent : RtEvent

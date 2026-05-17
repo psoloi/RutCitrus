@@ -1,0 +1,227 @@
+@page
+@model RtPanel.Pages.ConsoleModel
+@{
+    ViewData["Title"] = "控制台";
+}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card bg-dark text-light border-secondary mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>命令执行</span>
+                <div>
+                    <button class="btn btn-sm btn-outline-info" onclick="clearLogs()">清空</button>
+                    <label class="btn btn-sm btn-outline-secondary mb-0">
+                        <input type="checkbox" id="autoScroll" checked onchange="toggleAutoScroll()" /> 自动滚动
+                    </label>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="logPanel" style="height: 480px; overflow-y: auto; background:#0d0d1a; padding:12px; font-family: 'Consolas','Courier New',monospace; font-size: 13px; line-height: 1.6;">
+                    <div class="text-muted">等待日志...</div>
+                </div>
+            </div>
+            <div class="card-footer">
+                <div class="input-group">
+                    <input type="text" id="cmdInput" class="form-control bg-dark text-light border-secondary"
+                           placeholder="输入命令 (如 rt status, .cfg reload, /say hello) 后按回车"
+                           autocomplete="off" list="commandList" />
+                    <datalist id="commandList"></datalist>
+                    <button class="btn btn-primary" onclick="executeCommand()" id="execBtn">执行</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card bg-dark text-light border-secondary mb-3">
+            <div class="card-header">快捷命令</div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('rt status')">rt status - 运行状态</button>
+                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('rt clients')">rt clients - 已连接面板</button>
+                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('rt extensions')">rt extensions - 扩展列表</button>
+                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('.server list')">.server list - 服务端列表</button>
+                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('.server status')">.server status - MC状态</button>
+                    <button class="btn btn-outline-warning btn-sm text-start" onclick="quickCmd('.cfg reload')">.cfg reload - 热重载配置</button>
+                    <button class="btn btn-outline-info btn-sm text-start" onclick="quickCmd('rt help')">rt help - 命令帮助</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header">连接信息</div>
+            <div class="card-body" id="connInfo">
+                <div class="text-muted">加载中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    let lastLogSeq = 0;
+    let autoScroll = true;
+    let commandHistory = [];
+    let historyIndex = -1;
+
+    function toggleAutoScroll() {
+        autoScroll = document.getElementById('autoScroll').checked;
+    }
+
+    function clearLogs() {
+        document.getElementById('logPanel').innerHTML = '<div class="text-muted">日志已清空</div>';
+    }
+
+    function appendLog(line) {
+        const panel = document.getElementById('logPanel');
+        const div = document.createElement('div');
+
+        // 根据日志级别着色
+        if (line.includes('|错误|')) div.className = 'text-danger';
+        else if (line.includes('|警告|')) div.className = 'text-warning';
+        else if (line.includes('|信息|')) div.className = 'text-success';
+        else div.className = 'text-secondary';
+
+        div.textContent = line;
+        panel.appendChild(div);
+
+        // 限制日志条数
+        while (panel.children.length > 500) {
+            panel.removeChild(panel.firstChild);
+        }
+
+        if (autoScroll) {
+            panel.scrollTop = panel.scrollHeight;
+        }
+    }
+
+    async function pollLogs() {
+        try {
+            const res = await fetch(`/api/console/logs?afterSeq=${lastLogSeq}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.lines && data.lines.length > 0) {
+                    data.lines.forEach(line => appendLog(line));
+                    lastLogSeq = data.latestSeq;
+                }
+                if (data.connected === false) {
+                    appendLog('[系统] 与服务器的连接已断开');
+                }
+            }
+        } catch (e) { }
+    }
+
+    async function executeCommand() {
+        const input = document.getElementById('cmdInput');
+        const cmd = input.value.trim();
+        if (!cmd) return;
+
+        const btn = document.getElementById('execBtn');
+        btn.disabled = true;
+
+        appendLog(`> ${cmd}`);
+
+        try {
+            const res = await fetch('/api/console/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: cmd })
+            });
+            const data = await res.json();
+            if (!data.success) {
+                appendLog(`[结果] ${data.message || data.result || '执行失败'}`);
+            }
+        } catch (e) {
+            appendLog(`[错误] 请求失败: ${e.message}`);
+        } finally {
+            btn.disabled = false;
+            input.value = '';
+            input.focus();
+        }
+
+        // 添加到历史
+        commandHistory.push(cmd);
+        if (commandHistory.length > 100) commandHistory.shift();
+        historyIndex = -1;
+    }
+
+    function quickCmd(cmd) {
+        document.getElementById('cmdInput').value = cmd;
+        executeCommand();
+    }
+
+    // 命令历史导航
+    document.getElementById('cmdInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            executeCommand();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (commandHistory.length > 0) {
+                if (historyIndex === -1) historyIndex = commandHistory.length - 1;
+                else if (historyIndex > 0) historyIndex--;
+                this.value = commandHistory[historyIndex];
+            }
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (historyIndex !== -1) {
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    this.value = commandHistory[historyIndex];
+                } else {
+                    historyIndex = -1;
+                    this.value = '';
+                }
+            }
+        }
+    });
+
+    // 加载命令列表用于自动补全
+    async function loadCommands() {
+        try {
+            const res = await fetch('/api/console/commands');
+            if (res.ok) {
+                const commands = await res.json();
+                const datalist = document.getElementById('commandList');
+                datalist.innerHTML = '';
+                commands.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.command;
+                    opt.label = c.description;
+                    datalist.appendChild(opt);
+                });
+            }
+        } catch (e) { }
+    }
+
+    // 加载连接信息
+    async function loadConnInfo() {
+        try {
+            const res = await fetch('/api/auth/status');
+            if (res.ok) {
+                const data = await res.json();
+                const el = document.getElementById('connInfo');
+                if (data.connected) {
+                    el.innerHTML = `
+                        <div class="mb-1"><span class="text-muted">服务器:</span> <span class="text-info">${data.serverName || '-'}</span></div>
+                        <div class="mb-1"><span class="text-muted">版本:</span> ${data.version || '-'}</div>
+                        <div class="mb-1"><span class="text-muted">地址:</span> ${data.host}:${data.port}</div>
+                        <div class="mb-1"><span class="text-muted">运行:</span> ${data.isRunning ? '<span class="text-success">是</span>' : '<span class="text-danger">否</span>'}</div>
+                        <div class="mb-1"><span class="text-muted">面板数:</span> ${data.connectedClientCount}</div>
+                        <div class="mb-1"><span class="text-muted">扩展数:</span> ${data.extensionCount}</div>
+                    `;
+                } else {
+                    el.innerHTML = '<div class="text-danger">未连接</div>';
+                }
+            }
+        } catch (e) { }
+    }
+
+    // 初始化
+    loadCommands();
+    loadConnInfo();
+    setInterval(pollLogs, 1000);
+    setInterval(loadConnInfo, 5000);
+    document.getElementById('cmdInput').focus();
+</script>
+}

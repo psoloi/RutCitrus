@@ -13,6 +13,9 @@ service RtCliService {
   rpc StreamLogs (Empty) returns (stream LogMessage);
   rpc GetClients (Empty) returns (ClientListResponse);
   rpc GetStatus (Empty) returns (StatusResponse);
+  rpc GetConfig (Empty) returns (ConfigResponse);
+  rpc SaveConfig (SaveConfigRequest) returns (SaveConfigResponse);
+  rpc GetCommandList (Empty) returns (CommandListResponse);
 }
 
 message Empty {}
@@ -85,4 +88,28 @@ message StatusResponse {
   int32 connected_client_count = 2;
   int32 extension_count = 3;
   string server_name = 4;
+}
+
+message ConfigResponse {
+  bool success = 1;
+  string content = 2;
+  string message = 3;
+}
+
+message SaveConfigRequest {
+  string content = 1;
+}
+
+message SaveConfigResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CommandInfo {
+  string command = 1;
+  string description = 2;
+}
+
+message CommandListResponse {
+  repeated CommandInfo commands = 1;
 }

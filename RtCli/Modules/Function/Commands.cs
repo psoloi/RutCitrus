@@ -54,6 +54,55 @@ namespace RtCli.Modules.Function
             return false;
         }
 
+        /// <summary>
+        /// 从完整输入中解析命令与参数并执行。
+        /// 采用最长前缀匹配：例如输入 "rte get 127.0.0.1:25565" 时，
+        /// 依次尝试 "rte get 127.0.0.1:25565" → "rte get" → "rte"，
+        /// 命中 "rte get" 后将 ["127.0.0.1:25565"] 作为参数传入。
+        /// </summary>
+        /// <param name="input">用户完整输入</param>
+        /// <returns>是否找到并执行了命令</returns>
+        public static bool TryExecuteWithArgs(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return false;
+
+            var parts = input.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+                return false;
+
+            // 从最长到最短依次尝试匹配
+            for (int len = parts.Length; len >= 1; len--)
+            {
+                string candidate = string.Join(' ', parts.Take(len)).ToLower();
+                if (_commands.TryGetValue(candidate, out var handler))
+                {
+                    string[] args = parts.Skip(len).ToArray();
+                    handler.Invoke(args);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 判断完整输入是否能匹配到某个已注册命令(含参数前缀匹配)。
+        /// </summary>
+        public static bool HasCommandWithArgs(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return false;
+
+            var parts = input.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            for (int len = parts.Length; len >= 1; len--)
+            {
+                string candidate = string.Join(' ', parts.Take(len)).ToLower();
+                if (_commands.ContainsKey(candidate))
+                    return true;
+            }
+            return false;
+        }
+
         public static bool HasCommand(string command)
         {
             return !string.IsNullOrWhiteSpace(command) && _commands.ContainsKey(command.ToLower());

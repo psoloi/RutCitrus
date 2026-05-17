@@ -3,45 +3,44 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using RtCli.Modules.Extension;
 
-namespace RtExtensionManager
+namespace RtCli.Modules.Extension
 {
     public interface IExtension
     {
         /// <summary>
-        /// 插件名称
+        /// 鎻掍欢鍚嶇О
         /// </summary>
         string Name { get; }
 
         /// <summary>
-        /// 插件版本
+        /// 鎻掍欢鐗堟湰
         /// </summary>
         string Version { get; }
 
         /// <summary>
-        /// 插件描述
+        /// 鎻掍欢鎻忚堪
         /// </summary>
         string Description { get; }
 
         /// <summary>
-        /// 加载插件
+        /// 鍔犺浇鎻掍欢
         /// </summary>
         void Load();
 
         /// <summary>
-        /// 运行插件
+        /// 杩愯鎻掍欢
         /// </summary>
         void Run();
 
         /// <summary>
-        /// 卸载插件
+        /// 鍗歌浇鎻掍欢
         /// </summary>
         void Unload();
     }
 
     /// <summary>
-    /// 插件信息
+    /// 鎻掍欢淇℃伅
     /// </summary>
     public class ExtensionInfo
     {

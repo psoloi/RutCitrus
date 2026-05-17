@@ -1,175 +1,66 @@
 @page
 @model RtPanel.Pages.ConnectModel
 @{
-    ViewData["Title"] = "连接服务器";
+    ViewData["Title"] = "连接状态";
 }
 
 <div class="container mt-4">
-    <h2>连接服务器</h2>
+    <h2>连接状态</h2>
 
-    <div id="connectionInfo" class="alert alert-info" style="display:none;"></div>
-
-    <div class="card mt-3">
-        <div class="card-body">
-            <div class="mb-3">
-                <label class="form-label">服务器地址</label>
-                <input type="text" class="form-control" id="serverHost" value="127.0.0.1" placeholder="IP地址">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">端口</label>
-                <input type="number" class="form-control" id="serverPort" value="7789" placeholder="端口号">
-            </div>
-            <button class="btn btn-primary" id="connectBtn" onclick="toggleConnection()">连接</button>
-        </div>
-    </div>
-
-    <div id="serverInfo" class="card mt-3" style="display:none;">
+    <div id="serverInfo" class="card bg-dark text-light border-secondary mt-3">
         <div class="card-header">服务器信息</div>
         <div class="card-body">
-            <p>服务器名称: <strong id="infoName">-</strong></p>
-            <p>版本: <strong id="infoVersion">-</strong></p>
-            <p>状态: <strong id="infoStatus">-</strong></p>
-            <p>连接客户端数: <strong id="infoClients">-</strong></p>
-            <p>扩展数量: <strong id="infoExtensions">-</strong></p>
+            <div class="row">
+                <div class="col-md-6">
+                    <p>服务器名称: <strong id="infoName" class="text-info">-</strong></p>
+                    <p>版本: <strong id="infoVersion">-</strong></p>
+                    <p>地址: <strong id="infoHost">-</strong></p>
+                </div>
+                <div class="col-md-6">
+                    <p>运行状态: <strong id="infoStatus">-</strong></p>
+                    <p>已连接面板: <strong id="infoClients">-</strong></p>
+                    <p>扩展数量: <strong id="infoExtensions">-</strong></p>
+                </div>
+            </div>
+            <hr />
+            <div class="d-flex gap-2">
+                <a href="/Console" class="btn btn-primary btn-sm">前往控制台</a>
+                <a href="/Config" class="btn btn-outline-secondary btn-sm">编辑配置</a>
+                <button class="btn btn-outline-danger btn-sm" onclick="logout()">登出并断开</button>
+            </div>
         </div>
     </div>
 </div>
 
 @section Scripts {
 <script>
-    let isConnected = false;
-    let pollTimer = null;
-
-    async function toggleConnection() {
-        if (isConnected) {
-            await fetch('/api/connect/disconnect', { method: 'POST' });
-            isConnected = false;
-            clearServerInfo();
-            stopPolling();
-            RtPanel.updateConnectionStatus(false);
-            updateUI();
-            RtPanel.showToast('已断开连接', 'info');
-            return;
-        }
-
-        const host = document.getElementById('serverHost').value;
-        const port = parseInt(document.getElementById('serverPort').value);
-
-        const btn = document.getElementById('connectBtn');
-        btn.disabled = true;
-        btn.textContent = '连接中...';
-
+    async function loadStatus() {
         try {
-            const response = await fetch('/api/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ host, port })
-            });
-
-            if (response.ok) {
-                const result = await response.json();
-                if (result.success) {
-                    isConnected = true;
-                    RtPanel.updateConnectionStatus(true);
-                    loadServerInfo();
-                    startPolling();
-                    RtPanel.showToast('连接成功', 'success');
+            const res = await fetch('/api/auth/status');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.connected) {
+                    document.getElementById('infoName').textContent = data.serverName || '-';
+                    document.getElementById('infoVersion').textContent = data.version || '-';
+                    document.getElementById('infoHost').textContent = `${data.host}:${data.port}`;
+                    document.getElementById('infoStatus').innerHTML = data.isRunning
+                        ? '<span class="text-success">运行中</span>' : '<span class="text-danger">未运行</span>';
+                    document.getElementById('infoClients').textContent = data.connectedClientCount;
+                    document.getElementById('infoExtensions').textContent = data.extensionCount;
                 } else {
-                    RtPanel.showToast('连接失败: ' + result.message, 'error');
+                    document.getElementById('infoName').textContent = '未连接';
                 }
             }
-        } catch (e) {
-            RtPanel.showToast('连接请求失败', 'error');
-        }
-
-        updateUI();
+        } catch (e) { }
     }
 
-    async function loadServerInfo() {
-        const response = await fetch('/api/connect/status');
-        if (response.ok) {
-            const info = await response.json();
-            if (!info.connected) {
-                handleServerDisconnected();
-                return;
-            }
-            document.getElementById('infoName').textContent = info.serverName || '-';
-            document.getElementById('infoVersion').textContent = info.version || '-';
-            document.getElementById('infoStatus').textContent = info.isRunning ? '运行中' : '未运行';
-            document.getElementById('infoClients').textContent = info.connectedClientCount;
-            document.getElementById('infoExtensions').textContent = info.extensionCount;
-            document.getElementById('serverInfo').style.display = '';
-        }
+    async function logout() {
+        if (!await RtPanel.showConfirm('登出', '确定要登出并断开与服务器的连接吗？')) return;
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
+        window.location.href = '/Login';
     }
 
-    function clearServerInfo() {
-        document.getElementById('infoName').textContent = '-';
-        document.getElementById('infoVersion').textContent = '-';
-        document.getElementById('infoStatus').textContent = '-';
-        document.getElementById('infoClients').textContent = '-';
-        document.getElementById('infoExtensions').textContent = '-';
-        document.getElementById('serverInfo').style.display = 'none';
-    }
-
-    function handleServerDisconnected() {
-        if (isConnected) {
-            isConnected = false;
-            clearServerInfo();
-            stopPolling();
-            RtPanel.updateConnectionStatus(false);
-            updateUI();
-            RtPanel.showToast('与服务器的连接已断开', 'warning', 5000);
-        }
-    }
-
-    function startPolling() {
-        stopPolling();
-        pollTimer = setInterval(async () => {
-            try {
-                const response = await fetch('/api/connect/status');
-                if (response.ok) {
-                    const info = await response.json();
-                    if (info.connected) {
-                        loadServerInfo();
-                    } else {
-                        handleServerDisconnected();
-                    }
-                } else {
-                    handleServerDisconnected();
-                }
-            } catch {
-                handleServerDisconnected();
-            }
-        }, 5000);
-    }
-
-    function stopPolling() {
-        if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-        }
-    }
-
-    function updateUI() {
-        const btn = document.getElementById('connectBtn');
-        btn.disabled = false;
-        btn.textContent = isConnected ? '断开连接' : '连接';
-        btn.className = isConnected ? 'btn btn-danger' : 'btn btn-primary';
-        document.getElementById('serverHost').disabled = isConnected;
-        document.getElementById('serverPort').disabled = isConnected;
-    }
-
-    async function checkConnection() {
-        const response = await fetch('/api/connect/status');
-        if (response.ok) {
-            const info = await response.json();
-            isConnected = info.connected;
-            RtPanel.updateConnectionStatus(isConnected);
-            updateUI();
-            if (isConnected) loadServerInfo();
-        }
-    }
-
-    checkConnection();
+    loadStatus();
+    setInterval(loadStatus, 5000);
 </script>
 }

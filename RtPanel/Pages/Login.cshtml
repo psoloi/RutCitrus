@@ -1,0 +1,168 @@
+@page
+@model RtPanel.Pages.LoginModel
+@{
+    ViewData["Title"] = "登录";
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>登录 - RtPanel</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <style>
+        body {
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-card {
+            background: rgba(22, 33, 62, 0.85);
+            backdrop-filter: blur(10px);
+            border: 1px solid #2a2a4a;
+            border-radius: 16px;
+            padding: 40px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+        }
+        .login-card h1 {
+            color: #6c63ff;
+            font-size: 1.8rem;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .login-card .subtitle {
+            color: #8888aa;
+            text-align: center;
+            margin-bottom: 28px;
+            font-size: 0.9rem;
+        }
+        .login-card label {
+            color: #b0b0cc;
+            font-size: 0.85rem;
+            margin-bottom: 4px;
+        }
+        .login-card .form-control {
+            background-color: #1a1a2e;
+            border: 1px solid #2a2a4a;
+            color: #e0e0e0;
+            border-radius: 8px;
+            padding: 10px 14px;
+        }
+        .login-card .form-control:focus {
+            background-color: #1a1a2e;
+            border-color: #6c63ff;
+            box-shadow: 0 0 0 3px rgba(108,99,255,0.15);
+            color: #e0e0e0;
+        }
+        .login-card .btn-primary {
+            background: #6c63ff;
+            border: none;
+            border-radius: 8px;
+            padding: 10px;
+            font-weight: 600;
+            width: 100%;
+        }
+        .login-card .btn-primary:hover {
+            background: #5a52d9;
+        }
+        .login-card .btn-primary:disabled {
+            background: #444466;
+        }
+        .alert-error {
+            background: rgba(220,53,69,0.15);
+            border: 1px solid rgba(220,53,69,0.4);
+            color: #ff6b7a;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.85rem;
+            display: none;
+        }
+        .port-input-group {
+            display: flex;
+            gap: 8px;
+        }
+        .port-input-group .host { flex: 1; }
+        .port-input-group .port { width: 100px; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h1>RtPanel</h1>
+        <p class="subtitle">RutCitrus 管理面板 - 请输入连接信息登录</p>
+
+        <div id="errorMsg" class="alert-error mb-3"></div>
+
+        <form id="loginForm" onsubmit="return false;">
+            <div class="mb-3">
+                <label class="d-block">gRPC 地址与端口</label>
+                <div class="port-input-group">
+                    <input type="text" class="form-control host" id="host" value="127.0.0.1" placeholder="主机地址" />
+                    <input type="number" class="form-control port" id="port" value="7789" placeholder="端口" />
+                </div>
+            </div>
+            <div class="mb-3">
+                <label>认证密钥</label>
+                <input type="password" class="form-control" id="authKey" placeholder="输入 gRPC 认证密钥" autocomplete="off" />
+            </div>
+            <button type="submit" class="btn btn-primary" id="loginBtn" onclick="doLogin()">
+                <span id="btnText">登录</span>
+                <span id="btnSpinner" class="spinner-border spinner-border-sm ms-1" role="status" style="display:none;"></span>
+            </button>
+        </form>
+    </div>
+
+    <script>
+        async function doLogin() {
+            const host = document.getElementById('host').value.trim();
+            const port = parseInt(document.getElementById('port').value) || 7789;
+            const authKey = document.getElementById('authKey').value.trim();
+            const errorMsg = document.getElementById('errorMsg');
+            const btn = document.getElementById('loginBtn');
+            const btnText = document.getElementById('btnText');
+            const btnSpinner = document.getElementById('btnSpinner');
+
+            if (!host) { errorMsg.textContent = '请输入主机地址'; errorMsg.style.display = 'block'; return; }
+            if (!authKey) { errorMsg.textContent = '请输入认证密钥'; errorMsg.style.display = 'block'; return; }
+
+            btn.disabled = true;
+            btnText.textContent = '连接中...';
+            btnSpinner.style.display = 'inline-block';
+            errorMsg.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ host, port, authKey })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    window.location.href = '/Console';
+                } else {
+                    errorMsg.textContent = data.message || '登录失败';
+                    errorMsg.style.display = 'block';
+                }
+            } catch (e) {
+                errorMsg.textContent = '网络错误: ' + e.message;
+                errorMsg.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btnText.textContent = '登录';
+                btnSpinner.style.display = 'none';
+            }
+        }
+
+        document.getElementById('authKey').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') doLogin();
+        });
+    </script>
+</body>
+</html>

@@ -1,6 +1,5 @@
 using RtCli.Modules.Extension;
 using RtCli.Modules.Function;
-using RtExtensionManager;
 using Spectre.Console;
 using System;
 using System.Collections.Generic;
@@ -47,7 +46,7 @@ namespace RtCli.Modules
             {
                 string? currentProcessPath = Environment.ProcessPath;
                 Analyzer.StopServer();
-                RtExtensionManager.RtExtensionManager.UnloadAll();
+                RtExtensionManager.UnloadAll();
                 Program.ReleaseMutex();
                 Console.Clear();
                 if (currentProcessPath != null)
@@ -80,7 +79,7 @@ namespace RtCli.Modules
             {
                 Analyzer.StopServer();
                 EventBus.Publish(new ProgramShutdownEvent());
-                RtExtensionManager.RtExtensionManager.UnloadAll();
+                RtExtensionManager.UnloadAll();
                 Output.CloseLogging();
                 Output.TextBlock(Modules.Unit.I18n.Get("main_end"), 1, "Task#0");
                 Program.ReleaseMutex();

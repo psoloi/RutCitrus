@@ -1,3 +1,4 @@
+using RtCli.Modules.Extension;
 using RtCli.Modules.Unit;
 using Spectre.Console;
 using System;
@@ -15,7 +16,7 @@ using System.Threading.Tasks;
 
 namespace RtCli.Modules.Function
 {
-    internal class Analyzer
+    public class Analyzer
     {
         private static Process? _serverProcess;
         private static StreamWriter? _serverInput;
@@ -30,8 +31,8 @@ namespace RtCli.Modules.Function
         private static string _currentMode = "RCON";
         private static bool _isRunModeActive = false;
 
-        private static readonly object _logBufferLock = new object();
-        private static readonly List<string> _logBuffer = new List<string>();
+        internal static readonly object _logBufferLock = new object();
+        internal static readonly List<string> _logBuffer = new List<string>();
         private const int MaxLogBufferSize = 5000;
 
         private static CancellationTokenSource? _clientGuideCts;
@@ -45,21 +46,33 @@ namespace RtCli.Modules.Function
         private static readonly string ConfigBackupDir = Path.Combine(Path.GetDirectoryName(Config.DataPath)!, "config_backup");
 
         private static RconClient? _rconClient;
+        private static int _restartAttemptCount = 0;
+        private static bool _userInitiatedStop = false;
 
         public static IReadOnlyList<MinecraftServerInfo> LastScanResults
         {
             get { lock (_scanLock) { return _lastScanResults.ToList(); } }
         }
         public static string CurrentMode => _currentMode;
+        /// <summary>Run模式 - 启动MC服务端作为子进程，通过stdin发送命令</summary>
         public static bool IsRunMode => _currentMode == "RUN";
+        /// <summary>Rcon模式 - 启动MC服务端作为子进程读取日志 + RCON发送命令</summary>
         public static bool IsRconMode => _currentMode == "RCON";
+        /// <summary>OnlyRcon模式 - 连接已运行的MC服务端(日志文件+RCON)</summary>
+        public static bool IsOnlyRconMode => _currentMode == "ONLYRCON";
+        /// <summary>Management模式 - 启动MC服务端读取日志，命令由管理模式处理</summary>
+        public static bool IsManagementMode => _currentMode == "MANAGEMENT";
+        /// <summary>是否需要启动MC服务端作为子进程(Run/Rcon/Management)</summary>
+        public static bool NeedsRunServer => _currentMode == "RUN" || _currentMode == "RCON" || _currentMode == "MANAGEMENT";
+        /// <summary>是否使用RCON发送命令(Rcon/OnlyRcon)</summary>
+        public static bool UsesRconCommands => _currentMode == "RCON" || _currentMode == "ONLYRCON";
 
         public static void Initialize()
         {
-            _currentMode = Config.App.AnalyzerMode.ToUpperInvariant();
-            if (_currentMode != "RUN" && _currentMode != "RCON")
+            _currentMode = Config.CurrentServer.AnalyzerMode.ToUpperInvariant();
+            if (_currentMode != "RUN" && _currentMode != "RCON" && _currentMode != "ONLYRCON" && _currentMode != "MANAGEMENT")
             {
-                _currentMode = "RCON";
+                _currentMode = "MANAGEMENT";
             }
         }
 
@@ -71,9 +84,9 @@ namespace RtCli.Modules.Function
         {
             string ThisProgramName = "Analyzer";
 
-            if (_currentMode != "RUN")
+            if (!NeedsRunServer)
             {
-                Output.Log("当前模式为 RCON，无法使用 RUN 模式启动服务端。请在配置文件中设置 analyzer_mode 为 RUN。", 2, ThisProgramName);
+                Output.Log("当前模式为 OnlyRcon，无法启动服务端。请在配置文件中设置 analyzer_mode 为 Run/Rcon/Management。", 2, ThisProgramName);
                 return;
             }
 
@@ -83,8 +96,8 @@ namespace RtCli.Modules.Function
                 return;
             }
 
-            string workPath = Config.App.WorkPath;
-            string flags = Config.App.RunServerFlags;
+            string? workPath = Config.CurrentServer.WorkPath;
+            string flags = Config.CurrentServer.RunServerFlags;
 
             if (string.IsNullOrWhiteSpace(workPath))
             {
@@ -114,7 +127,7 @@ namespace RtCli.Modules.Function
                 {
                     StartInfo = new ProcessStartInfo
                     {
-                        FileName = "java",
+                        FileName = string.IsNullOrWhiteSpace(Config.CurrentServer.JavaPath) ? "java" : Config.CurrentServer.JavaPath,
                         Arguments = flags,
                         WorkingDirectory = workPath,
                         UseShellExecute = false,
@@ -133,7 +146,42 @@ namespace RtCli.Modules.Function
                     if (!string.IsNullOrEmpty(e.Data))
                     {
                         AddToLogBuffer(e.Data);
-                        Output.Log(e.Data, 0, _connectedServerName);
+                        if (!ShouldHideConsole())
+                            Output.Log(e.Data, 0, _connectedServerName);
+
+                        // 自动检测EULA提示
+                        if (e.Data.Contains("eula=false", StringComparison.OrdinalIgnoreCase) ||
+                            e.Data.Contains("You need to agree to the EULA", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (Config.App.AutoAgreeEula && !string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
+                            {
+                                string eulaPath = Path.Combine(Config.CurrentServer.WorkPath, "eula.txt");
+                                if (File.Exists(eulaPath))
+                                {
+                                    try
+                                    {
+                                        string content = File.ReadAllText(eulaPath);
+                                        if (content.Contains("eula=false"))
+                                        {
+                                            content = content.Replace("eula=false", "eula=true");
+                                            File.WriteAllText(eulaPath, content);
+                                            Output.Log("已自动同意 EULA，正在重启服务端...", 1, "Analyzer");
+                                            _ = Task.Run(async () =>
+                                            {
+                                                await Task.Delay(2000);
+                                                StopServer();
+                                                await Task.Delay(1000);
+                                                StartServer();
+                                            });
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Output.Log($"自动同意EULA失败: {ex.Message}", 2, "Analyzer");
+                                    }
+                                }
+                            }
+                        }
                     }
                 };
 
@@ -142,7 +190,8 @@ namespace RtCli.Modules.Function
                     if (!string.IsNullOrEmpty(e.Data))
                     {
                         AddToLogBuffer(e.Data);
-                        Output.Log(e.Data, 0, _connectedServerName);
+                        if (!ShouldHideConsole())
+                            Output.Log(e.Data, 0, _connectedServerName);
                     }
                 };
 
@@ -154,16 +203,72 @@ namespace RtCli.Modules.Function
 
                 _isRunModeActive = true;
                 _attachedProcessId = _serverProcess.Id;
-                _connectedServerName = Config.App.ServerName;
+                _connectedServerName = Config.CurrentServer.ServerName;
+                _restartAttemptCount = 0;
+                _userInitiatedStop = false;
 
                 _outputCts = new CancellationTokenSource();
                 _ = Task.Run(() => MonitorServerProcess(_outputCts.Token), _outputCts.Token);
 
-                Output.Log($"已启动服务端 (PID: {_serverProcess.Id})", 1, ThisProgramName);
+                Output.Log($"已启动服务端 (PID: {_serverProcess.Id}) 模式: {_currentMode}", 1, ThisProgramName);
+                EventBus.Publish(new ServerStartEvent(Config.App.GrpcPort, Config.App.CurrentServer));
+
+                // Little备份：服务端启动时触发首次完整备份
+                if (Config.App.AutoBackupEnabled && Config.App.AutoBackupLittleEnabled)
+                {
+                    _ = Task.Run(() =>
+                    {
+                        try
+                        {
+                            System.Threading.Thread.Sleep(5000); // 等待服务端文件稳定
+                            Intelligence.TriggerLittleFullBackupIfNeeded();
+                        }
+                        catch { }
+                    });
+                }
                 Output.Log($"工作目录: {workPath}", 1, ThisProgramName);
                 Output.Log($"启动参数: java {flags}", 1, ThisProgramName);
-                Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
+
+                // Rcon模式：启动后尝试RCON连接
+                if (UsesRconCommands)
+                {
+                    _rconClient = new RconClient();
+                    Output.Log("Rcon模式：将在服务端启动完成后自动连接RCON...", 1, ThisProgramName);
+                    _ = Task.Run(() =>
+                    {
+                        // 等待服务端启动完成（最多等待5分钟）
+                        for (int i = 0; i < 300; i++)
+                        {
+                            if (!_isRunModeActive) break;
+                            Thread.Sleep(1000);
+                            try
+                            {
+                                if (_rconClient.Connect(
+                                    Config.CurrentServer.RconHost,
+                                    Config.CurrentServer.RconPort,
+                                    Config.CurrentServer.RconPassword))
+                                {
+                                    Output.Log($"RCON 已连接 ({Config.CurrentServer.RconHost}:{Config.CurrentServer.RconPort})", 1, ThisProgramName);
+                                    break;
+                                }
+                            }
+                            catch { }
+                        }
+                    });
+                    Output.Log("使用 / 开头的命令通过RCON发送到服务端。", 1, ThisProgramName);
+                }
+                else if (IsRunMode)
+                {
+                    Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
+                }
+                else if (IsManagementMode)
+                {
+                    Output.Log("Management模式：日志读取已启动，使用stdin发送命令。", 1, ThisProgramName);
+                }
+
                 Output.Log("输入 .server stop 停止服务端。", 1, ThisProgramName);
+
+                Intelligence.StartAutoTips();
             }
             catch (Exception ex)
             {
@@ -178,9 +283,11 @@ namespace RtCli.Modules.Function
 
             if (!_isRunModeActive)
             {
-                Output.Log("服务端未在运行。", 2, ThisProgramName);
+                Output.Log("服务端未在运行。", 1, ThisProgramName);
                 return;
             }
+
+            _userInitiatedStop = true;
 
             try
             {
@@ -204,7 +311,7 @@ namespace RtCli.Modules.Function
             }
 
             CleanupRunMode();
-            Output.Log("服务端已停止。", 1, ThisProgramName);
+            Intelligence.StopAutoTips();
         }
 
         private static void MonitorServerProcess(CancellationToken cancellationToken)
@@ -218,6 +325,36 @@ namespace RtCli.Modules.Function
                         int exitCode = _serverProcess?.ExitCode ?? -1;
                         Output.Log($"服务端进程已退出 (退出码: {exitCode})", 0, "Analyzer");
                         CleanupRunMode();
+                        Intelligence.StopAutoTips();
+
+                        // 自动重启逻辑
+                        if (!_userInitiatedStop && Config.CurrentServer.AutoRestart && NeedsRunServer)
+                        {
+                            int maxRetries = Config.CurrentServer.AutoRestartMaxRetries;
+                            if (maxRetries == 0 || _restartAttemptCount < maxRetries)
+                            {
+                                _restartAttemptCount++;
+                                EventBus.Publish(new ServerCrashEvent(Config.App.CurrentServer, exitCode));
+                                EventBus.Publish(new AutoRestartEvent(Config.App.CurrentServer, _restartAttemptCount, maxRetries));
+                                Output.Log($"[yellow]自动重启[/] 第 {_restartAttemptCount} 次{(maxRetries > 0 ? $"/{maxRetries}" : "")}，5秒后重启...", 1, "Analyzer");
+                                Thread.Sleep(5000);
+                                if (!_userInitiatedStop)
+                                {
+                                    StartServer();
+                                }
+                            }
+                            else
+                            {
+                                Output.Log($"已达到最大自动重启次数 ({maxRetries})，不再尝试。", 2, "Analyzer");
+                                _restartAttemptCount = 0;
+                            }
+                        }
+                        else
+                        {
+                            _restartAttemptCount = 0;
+                            EventBus.Publish(new ServerStopEvent(Config.App.CurrentServer));
+                            Output.Log("服务端已停止。", 1, "Analyzer");
+                        }
                         break;
                     }
                     Thread.Sleep(500);
@@ -326,9 +463,9 @@ namespace RtCli.Modules.Function
         {
             string ThisProgramName = "Analyzer";
 
-            if (_currentMode == "RUN")
+            if (!IsOnlyRconMode)
             {
-                Output.Log("当前为 RUN 模式，不支持 .server connect。请使用 .server start 启动服务端。", 2, ThisProgramName);
+                Output.Log("当前模式不支持 .server connect。OnlyRcon模式下才可连接已运行的服务端。", 2, ThisProgramName);
                 return;
             }
 
@@ -349,15 +486,16 @@ namespace RtCli.Modules.Function
 
             var selectedServer = scanResults[index - 1];
             AttachToServerRcon(selectedServer, index.ToString());
+            Intelligence.StartAutoTips();
         }
 
         public static void ConnectToServerByPid(int pid)
         {
             string ThisProgramName = "Analyzer";
 
-            if (_currentMode == "RUN")
+            if (!IsOnlyRconMode)
             {
-                Output.Log("当前为 RUN 模式，不支持 .server connect。请使用 .server start 启动服务端。", 2, ThisProgramName);
+                Output.Log("当前模式不支持 .server connect。OnlyRcon模式下才可连接已运行的服务端。", 2, ThisProgramName);
                 return;
             }
 
@@ -381,6 +519,7 @@ namespace RtCli.Modules.Function
                     CommandLine = ""
                 };
                 AttachToServerRcon(tempServer, $"PID:{pid}");
+                Intelligence.StartAutoTips();
             }
             catch (Exception ex)
             {
@@ -432,9 +571,9 @@ namespace RtCli.Modules.Function
                     try
                     {
                         rconConnected = _rconClient.Connect(
-                            Config.App.RconHost,
-                            Config.App.RconPort,
-                            Config.App.RconPassword);
+                            Config.CurrentServer.RconHost,
+                            Config.CurrentServer.RconPort,
+                            Config.CurrentServer.RconPassword);
                     }
                     catch (Exception ex)
                     {
@@ -445,7 +584,7 @@ namespace RtCli.Modules.Function
                     Output.Log($"日志文件: {logFile}", 1, ThisProgramName);
                     if (rconConnected)
                     {
-                        Output.Log($"RCON 已连接 ({Config.App.RconHost}:{Config.App.RconPort})", 1, ThisProgramName);
+                        Output.Log($"RCON 已连接 ({Config.CurrentServer.RconHost}:{Config.CurrentServer.RconPort})", 1, ThisProgramName);
                     }
                     else
                     {
@@ -509,7 +648,8 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrWhiteSpace(line))
                     {
-                        Output.Log(line, 0, serverName);
+                        if (!ShouldHideConsole())
+                            Output.Log(line, 0, serverName);
                     }
                 }
 
@@ -525,15 +665,25 @@ namespace RtCli.Modules.Function
 
         public static bool IsAttached => _attachedProcessId != 0 || _isRunModeActive;
 
+        public static Process? GetServerProcess() => _serverProcess;
+
+        private static bool ShouldHideConsole()
+        {
+            var hideList = Config.App.HideConsoleServers;
+            if (hideList == null || hideList.Count == 0)
+                return false;
+            return hideList.Contains(Config.App.CurrentServer);
+        }
+
         public static void SendCommand(string command)
         {
             lock (_attachLock)
             {
-                if (_currentMode == "RUN")
+                if (IsRunMode || IsManagementMode)
                 {
                     SendCommandRunMode(command);
                 }
-                else
+                else if (UsesRconCommands)
                 {
                     SendCommandRconMode(command);
                 }
@@ -601,15 +751,9 @@ namespace RtCli.Modules.Function
             }
         }
 
-        public static void AnalyzeErrors()
+        public static void AnalyzeErrors(string? filePath = null)
         {
             string ThisProgramName = "Analyzer";
-
-            if (!IsRunModeActive && !IsAttached)
-            {
-                Output.Log("未连接到 MC 服务端，无法分析错误日志。", 2, ThisProgramName);
-                return;
-            }
 
             ContentManager.Initialize();
 
@@ -634,35 +778,64 @@ namespace RtCli.Modules.Function
             }
 
             List<string> logLines;
-            lock (_logBufferLock)
-            {
-                logLines = _logBuffer.ToList();
-            }
 
-            if (logLines.Count == 0)
+            if (!string.IsNullOrWhiteSpace(filePath))
             {
-                if (IsRunModeActive && !string.IsNullOrWhiteSpace(Config.App.WorkPath))
+                if (!File.Exists(filePath))
                 {
-                    string logFile = Path.Combine(Config.App.WorkPath, "logs", "latest.log");
-                    if (File.Exists(logFile))
-                    {
-                        try
-                        {
-                            logLines = File.ReadAllLines(logFile).ToList();
-                            Output.Log($"从日志文件读取了 {logLines.Count} 行。", 1, ThisProgramName);
-                        }
-                        catch (Exception ex)
-                        {
-                            Output.Log($"读取日志文件失败: {ex.Message}", 3, ThisProgramName);
-                            return;
-                        }
-                    }
+                    Output.Log($"文件不存在: {filePath}", 2, ThisProgramName);
+                    return;
+                }
+
+                try
+                {
+                    logLines = File.ReadAllLines(filePath, Encoding.GetEncoding(0)).ToList();
+                    Output.Log($"从外部文件读取了 {logLines.Count} 行: {filePath}", 1, ThisProgramName);
+                }
+                catch (Exception ex)
+                {
+                    Output.Log($"读取文件失败: {ex.Message}", 3, ThisProgramName);
+                    return;
+                }
+            }
+            else
+            {
+                if (!IsRunModeActive && !IsAttached)
+                {
+                    Output.Log("未连接到 MC 服务端，无法分析错误日志。使用 .fx get <路径> 分析外部日志文件。", 2, ThisProgramName);
+                    return;
+                }
+
+                lock (_logBufferLock)
+                {
+                    logLines = _logBuffer.ToList();
                 }
 
                 if (logLines.Count == 0)
                 {
-                    Output.Log("没有可分析的日志内容。", 2, ThisProgramName);
-                    return;
+                    if (IsRunModeActive && !string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
+                    {
+                        string logFile = Path.Combine(Config.CurrentServer.WorkPath, "logs", "latest.log");
+                        if (File.Exists(logFile))
+                        {
+                            try
+                            {
+                                logLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0)).ToList();
+                                Output.Log($"从日志文件读取了 {logLines.Count} 行。", 1, ThisProgramName);
+                            }
+                            catch (Exception ex)
+                            {
+                                Output.Log($"读取日志文件失败: {ex.Message}", 3, ThisProgramName);
+                                return;
+                            }
+                        }
+                    }
+
+                    if (logLines.Count == 0)
+                    {
+                        Output.Log("没有可分析的日志内容。", 2, ThisProgramName);
+                        return;
+                    }
                 }
             }
 
@@ -1079,6 +1252,241 @@ namespace RtCli.Modules.Function
             AnsiConsole.Write(root);
         }
 
+        #region Base
+
+        public static void BaseAnalyze(string? rangeArg)
+        {
+            string ThisProgramName = "Base";
+
+            var errors = ContentManager.LoadErrorLog();
+            if (errors.Count == 0)
+            {
+                Output.Log("没有错误分析结果，请先使用 .fx get 分析错误日志。", 2, ThisProgramName);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(rangeArg))
+            {
+                Output.Log("用法: .fx base <n> 或 .fx base <n-m>", 1, ThisProgramName);
+                Output.Log("  n   - 分析第n个错误", 1, ThisProgramName);
+                Output.Log("  n-m - 合并第n到m个错误后分析", 1, ThisProgramName);
+                Output.Log($"当前共有 {errors.Count} 条错误记录，使用 .fx list 查看。", 1, ThisProgramName);
+                return;
+            }
+
+            List<int>? targetIndices = ParseRange(rangeArg, errors.Keys.ToList());
+            if (targetIndices == null || targetIndices.Count == 0)
+            {
+                Output.Log($"无效的范围参数: {rangeArg}", 2, ThisProgramName);
+                return;
+            }
+
+            var sb = new StringBuilder();
+            foreach (int idx in targetIndices)
+            {
+                if (errors.TryGetValue(idx, out string? errorText))
+                {
+                    sb.AppendLine(errorText);
+                    sb.AppendLine("---");
+                }
+                else
+                {
+                    Output.Log($"编号 {idx} 的错误记录不存在。", 2, ThisProgramName);
+                    return;
+                }
+            }
+
+            string combinedError = sb.ToString();
+            Output.Log($"正在分析 {targetIndices.Count} 条错误记录...", 1, ThisProgramName);
+
+            var baseEntries = ContentManager.GetAllBaseEntries();
+            var matches = new List<(BaseEntry Entry, Match Match, double Score)>();
+
+            foreach (var entry in baseEntries)
+            {
+                try
+                {
+                    var regex = new Regex(entry.Pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
+                    var match = regex.Match(combinedError);
+                    if (match.Success)
+                    {
+                        double score = (double)match.Value.Length / combinedError.Length;
+                        matches.Add((entry, match, score));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Output.Log($"正则表达式无效 [{entry.Topic}]: {ex.Message}", 2, ThisProgramName);
+                }
+            }
+
+            matches = matches.OrderByDescending(m => m.Match.Value.Length).ThenByDescending(m => m.Score).ToList();
+
+            if (matches.Count == 0)
+            {
+                Output.Log("未匹配到已知的基础错误模式。", 2, ThisProgramName);
+                Output.Log("原始错误内容:", 1, ThisProgramName);
+
+                var panel = new Panel(Markup.Escape(combinedError.Length > 500 ? combinedError.Substring(0, 497) + "..." : combinedError))
+                    .Header("[yellow]未识别的错误[/]")
+                    .Border(BoxBorder.Rounded);
+                AnsiConsole.Write(panel);
+                return;
+            }
+
+            var rule = new Rule($"[cyan]基础分析结果 - 匹配 {matches.Count} 个模式[/]");
+            AnsiConsole.Write(rule);
+
+            for (int i = 0; i < matches.Count; i++)
+            {
+                var (entry, match, score) = matches[i];
+
+                var table = new Table()
+                    .Border(TableBorder.Rounded)
+                    .AddColumn("项目", c => c.Width(12))
+                    .AddColumn("内容", c => c.Width(68));
+
+                table.AddRow("序号", $"{i + 1}");
+                table.AddRow("问题主题", $"[cyan]{Markup.Escape(entry.Topic)}[/]");
+                table.AddRow("解决方案", Markup.Escape(entry.Solution));
+
+                string matchedText = match.Value.Length > 200
+                    ? match.Value.Substring(0, 197) + "..."
+                    : match.Value;
+                table.AddRow("匹配内容", Markup.Escape(matchedText));
+                table.AddRow("匹配长度", $"{match.Value.Length} 字符");
+
+                if (!string.IsNullOrEmpty(entry.Action))
+                {
+                    table.AddRow("Action", Markup.Escape(entry.Action));
+                    Scripts.ExecuteScriptByName(entry.Action);
+                }
+
+                AnsiConsole.Write(table);
+                AnsiConsole.WriteLine();
+            }
+        }
+
+        private static List<int>? ParseRange(string rangeArg, List<int> availableKeys)
+        {
+            availableKeys.Sort();
+
+            if (int.TryParse(rangeArg, out int singleIndex))
+            {
+                if (availableKeys.Contains(singleIndex))
+                    return new List<int> { singleIndex };
+                return null;
+            }
+
+            if (rangeArg.Contains('-'))
+            {
+                var parts = rangeArg.Split('-', 2);
+                if (parts.Length == 2 && int.TryParse(parts[0], out int start) && int.TryParse(parts[1], out int end))
+                {
+                    if (start > end)
+                        return null;
+
+                    var result = new List<int>();
+                    for (int i = start; i <= end; i++)
+                    {
+                        if (availableKeys.Contains(i))
+                            result.Add(i);
+                    }
+                    return result.Count > 0 ? result : null;
+                }
+            }
+
+            return null;
+        }
+
+        private static volatile bool _aiRunning = false;
+        private static readonly object _aiLock = new object();
+
+        public static async Task AiAnalyze(string? rangeArg)
+        {
+            string ThisProgramName = "AI";
+
+            lock (_aiLock)
+            {
+                if (_aiRunning)
+                {
+                    Output.Log("AI分析正在执行中，请等待当前分析完成。", 2, ThisProgramName);
+                    return;
+                }
+                _aiRunning = true;
+            }
+
+            try
+            {
+
+            var errors = ContentManager.LoadErrorLog();
+            if (errors.Count == 0)
+            {
+                Output.Log("没有错误分析结果，请先使用 .fx get 分析错误日志。", 2, ThisProgramName);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(rangeArg))
+            {
+                Output.Log("用法: .fx ai <n> 或 .fx ai <n-m>", 1, ThisProgramName);
+                Output.Log("  n   - 将第n个错误发送给AI分析", 1, ThisProgramName);
+                Output.Log("  n-m - 合并第n到m个错误后发送给AI分析", 1, ThisProgramName);
+                Output.Log($"当前共有 {errors.Count} 条错误记录，使用 .fx list 查看。", 1, ThisProgramName);
+                return;
+            }
+
+            List<int>? targetIndices = ParseRange(rangeArg, errors.Keys.ToList());
+            if (targetIndices == null || targetIndices.Count == 0)
+            {
+                Output.Log($"无效的范围参数: {rangeArg}", 2, ThisProgramName);
+                return;
+            }
+
+            var sb = new StringBuilder();
+            foreach (int idx in targetIndices)
+            {
+                if (errors.TryGetValue(idx, out string? errorText))
+                {
+                    sb.AppendLine(errorText);
+                    sb.AppendLine("---");
+                }
+                else
+                {
+                    Output.Log($"编号 {idx} 的错误记录不存在。", 2, ThisProgramName);
+                    return;
+                }
+            }
+
+            string combinedError = sb.ToString();
+            Output.Log($"正在将 {targetIndices.Count} 条错误发送给AI分析...", 1, ThisProgramName);
+
+            string? aiResponse = await Intelligence.AnalyzeWithAi(combinedError);
+
+            if (string.IsNullOrWhiteSpace(aiResponse))
+            {
+                Output.Log("AI分析未返回结果。", 2, ThisProgramName);
+                return;
+            }
+
+            var rule = new Rule("[cyan]AI 分析结果[/]");
+            AnsiConsole.Write(rule);
+
+            var lines = aiResponse.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+            foreach (var line in lines)
+            {
+                Output.Log(line, 0, "AI");
+            }
+
+            ContentManager.SaveAiResponse(targetIndices.FirstOrDefault(), combinedError, aiResponse);
+            }
+            finally
+            {
+                _aiRunning = false;
+            }
+        }
+
+        #endregion
+
         #region Filter
 
         public static void FilterInfo()
@@ -1466,13 +1874,13 @@ namespace RtCli.Modules.Function
 
         private static string GetWorkPath()
         {
-            string workPath = Config.App.WorkPath;
+            string? workPath = Config.CurrentServer.WorkPath;
 
             if (!string.IsNullOrWhiteSpace(workPath) && Directory.Exists(workPath))
                 return workPath;
 
-            if (IsRunModeActive && !string.IsNullOrWhiteSpace(Config.App.WorkPath))
-                return Config.App.WorkPath;
+            if (IsRunModeActive && !string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
+                return Config.CurrentServer.WorkPath;
 
             workPath = FindServerPathFromScan();
             return workPath ?? "";
@@ -1495,6 +1903,7 @@ namespace RtCli.Modules.Function
         private static void DetachCore()
         {
             _clientGuideCts?.Cancel();
+            Intelligence.StopAutoTips();
 
             _outputCts?.Cancel();
             _outputCts?.Dispose();
@@ -1511,7 +1920,7 @@ namespace RtCli.Modules.Function
             _connectedServerName = "";
             Interlocked.Exchange(ref _logFilePosition, 0);
 
-            if (!_isRunModeActive && _currentMode != "RUN")
+            if (!_isRunModeActive && NeedsRunServer)
             {
                 Output.Log("断开与 Minecraft 服务端的连接。", 1, "Analyzer");
             }
@@ -1772,7 +2181,7 @@ namespace RtCli.Modules.Function
         }
     }
 
-    internal class MinecraftServerInfo
+    public class MinecraftServerInfo
     {
         public int ProcessId { get; set; }
         public string ProcessName { get; set; } = "";

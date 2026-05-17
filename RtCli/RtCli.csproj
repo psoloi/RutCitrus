@@ -8,13 +8,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PublishAot>False</PublishAot>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationIcon>rc.ico</ApplicationIcon>
     
     <!-- 版本号定义 - 程序版本号规则：主版本号.日期yyyymmdd.次版本号.编译号 -->
-    <VersionPrefix>1.20260517.1.9</VersionPrefix>
-	<AssemblyVersion>1.2605.1.9</AssemblyVersion>
-    <FileVersion>1.2605.1.9</FileVersion>
+    <VersionPrefix>1.20260628.6.3</VersionPrefix>
+	<AssemblyVersion>1.2606.6.3</AssemblyVersion>
+    <FileVersion>1.2606.6.3</FileVersion>
     <InformationalVersion>$(VersionPrefix)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     
@@ -29,21 +28,32 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Content\**\*" Exclude="Content\Data\**;Content\Logs\**;Content\Extension\**;Content\Scripts\**;Content\Server\**;Content\backup\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CS-Script" Version="4.14.9" />
+    <PackageReference Include="CSnakes.Runtime" Version="1.2.1" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.80.0" />
     <PackageReference Include="Grpc.Core" Version="2.46.6" />
-    <PackageReference Include="Grpc.Tools" Version="2.80.0">
+    <PackageReference Include="Grpc.Tools" Version="2.81.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Google.Protobuf" Version="3.34.1" />
-    <PackageReference Include="IronPython" Version="3.4.2" />
+    <PackageReference Include="Google.Protobuf" Version="3.35.0" />
+    <PackageReference Include="Hangfire.Core" Version="1.8.23" />
+    <PackageReference Include="Hangfire.InMemory" Version="1.0.0" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Polly" Version="8.6.6" />
     <PackageReference Include="RestSharp" Version="114.0.0" />
     <PackageReference Include="Serilog" Version="4.3.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="System.Management" Version="10.0.8" />
-    <PackageReference Include="YamlDotNet" Version="17.1.0" />
+    <PackageReference Include="System.Private.Uri" Version="4.3.2" />
+    <PackageReference Include="YamlDotNet" Version="18.0.0" />
   </ItemGroup>
 
   <ItemGroup>

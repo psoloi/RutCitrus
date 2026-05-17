@@ -1,7 +1,7 @@
 using Grpc.Core;
 using RtCli.Grpc;
 using RtCli.Modules;
-using RtExtensionManager;
+using RtCli.Modules.Extension;
 using Spectre.Console;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -18,8 +18,8 @@ namespace RtCli.Modules.Unit
         private static readonly List<IServerStreamWriter<LogMessage>> _logSubscribers = new();
         private static readonly object _subscribersLock = new();
 
-        public static string ServerName => Config.App.ServerName;
-        public static int ServerPort => Config.App.ServerPort;
+        public static string ServerName => "RtCli";
+        public static int ServerPort => Config.App.GrpcPort;
         public static bool IsRunning => _grpcServer != null;
         public static int ConnectedClientCount => _connectedClients.Count;
         public static IReadOnlyDictionary<string, ClientInfo> ConnectedClients => _connectedClients;
@@ -44,7 +44,7 @@ namespace RtCli.Modules.Unit
 
                 _grpcServer.Start();
 
-                Output.Log($"gRPC服务器 [[{ServerName}]] 已启动端口: {ServerPort}", 1, "Connector");
+                Output.Log($"gRPC服务器已启动端口: {ServerPort}", 1, "Connector");
             }
             catch (Exception ex)
             {
@@ -59,7 +59,7 @@ namespace RtCli.Modules.Unit
                 await _grpcServer.ShutdownAsync();
                 _grpcServer = null;
                 _connectedClients.Clear();
-                Output.Log($"gRPC服务器 [[{ServerName}]] 已关闭", 1, "Connector");
+                Output.Log("gRPC服务器已关闭", 1, "Connector");
             }
         }
 
@@ -73,23 +73,33 @@ namespace RtCli.Modules.Unit
                 Message = message
             };
 
+            List<IServerStreamWriter<LogMessage>> subscribersCopy;
             lock (_subscribersLock)
             {
-                var brokenSubscribers = new List<IServerStreamWriter<LogMessage>>();
-                foreach (var subscriber in _logSubscribers)
+                subscribersCopy = new List<IServerStreamWriter<LogMessage>>(_logSubscribers);
+            }
+
+            var brokenSubscribers = new List<IServerStreamWriter<LogMessage>>();
+            foreach (var subscriber in subscribersCopy)
+            {
+                try
                 {
-                    try
-                    {
-                        subscriber.WriteAsync(logMsg).Wait();
-                    }
-                    catch
-                    {
-                        brokenSubscribers.Add(subscriber);
-                    }
+                    await subscriber.WriteAsync(logMsg);
                 }
-                foreach (var broken in brokenSubscribers)
+                catch
                 {
-                    _logSubscribers.Remove(broken);
+                    brokenSubscribers.Add(subscriber);
+                }
+            }
+
+            if (brokenSubscribers.Count > 0)
+            {
+                lock (_subscribersLock)
+                {
+                    foreach (var broken in brokenSubscribers)
+                    {
+                        _logSubscribers.Remove(broken);
+                    }
                 }
             }
         }
@@ -162,12 +172,13 @@ namespace RtCli.Modules.Unit
     {
         public override Task<ServerInfoResponse> GetServerInfo(Empty request, ServerCallContext context)
         {
+            ValidateAuthKey(context);
             EnsureClientTracked(context);
             var response = new ServerInfoResponse
             {
-                ServerName = Config.App.ServerName,
+                ServerName = Config.CurrentServer.ServerName,
                 Version = Program.RtCliVersion,
-                Port = Config.App.ServerPort,
+                Port = Config.App.GrpcPort,
                 IsRunning = Connector.IsRunning
             };
             return Task.FromResult(response);
@@ -175,8 +186,9 @@ namespace RtCli.Modules.Unit
 
         public override Task<ExtensionListResponse> GetExtensions(Empty request, ServerCallContext context)
         {
+            ValidateAuthKey(context);
             EnsureClientTracked(context);
-            var json = RtExtensionManager.RtExtensionManager.GetExtensionsJson();
+            var json = RtExtensionManager.GetExtensionsJson();
             var extensions = Newtonsoft.Json.JsonConvert.DeserializeObject<List<ExtensionData>>(json);
 
             var response = new ExtensionListResponse();
@@ -200,8 +212,9 @@ namespace RtCli.Modules.Unit
 
         public override Task<UnloadExtensionResponse> UnloadExtension(UnloadExtensionRequest request, ServerCallContext context)
         {
+            ValidateAuthKey(context);
             EnsureClientTracked(context);
-            bool success = RtExtensionManager.RtExtensionManager.UnloadExtensionByKey(request.ExtensionKey);
+            bool success = RtExtensionManager.UnloadExtensionByKey(request.ExtensionKey);
             return Task.FromResult(new UnloadExtensionResponse
             {
                 Success = success,
@@ -211,8 +224,9 @@ namespace RtCli.Modules.Unit
 
         public override Task<LoadExtensionResponse> LoadExtension(LoadExtensionRequest request, ServerCallContext context)
         {
+            ValidateAuthKey(context);
             EnsureClientTracked(context);
-            bool success = RtExtensionManager.RtExtensionManager.LoadExtensionByKey(request.ExtensionPath);
+            bool success = RtExtensionManager.LoadExtensionByKey(request.ExtensionPath);
             return Task.FromResult(new LoadExtensionResponse
             {
                 Success = success,
@@ -222,16 +236,19 @@ namespace RtCli.Modules.Unit
 
         public override Task<ExecuteCommandResponse> ExecuteCommand(ExecuteCommandRequest request, ServerCallContext context)
         {
+            ValidateAuthKey(context);
             EnsureClientTracked(context);
+            var (success, result) = Backend.DispatchCommand(request.Command);
             return Task.FromResult(new ExecuteCommandResponse
             {
-                Success = true,
-                Result = $"命令 '{request.Command}' 已接收"
+                Success = success,
+                Result = result
             });
         }
 
         public override async Task StreamLogs(Empty request, IServerStreamWriter<LogMessage> responseStream, ServerCallContext context)
         {
+            ValidateAuthKey(context);
             var clientId = EnsureClientTracked(context);
             Connector.AddLogSubscriber(responseStream);
 
@@ -251,6 +268,7 @@ namespace RtCli.Modules.Unit
 
         public override Task<ClientListResponse> GetClients(Empty request, ServerCallContext context)
         {
+            ValidateAuthKey(context);
             EnsureClientTracked(context);
             var response = new ClientListResponse();
             foreach (var kvp in Connector.ConnectedClients)
@@ -267,17 +285,71 @@ namespace RtCli.Modules.Unit
 
         public override Task<StatusResponse> GetStatus(Empty request, ServerCallContext context)
         {
+            ValidateAuthKey(context);
             EnsureClientTracked(context);
             return Task.FromResult(new StatusResponse
             {
                 IsRunning = Connector.IsRunning,
                 ConnectedClientCount = Connector.ConnectedClientCount,
-                ExtensionCount = RtExtensionManager.RtExtensionManager.GetExtensionCount(),
-                ServerName = Config.App.ServerName
+                ExtensionCount = RtExtensionManager.GetExtensionCount(),
+                ServerName = Config.CurrentServer.ServerName
             });
         }
 
+        public override Task<ConfigResponse> GetConfig(Empty request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (success, content, message) = Backend.GetConfigContent();
+            return Task.FromResult(new ConfigResponse
+            {
+                Success = success,
+                Content = content ?? "",
+                Message = message
+            });
+        }
+
+        public override Task<SaveConfigResponse> SaveConfig(SaveConfigRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (success, message) = Backend.SaveConfigContent(request.Content);
+            return Task.FromResult(new SaveConfigResponse
+            {
+                Success = success,
+                Message = message
+            });
+        }
+
+        public override Task<CommandListResponse> GetCommandList(Empty request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var response = new CommandListResponse();
+            foreach (var (command, description) in Backend.GetAvailableCommands())
+            {
+                response.Commands.Add(new Grpc.CommandInfo
+                {
+                    Command = command,
+                    Description = description
+                });
+            }
+            return Task.FromResult(response);
+        }
+
         private static readonly ConcurrentDictionary<string, string> _peerToClientId = new();
+
+        private static void ValidateAuthKey(ServerCallContext context)
+        {
+            var authKey = Config.App.GrpcAuthKey;
+            if (string.IsNullOrEmpty(authKey)) return;
+
+            var header = context.RequestHeaders.FirstOrDefault(h => h.Key == "authorization");
+            if (header == null || header.Value != authKey)
+            {
+                throw new RpcException(new global::Grpc.Core.Status(StatusCode.Unauthenticated, "Invalid or missing authentication key"));
+            }
+        }
 
         private static string EnsureClientTracked(ServerCallContext context)
         {
