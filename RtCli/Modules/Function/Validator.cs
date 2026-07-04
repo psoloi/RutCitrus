@@ -8,5 +8,7 @@ namespace RtCli.Modules.Function
 {
     internal class Validator
     {
+
     }
+
 }
