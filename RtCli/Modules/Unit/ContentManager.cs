@@ -1,10 +1,11 @@
+using RtCli.Modules.Extension;
+using RtCli.Modules.Function;
+using Spectre.Console;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using RtCli.Modules.Extension;
-using RtCli.Modules.Function;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -1142,6 +1143,163 @@ namespace RtCli.Modules.Unit
 
             File.WriteAllText(filePath, sb.ToString());
         }
+
+        /// <summary>
+        /// 列出程序集内嵌的资源（Content文件夹下的文件）
+        /// </summary>
+        public static void ListEmbeddedResources()
+        {
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var names = asm.GetManifestResourceNames();
+
+                // 筛选Content文件夹下的资源（嵌入后资源名以程序集名.Content.开头）
+                var contentResources = names
+                    .Where(n => n.Contains(".Content.", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (contentResources.Count == 0)
+                {
+                    Output.Log("没有找到内嵌资源。", 1, "ContentManager");
+                    return;
+                }
+
+                var table = new Table().Border(TableBorder.Rounded).Title("[cyan]内嵌资源列表[/]");
+                table.AddColumn("名称");
+                table.AddColumn("大小");
+
+                foreach (var name in contentResources)
+                {
+                    using var stream = asm.GetManifestResourceStream(name);
+                    long size = stream?.Length ?? 0;
+                    string sizeStr = size >= 1024 ? $"{size / 1024.0:F1} KB" : $"{size} B";
+                    // 显示简短名称：去掉前缀，将.替换为路径分隔符
+                    string displayName = name;
+                    int contentIdx = displayName.IndexOf(".Content.", StringComparison.OrdinalIgnoreCase);
+                    if (contentIdx >= 0)
+                    {
+                        displayName = displayName.Substring(contentIdx + ".Content.".Length);
+                    }
+                    table.AddRow($"[cyan]{Markup.Escape(displayName)}[/]", sizeStr);
+                }
+
+                AnsiConsole.Write(table);
+                Output.Log("使用 [green]ct unpack <名称>[/] 释放资源到程序根目录", 1, "ContentManager");
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"列出内嵌资源失败: {ex.Message}", 2, "ContentManager");
+            }
+        }
+
+        /// <summary>
+        /// 释放指定内嵌资源到程序根目录
+        /// </summary>
+        public static void UnpackEmbeddedResource(string resourceName)
+        {
+            if (string.IsNullOrWhiteSpace(resourceName))
+            {
+                Output.Log("用法: ct unpack <资源名称>", 1, "ContentManager");
+                return;
+            }
+
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var names = asm.GetManifestResourceNames();
+
+                // 查找匹配的资源：支持简短名称或完整名称
+                string? targetName = null;
+
+                // 先尝试精确匹配
+                foreach (var name in names)
+                {
+                    if (string.Equals(name, resourceName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetName = name;
+                        break;
+                    }
+                }
+
+                // 再尝试简短名称匹配（用户输入如 Rt.dll）
+                if (targetName == null)
+                {
+                    foreach (var name in names)
+                    {
+                        // 将嵌入资源名中的.替换为.但保留文件扩展名
+                        // 嵌入格式: RtCli.Content.Rt.dll → 用户输入 Rt.dll
+                        int contentIdx = name.IndexOf(".Content.", StringComparison.OrdinalIgnoreCase);
+                        if (contentIdx >= 0)
+                        {
+                            string shortName = name.Substring(contentIdx + ".Content.".Length);
+                            // 资源名中的目录分隔符是. 但文件名本身也含.（如Rt.dll）
+                            // 所以直接比较
+                            if (string.Equals(shortName, resourceName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                targetName = name;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // 最后尝试模糊匹配（包含）
+                if (targetName == null)
+                {
+                    foreach (var name in names)
+                    {
+                        if (name.Contains(resourceName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            targetName = name;
+                            break;
+                        }
+                    }
+                }
+
+                if (targetName == null)
+                {
+                    Output.Log($"未找到资源: {Markup.Escape(resourceName)}", 2, "ContentManager");
+                    Output.Log("使用 [green]ct list[/] 查看可用资源", 1, "ContentManager");
+                    return;
+                }
+
+                // 计算输出文件名：取Content.之后的部分，还原为文件路径
+                string outputFileName = targetName;
+                int contentIdx2 = outputFileName.IndexOf(".Content.", StringComparison.OrdinalIgnoreCase);
+                if (contentIdx2 >= 0)
+                {
+                    outputFileName = outputFileName.Substring(contentIdx2 + ".Content.".Length);
+                }
+
+                // 输出到程序根目录
+                string outputPath = Path.Combine(AppContext.BaseDirectory, outputFileName);
+                string? outputDir = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
+                {
+                    Directory.CreateDirectory(outputDir);
+                }
+
+                using var stream = asm.GetManifestResourceStream(targetName);
+                if (stream == null)
+                {
+                    Output.Log($"无法读取资源流: {Markup.Escape(targetName)}", 2, "ContentManager");
+                    return;
+                }
+
+                using var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write);
+                stream.CopyTo(fs);
+
+                long size = stream.Length;
+                string sizeStr = size >= 1024 ? $"{size / 1024.0:F1} KB" : $"{size} B";
+                Output.Log($"已释放资源: [cyan]{Markup.Escape(outputFileName)}[/] → {Markup.Escape(outputPath)} ({sizeStr})", 1, "ContentManager");
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"释放资源失败: {ex.Message}", 2, "ContentManager");
+            }
+        }
+
     }
 
     public class ClientGuideEntry

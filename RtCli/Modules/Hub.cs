@@ -8,5 +8,14 @@ namespace RtCli.Modules
 {
     internal class Hub
     {
+        public static void Container()
+        {
+        }
+        public static void Optimizer()
+        {
+        }
+        public static void Reactor()
+        {
+        }
     }
 }

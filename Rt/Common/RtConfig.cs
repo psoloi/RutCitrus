@@ -231,7 +231,6 @@ namespace Rt.Common
                 string? comment = GetComment(currentSection, trimmed);
                 if (comment != null)
                 {
-                    sb.AppendLine();
                     sb.AppendLine(comment);
                 }
 

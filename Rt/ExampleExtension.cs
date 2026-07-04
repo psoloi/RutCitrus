@@ -11,13 +11,14 @@ using System.Text;
 using System.Threading.Tasks;
 using Rt.Common;
 using Rt.Core;
+using Spectre.Console;
 
 namespace Rt
 {
     public class ExampleExtension : ExtensionBase
     {
         // Core里面放主功能，Com则是模块
-
+        // 这是一个示例扩展，详细展示了如何使用RtCli框架的功能和模块
         public override string Name => "Rt";
         public override string Version => "1.7.0";
         public override string Description => "RtCli扩展插件，扩展了MC服务器安全方面的功能";
@@ -261,11 +262,16 @@ namespace Rt
             }
 
             _isLoaded = true;
-            Output.Log("Rt扩展加载完成", 1, Name);
+            var figlet = new FigletText("Rt Safe Extension")
+               .Color(Color.Blue);
+
+            AnsiConsole.Write(figlet);
+            Output.Log($"[aqua]{Name}[/] [Green3]Ver:{Version}[/] 扩展加载完成", 1, Name);
         }
 
         private void OnCommandExecute(CommandExecuteEvent e)
         {
+            //这个不推荐下面的操作干扰控制台属实了
             //Output.Log($"[green]命令执行[/]: {e.Command}", 1, Name);
         }
 
@@ -325,7 +331,7 @@ namespace Rt
         }
 
 
-
+        // 如果是调用外部的包且RtCli没有的包，我比较推荐做法是把包的Dll嵌入扩展后再写入下面的方法
 
         private static bool _resolverRegistered = false;
         private static readonly Dictionary<string, byte[]> _loadedAssemblies = new();

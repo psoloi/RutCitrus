@@ -4,10 +4,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace RtCli.Modules.Extension
+namespace RtCli.Modules.Function
 {
-    internal class Extend
+    internal class Validator
     {
-        // Safe
     }
 }
