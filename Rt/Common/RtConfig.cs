@@ -76,7 +76,7 @@ namespace Rt.Common
         /// <summary>流量统计周期(秒)，每周期统计一次各IP的流量</summary>
         public int StatWindowSeconds { get; set; } = 5;
         /// <summary>触发阈值: 单个IP在一个统计周期内的流量(字节)超过此值则进入监测</summary>
-        public long TrafficThreshold { get; set; } = 512000; // 500KB/5s
+        public long TrafficThreshold { get; set; } = 51200; // 50KB/5s
         /// <summary>持续监测时间窗口(秒)</summary>
         public int MonitorWindowSeconds { get; set; } = 30;
         /// <summary>在监测窗口内流量持续超过阈值的周期数达到此值则封禁</summary>

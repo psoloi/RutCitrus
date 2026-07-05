@@ -24,8 +24,6 @@ namespace RtCli
 
         // BlueMap和Litebans支持、配置文件翻译、玩家监控、自动监控服务器性能并提供优化建议
 
-        // Rt改为安全类程序及安全扫描延申至服务端安全
-
         // .auto
 
         // readme.md参考 github-readme-stats-master 并且中英文分开

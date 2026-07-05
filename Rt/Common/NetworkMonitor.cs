@@ -629,6 +629,106 @@ namespace Rt.Common
             }
         }
 
+        /// <summary>
+        /// 持续输出捕获的数据包详细信息，持续指定时长(秒)。
+        /// 用于长时间观察MC服务器实时流量。
+        /// </summary>
+        /// <param name="durationSeconds">持续时间(秒)，默认300(5分钟)</param>
+        public void OutputPackets(int durationSeconds = 300)
+        {
+            if (!_isRunning)
+            {
+                Output.Log("[yellow]网络监测器未运行[/]，请先执行 rte monitor start", 2, Name);
+                return;
+            }
+
+            if (durationSeconds <= 0) durationSeconds = 300;
+
+            DateTime startTime = DateTime.Now;
+            DateTime endTime = startTime.AddSeconds(durationSeconds);
+            long startMcPackets = TotalMcPackets;
+            long startMcBytes = TotalMcBytes;
+            int captured = 0;
+
+            Output.Log($"[green]=== 持续输出捕获的数据包 ===[/]", 1, Name);
+            Output.Log($"[grey]开始时间: {startTime:HH:mm:ss} | 结束时间: {endTime:HH:mm:ss} | 持续: {durationSeconds}秒 ({durationSeconds / 60.0:F1}分钟)[/]", 1, Name);
+            Output.Log($"[grey]提示: 可按 Ctrl+C 中断输出[/]", 1, Name);
+            Output.Log($"[grey]────────────────────────────────────────[/]", 1, Name);
+
+            // 进度报告间隔: 较长时长每30秒一次，较短时长每5秒一次
+            int progressInterval = durationSeconds >= 60 ? 30 : 5;
+            DateTime nextProgress = startTime.AddSeconds(progressInterval);
+
+            void Handler(object? sender, NetworkPacketEventArgs e)
+            {
+                Interlocked.Increment(ref captured);
+                string dir = e.Analyzed.Direction == PacketDirection.ClientToServer ? "[cyan]C→S[/]" : "[grey]S→C[/]";
+                string time = e.Timestamp.ToString("HH:mm:ss.fff");
+                Output.Log($"  [grey]{time}[/] {Markup.Escape(e.Analyzed.ClientIp)} {dir} [yellow]{FormatBytes(e.Analyzed.PayloadLength)}[/] ({e.Analyzed.PayloadLength}B)", 1, Name);
+            }
+
+            PacketReceived += Handler;
+            try
+            {
+                while (true)
+                {
+                    Thread.Sleep(200);
+                    DateTime now = DateTime.Now;
+
+                    if (now >= endTime)
+                        break;
+
+                    if (now >= nextProgress)
+                    {
+                        double elapsedRatio = (now - startTime).TotalSeconds / durationSeconds * 100;
+                        long progressBytes = TotalMcBytes - startMcBytes;
+                        Output.Log($"[grey]── 进度: {elapsedRatio:F0}% | 已输出: {captured}包 | 累计MC流量增量: {FormatBytes(progressBytes)} ──[/]", 1, Name);
+                        nextProgress = now.AddSeconds(progressInterval);
+                    }
+                }
+            }
+            finally
+            {
+                PacketReceived -= Handler;
+            }
+
+            DateTime actualEnd = DateTime.Now;
+            long endMcPackets = TotalMcPackets;
+            long endMcBytes = TotalMcBytes;
+            long deltaPackets = endMcPackets - startMcPackets;
+            long deltaBytes = endMcBytes - startMcBytes;
+            double actualDuration = (actualEnd - startTime).TotalSeconds;
+
+            Output.Log($"[grey]────────────────────────────────────────[/]", 1, Name);
+            Output.Log($"[green]=== 输出结束 ===[/]", 1, Name);
+
+            var summary = new Table()
+                .Border(TableBorder.Rounded)
+                .Title("[cyan]持续输出统计[/]");
+            summary.AddColumn("项目");
+            summary.AddColumn("值");
+            summary.AddRow("开始时间", startTime.ToString("HH:mm:ss"));
+            summary.AddRow("结束时间", actualEnd.ToString("HH:mm:ss"));
+            summary.AddRow("实际持续", $"{actualDuration:F1} 秒");
+            summary.AddRow("输出包数", captured.ToString());
+            summary.AddRow("MC包数增量", deltaPackets.ToString());
+            summary.AddRow("MC流量增量", FormatBytes(deltaBytes));
+            double ratePps = actualDuration > 0 ? captured / actualDuration : 0;
+            double rateBps = actualDuration > 0 ? deltaBytes / actualDuration : 0;
+            summary.AddRow("平均速率", $"{ratePps:F1} 包/s | {FormatBytes((long)rateBps)}/s");
+
+            AnsiConsole.Write(summary);
+
+            if (captured == 0)
+            {
+                Output.Log("[red]⚠ 未捕获到任何MC数据包[/]", 3, Name);
+                if (TotalCapturedPackets == 0)
+                    Output.Log("  原因: 接口上无任何流量 - 检查接口选择(rte monitor diag)", 3, Name);
+                else
+                    Output.Log("  原因: 有流量但非MC相关 - 检查 server_ip/server_port 配置", 3, Name);
+            }
+        }
+
         #endregion
 
         private static string FormatBytes(long bytes)

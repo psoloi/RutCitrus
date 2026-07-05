@@ -60,6 +60,7 @@ namespace Rt
                 Output.Log("  [cyan]rte monitor start[/]       启动网络监测器(开始抓包)", 1, "Rt");
                 Output.Log("  [cyan]rte monitor stop[/]        停止网络监测器", 1, "Rt");
                 Output.Log("  [cyan]rte monitor debug[/]       显示5秒内捕获的数据包详细信息", 1, "Rt");
+                Output.Log("  [cyan]rte monitor output [[m]][/] 持续输出捕获的数据包(默认5分钟)", 1, "Rt");
                 Output.Log("  [cyan]rte monitor diag[/]        诊断: 接口列表/配置检查/权限/Npcap", 1, "Rt");
                 Output.Log("[grey]── 发包频率限制子功能 ──[/]", 1, "Rt");
                 Output.Log("  [cyan]rte packetslimit status[/] 查看发包频率限制状态", 1, "Rt");
@@ -125,6 +126,20 @@ namespace Rt
             {
                 NetworkMonitor.Instance.ShowDebugSnapshot();
             }, "显示网络监测器Debug快照(5秒内捕获的数据包详情)");
+
+            // rte monitor output [minutes] - 持续输出捕获的数据包
+            CommandRegistry.RegisterCommand("rte monitor output", args =>
+            {
+                int minutes = 5; // 默认5分钟
+                if (args != null && args.Length > 0)
+                {
+                    if (int.TryParse(args[0], out int parsed) && parsed > 0)
+                        minutes = parsed;
+                    else
+                        Output.Log($"[yellow]无效的时长参数 '{args[0]}'，使用默认值 5 分钟[/]", 2, "Rt");
+                }
+                NetworkMonitor.Instance.OutputPackets(minutes * 60);
+            }, "持续输出捕获的数据包(默认5分钟，可指定分钟数，例如 rte monitor output 10)");
 
             // rte monitor diag - 诊断信息
             CommandRegistry.RegisterCommand("rte monitor diag", args =>
@@ -313,6 +328,7 @@ namespace Rt
             CommandRegistry.UnregisterCommand("rte monitor start");
             CommandRegistry.UnregisterCommand("rte monitor stop");
             CommandRegistry.UnregisterCommand("rte monitor debug");
+            CommandRegistry.UnregisterCommand("rte monitor output");
             CommandRegistry.UnregisterCommand("rte monitor diag");
             CommandRegistry.UnregisterCommand("rte packetslimit status");
             CommandRegistry.UnregisterCommand("rte packetslimit start");

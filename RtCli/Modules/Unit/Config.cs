@@ -31,9 +31,6 @@ namespace RtCli.Modules.Unit
 
     public class AppConfig
     {
-        // 自动同意EULA（全局设置，适用于所有服务端）
-        public bool AutoAgreeEula { get; set; } = false;
-
         public bool CheckJava { get; set; } = true;
         public bool CheckDotNet { get; set; } = true;
         public bool CheckPython { get; set; } = true;
@@ -86,6 +83,9 @@ namespace RtCli.Modules.Unit
             "1.16.5",
             "1.12.2",
         };
+
+        // 自动同意EULA（全局设置，适用于所有服务端）
+        public bool AutoAgreeEula { get; set; } = false;
 
         public string Debug { get; set; } = "No";
     }
@@ -238,7 +238,6 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#    current_server  - 当前选中的服务端标识(对应server_list中的键名)");
             sb.AppendLine("#    grpc_port       - gRPC管理端口（RtPanel面板连接此端口，全局共享）");
             sb.AppendLine("#    grpc_auth_key   - gRPC认证密钥（RtPanel登录时需输入此密钥，留空则自动生成）");
-            sb.AppendLine("#    auto_agree_eula - 自动同意Minecraft EULA (true/false, 全局设置)");
             sb.AppendLine("#");
             sb.AppendLine("#  server_list 中的每个服务端配置:");
             sb.AppendLine("#    server_name       - 服务器名称，用于标识");
@@ -274,6 +273,9 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#");
             sb.AppendLine("#  隐藏控制台消息:");
             sb.AppendLine("#    hide_console_servers - 隐藏指定服务端标识的控制台消息(为空则不隐藏)");
+            sb.AppendLine("#");
+            sb.AppendLine("#  EULA设置:");
+            sb.AppendLine("#    auto_agree_eula - 自动同意Minecraft EULA (true/false, 全局设置)");
             sb.AppendLine("#");
             sb.AppendLine("#  使用 .server change <标识> 切换当前服务端");
             sb.AppendLine("#  使用 .server list 查看所有服务端  .server add 添加  .server del 删除");

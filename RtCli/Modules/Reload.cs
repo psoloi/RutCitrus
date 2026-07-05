@@ -83,8 +83,12 @@ namespace RtCli.Modules
                 Output.CloseLogging();
                 Output.TextBlock(Modules.Unit.I18n.Get("main_end"), 1, "Task#0");
                 Program.ReleaseMutex();
+                Environment.Exit(0);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Output.CrashAssistant(ex);
+            }
         }
     }
 }
