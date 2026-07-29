@@ -94,12 +94,31 @@ namespace RtCli.Modules.Extension
             if (!File.Exists(exampleCsPath))
             {
                 File.WriteAllText(exampleCsPath, @"using System;
+using System.Text.Json;
 
 public class Script
 {
     public void Execute(string input = """", string eventName = """")
     {
-        Console.WriteLine($""[Example CS] input={input}, event={eventName}"");
+        Console.WriteLine($""[Example CS] event={eventName}"");
+
+        // 玩家事件触发时, input为JSON格式的事件参数
+        if (!string.IsNullOrEmpty(input) && input.StartsWith(""{""))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(input);
+                if (doc.RootElement.TryGetProperty(""player_name"", out var nameEl))
+                    Console.WriteLine($""  玩家: {nameEl.GetString()}"");
+                if (doc.RootElement.TryGetProperty(""player_trigger_time"", out var timeEl))
+                    Console.WriteLine($""  时间: {timeEl.GetString()}"");
+            }
+            catch { }
+        }
+        else if (!string.IsNullOrEmpty(input))
+        {
+            Console.WriteLine($""  input={input}"");
+        }
     }
 }
 ");
@@ -214,7 +233,21 @@ if __name__ == ""__main__"":
                 { "SchedulerStopEvent", e => ExecuteScript(scriptName, item, e) },
                 { "CommandExecuteEvent", e => ExecuteScript(scriptName, item, e) },
                 { "ConfigReloadEvent", e => ExecuteScript(scriptName, item, e) },
+                { "PlayerJoinEvent", e => ExecuteScript(scriptName, item, e) },
+                { "PlayerConnectEvent", e => ExecuteScript(scriptName, item, e) },
+                { "PlayerLostEvent", e => ExecuteScript(scriptName, item, e) },
+                { "PlayerLeaveEvent", e => ExecuteScript(scriptName, item, e) },
+                { "PlayerCommandEvent", e => ExecuteScript(scriptName, item, e) },
+                { "PlayerChatEvent", e => ExecuteScript(scriptName, item, e) },
+                { "PlayerSetModeEvent", e => ExecuteScript(scriptName, item, e) },
+                { "CustomPlayerEvent", e => ExecuteScript(scriptName, item, e) },
             };
+
+            // 支持自定义事件名（player_event.customs中定义的事件名）
+            if (!eventMap.ContainsKey(item.TriggerEvent))
+            {
+                eventMap[item.TriggerEvent] = e => ExecuteScript(scriptName, item, e);
+            }
 
             if (!eventMap.TryGetValue(item.TriggerEvent, out var handler))
             {
@@ -275,6 +308,32 @@ if __name__ == ""__main__"":
                 case "ConfigReloadEvent":
                     EventBus.Subscribe<ConfigReloadEvent>(e => handler(e), ThisName);
                     break;
+                case "PlayerJoinEvent":
+                    EventBus.Subscribe<PlayerJoinEvent>(e => handler(e), ThisName);
+                    break;
+                case "PlayerConnectEvent":
+                    EventBus.Subscribe<PlayerConnectEvent>(e => handler(e), ThisName);
+                    break;
+                case "PlayerLostEvent":
+                    EventBus.Subscribe<PlayerLostEvent>(e => handler(e), ThisName);
+                    break;
+                case "PlayerLeaveEvent":
+                    EventBus.Subscribe<PlayerLeaveEvent>(e => handler(e), ThisName);
+                    break;
+                case "PlayerCommandEvent":
+                    EventBus.Subscribe<PlayerCommandEvent>(e => handler(e), ThisName);
+                    break;
+                case "PlayerChatEvent":
+                    EventBus.Subscribe<PlayerChatEvent>(e => handler(e), ThisName);
+                    break;
+                case "PlayerSetModeEvent":
+                    EventBus.Subscribe<PlayerSetModeEvent>(e => handler(e), ThisName);
+                    break;
+                case "CustomPlayerEvent":
+                default:
+                    // 自定义事件名和CustomPlayerEvent都通过CustomPlayerEvent订阅
+                    EventBus.Subscribe<CustomPlayerEvent>(e => handler(e), ThisName);
+                    break;
             }
 
             Log($"脚本 {scriptName} 已订阅事件: {item.TriggerEvent}", 1, ThisName);
@@ -304,7 +363,15 @@ if __name__ == ""__main__"":
                 "SchedulerStopEvent" => typeof(SchedulerStopEvent),
                 "CommandExecuteEvent" => typeof(CommandExecuteEvent),
                 "ConfigReloadEvent" => typeof(ConfigReloadEvent),
-                _ => typeof(RtEvent)
+                "PlayerJoinEvent" => typeof(PlayerJoinEvent),
+                "PlayerConnectEvent" => typeof(PlayerConnectEvent),
+                "PlayerLostEvent" => typeof(PlayerLostEvent),
+                "PlayerLeaveEvent" => typeof(PlayerLeaveEvent),
+                "PlayerCommandEvent" => typeof(PlayerCommandEvent),
+                "PlayerChatEvent" => typeof(PlayerChatEvent),
+                "PlayerSetModeEvent" => typeof(PlayerSetModeEvent),
+                "CustomPlayerEvent" => typeof(CustomPlayerEvent),
+                _ => typeof(CustomPlayerEvent) // 自定义事件名也映射为CustomPlayerEvent
             };
         }
 
@@ -400,6 +467,12 @@ if __name__ == ""__main__"":
                 string inputArg = item.Input ?? "";
                 string eventArg = eventArgs?.EventName ?? "";
 
+                // 玩家事件触发时，将事件参数序列化为JSON作为input传入
+                if (eventArgs != null && IsPlayerEvent(eventArgs))
+                {
+                    inputArg = SerializePlayerEvent(eventArgs);
+                }
+
                 var type = ((object)script).GetType();
                 var method = type.GetMethod("Execute", new[] { typeof(string), typeof(string) });
                 if (method != null)
@@ -481,9 +554,16 @@ if __name__ == ""__main__"":
             var sb = new StringBuilder();
             sb.Append($"\"{filePath}\"");
 
-            if (!string.IsNullOrEmpty(item.Input))
+            // 玩家事件触发时，将事件参数JSON作为input传入
+            string input = item.Input ?? "";
+            if (eventArgs != null && IsPlayerEvent(eventArgs))
             {
-                sb.Append($" {item.Input}");
+                input = SerializePlayerEvent(eventArgs);
+            }
+
+            if (!string.IsNullOrEmpty(input))
+            {
+                sb.Append($" \"{input}\"");
             }
 
             if (eventArgs != null)
@@ -492,6 +572,70 @@ if __name__ == ""__main__"":
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// 判断是否为玩家事件
+        /// </summary>
+        private static bool IsPlayerEvent(RtEvent e)
+        {
+            return e is PlayerJoinEvent or PlayerConnectEvent or PlayerLostEvent
+                or PlayerLeaveEvent or PlayerCommandEvent or PlayerChatEvent
+                or PlayerSetModeEvent or CustomPlayerEvent;
+        }
+
+        /// <summary>
+        /// 将玩家事件参数序列化为JSON
+        /// </summary>
+        private static string SerializePlayerEvent(RtEvent e)
+        {
+            var dict = new Dictionary<string, string>();
+            dict["event_name"] = e.EventName;
+
+            switch (e)
+            {
+                case PlayerJoinEvent je:
+                    dict["player_name"] = je.PlayerName;
+                    dict["player_trigger_time"] = je.PlayerTriggerTime;
+                    break;
+                case PlayerConnectEvent ce:
+                    dict["player_name"] = ce.PlayerName;
+                    dict["player_trigger_time"] = ce.PlayerTriggerTime;
+                    dict["player_ip"] = ce.PlayerIp;
+                    break;
+                case PlayerLostEvent le:
+                    dict["player_name"] = le.PlayerName;
+                    dict["player_trigger_time"] = le.PlayerTriggerTime;
+                    dict["player_lost_reason"] = le.PlayerLostReason;
+                    break;
+                case PlayerLeaveEvent lve:
+                    dict["player_name"] = lve.PlayerName;
+                    dict["player_trigger_time"] = lve.PlayerTriggerTime;
+                    break;
+                case PlayerCommandEvent cme:
+                    dict["player_name"] = cme.PlayerName;
+                    dict["player_trigger_time"] = cme.PlayerTriggerTime;
+                    dict["command"] = cme.Command;
+                    break;
+                case PlayerChatEvent che:
+                    dict["player_name"] = che.PlayerName;
+                    dict["player_trigger_time"] = che.PlayerTriggerTime;
+                    dict["message"] = che.Message;
+                    break;
+                case PlayerSetModeEvent sme:
+                    dict["player_name"] = sme.PlayerName;
+                    dict["player_trigger_time"] = sme.PlayerTriggerTime;
+                    dict["player_mode"] = sme.PlayerMode;
+                    break;
+                case CustomPlayerEvent cpe:
+                    dict["player_name"] = cpe.PlayerName;
+                    dict["player_trigger_time"] = cpe.PlayerTriggerTime;
+                    foreach (var kvp in cpe.Parameters)
+                        dict[kvp.Key] = kvp.Value;
+                    break;
+            }
+
+            return System.Text.Json.JsonSerializer.Serialize(dict);
         }
 
         /// <summary>

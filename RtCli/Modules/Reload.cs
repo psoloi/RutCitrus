@@ -1,5 +1,6 @@
 using RtCli.Modules.Extension;
 using RtCli.Modules.Function;
+using RtCli.Modules.Unit;
 using Spectre.Console;
 using System;
 using System.Collections.Generic;
@@ -44,9 +45,10 @@ namespace RtCli.Modules
         {
             try
             {
+                Output.Log("[yellow]正在重启程序...[/]", 1, "Reload");
+                CleanupBeforeExit();
+
                 string? currentProcessPath = Environment.ProcessPath;
-                Analyzer.StopServer();
-                RtExtensionManager.UnloadAll();
                 Program.ReleaseMutex();
                 Console.Clear();
                 if (currentProcessPath != null)
@@ -57,8 +59,6 @@ namespace RtCli.Modules
                 {
                     Output.Log("进程路径环境异常无法重新加载！", 3, "Reload");
                 }
-
-                Environment.Exit(0);
             }
             catch (Exception)
             {
@@ -77,13 +77,37 @@ namespace RtCli.Modules
 
             try
             {
-                Analyzer.StopServer();
-                EventBus.Publish(new ProgramShutdownEvent());
-                RtExtensionManager.UnloadAll();
-                Output.CloseLogging();
+                Output.Log("[yellow]正在关闭程序...[/]", 1, "Reload");
+                CleanupBeforeExit();
                 Output.TextBlock(Modules.Unit.I18n.Get("main_end"), 1, "Task#0");
                 Program.ReleaseMutex();
                 Environment.Exit(0);
+            }
+            catch (Exception ex)
+            {
+                Output.CrashAssistant(ex);
+            }
+        }
+
+        /// <summary>
+        /// 退出前清理所有后台资源：MC服务端、gRPC、调度器、备份定时器、扩展、日志
+        /// </summary>
+        private static void CleanupBeforeExit()
+        {
+            try
+            {
+                EventBus.Publish(new ProgramShutdownEvent());
+                Intelligence.StopAutoBackup();
+                Scheduler.Stop();
+                Analyzer.StopServer();
+                Analyzer.Detach();
+                var grpcTask = Connector.StopServerAsync();
+                if (!grpcTask.Wait(3000)) // 过低可能会卡死
+                {
+                    Output.Log("gRPC服务器关闭超时，强制继续。", 2, "Reload");
+                }
+                RtExtensionManager.UnloadAll();
+                Output.CloseLogging();
             }
             catch (Exception ex)
             {

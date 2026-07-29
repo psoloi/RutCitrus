@@ -11,4 +11,12 @@ namespace RtCli.Modules.Function
 
     }
 
+    internal class Watchdog
+    {
+        public static void find()
+        {
+            // 看资源
+        }
+    }
+
 }

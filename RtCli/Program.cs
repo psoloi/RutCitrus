@@ -24,7 +24,7 @@ namespace RtCli
 
         // BlueMap和Litebans支持、配置文件翻译、玩家监控、自动监控服务器性能并提供优化建议
 
-        // .auto
+        // .ai
 
         // readme.md参考 github-readme-stats-master 并且中英文分开
 
@@ -53,6 +53,13 @@ namespace RtCli
             "rt",
             ".help",
             ".guide",
+            ".ai",
+            ".ai start",
+            ".ai stop",
+            ".ai list",
+            ".ai reload",
+            ".ai run",
+            ".ai clear",
             ".auto",
             ".auto on",
             ".auto off",
@@ -182,6 +189,12 @@ namespace RtCli
             Intelligence.StartAutoBackup();
             Backend.Initialize();
 
+            // 若启用 start_run_ai，则在配置加载完成后自动启动AI自动化管理
+            if (Config.App.StartRunAi)
+            {
+                Output.Log("将在启动完毕后自动启动AI自动化管理...", 1, ThisProgramName);
+            }
+
             if (Config.App.Debug.ToLower() != "No")
             {
                 Commands.Execute(Config.App.Debug);
@@ -234,6 +247,21 @@ namespace RtCli
                     Output.Log("正在运行扩展内容...", 1, ThisProgramName);
                     RtExtensionManager.DisplayLoadedExtensions();
                     RtExtensionManager.Run();
+
+                    // 若启用 start_run_ai，则自动启动AI自动化管理
+                    if (Config.App.StartRunAi)
+                    {
+                        try
+                        {
+                            Output.Log("正在自动启动AI自动化管理...", 1, ThisProgramName);
+                            Intelligence.AiAutoRunner.Start();
+                        }
+                        catch (Exception ex)
+                        {
+                            Output.Log($"自动启动AI失败: {ex.Message}", 2, ThisProgramName);
+                        }
+                    }
+
                     Continued();
                     break;
 
@@ -738,6 +766,55 @@ namespace RtCli
                                 AnsiConsole.Write(autoRoot);
                                 handled = true;
                                 break;
+                            case var cmd when cmd == ".ai":
+                                var aiRoot = new Tree("[cyan].ai 命令 - AI自动化管理[/]");
+                                aiRoot.AddNode("[green]start[/] - 启动AI自动化(如MC服务端未启动则自动启动)");
+                                aiRoot.AddNode("[green]stop[/] - 停止AI自动化");
+                                aiRoot.AddNode("[green]list[/] - 列出所有AI任务及运行状态");
+                                aiRoot.AddNode("[green]reload[/] - 重新加载AI配置并重启任务");
+                                aiRoot.AddNode("[green]run <任务名>[/] - 手动触发指定任务");
+                                aiRoot.AddNode("[green]clear <任务名>[/] - 清除指定任务的上下文缓存");
+                                aiRoot.AddNode("[green]clear[/] - 清除所有任务的上下文缓存");
+                                AnsiConsole.Write(aiRoot);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".ai start":
+                                Intelligence.AiAutoRunner.Start();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".ai stop":
+                                Intelligence.AiAutoRunner.Stop();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".ai list":
+                                Intelligence.AiAutoRunner.ListTasks();
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".ai reload":
+                                Intelligence.AiAutoRunner.Reload();
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".ai run "):
+                                string aiRunTaskName = cmd.Substring(".ai run ".Length).Trim();
+                                _ = Task.Run(async () => await Intelligence.AiAutoRunner.TriggerTaskAsync(aiRunTaskName));
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".ai run":
+                                Output.Log("用法: .ai run <任务名>", 1, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".ai clear "):
+                                string aiClearTaskName = cmd.Substring(".ai clear ".Length).Trim();
+                                if (string.IsNullOrWhiteSpace(aiClearTaskName) || aiClearTaskName.Equals("all", StringComparison.OrdinalIgnoreCase))
+                                    Intelligence.AiAutoRunner.ClearAllContextCache();
+                                else
+                                    Intelligence.AiAutoRunner.ClearContextCache(aiClearTaskName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".ai clear":
+                                Intelligence.AiAutoRunner.ClearAllContextCache();
+                                handled = true;
+                                break;
                             case var cmd when cmd != null && cmd.StartsWith(".auto on "):
                                 string onTaskName = cmd.Substring(".auto on ".Length).Trim();
                                 Scheduler.SetTaskEnabled(onTaskName, true);
@@ -1209,28 +1286,29 @@ namespace RtCli
 
             AnsiConsole.WriteLine();
 
-            var libTable = new Table().Border(TableBorder.Rounded).Title("[yellow]依赖库[/]");
+            var libTable = new Table().Border(TableBorder.Rounded).Title("[yellow]部分依赖库[/]");
             libTable.AddColumn("库");
             libTable.AddColumn("版本");
 
             var libs = new (string Name, string Version)[]
             {
-                ("Spectre.Console", "0.55.2"),
+                ("Spectre.Console", "0.57.2"),
                 ("Newtonsoft.Json", "13.0.4"),
-                ("Serilog", "4.3.1"),
+                ("Serilog", "4.4.0"),
                 ("Serilog.Sinks.File", "7.0.0"),
-                ("YamlDotNet", "18.0.0"),
+                ("YamlDotNet", "18.1.0"),
                 ("Grpc.AspNetCore", "2.80.0"),
                 ("Grpc.Core", "2.46.6"),
-                ("Google.Protobuf", "3.35.0"),
-                ("RestSharp", "114.0.0"),
-                ("System.Management", "10.0.8"),
+                ("Google.Protobuf", "3.35.1"),
+                ("Grpc.Tools", "2.82.0"),
+                ("System.Management", "10.0.10"),
                 ("TouchSocket", "2.3.6"),
-                ("Polly", "8.6.6"),
+                ("Polly", "8.7.0"),
                 ("Mono.Cecil", "0.11.6"),
-                ("Microsoft.Extensions.AI", "10.6.0"),
-                ("Hangfire.Core", "1.8.23"),
-                ("CS-Script", "4.14.9"),
+                ("MySqlConnector", "2.6.1"),
+                ("Microsoft.Extensions.AI", "10.8.3"),
+                ("Hangfire.Core", "1.8.24"),
+                ("CS-Script", "4.14.11"),
                 ("CSnakes.Runtime", "1.2.1"),
             };
 
@@ -1270,6 +1348,13 @@ namespace RtCli
                 .AddRow("[white].auto list[/]", "列出所有计划任务")
                 .AddRow("[white].auto start[/]", "启动调度器")
                 .AddRow("[white].auto stop[/]", "停止调度器")
+                .AddRow("[white].ai[/]", "AI自动化管理 (输入 .ai 查看子命令)")
+                .AddRow("[white].ai start[/]", "启动AI自动化(自动启动MC服务端)")
+                .AddRow("[white].ai stop[/]", "停止AI自动化")
+                .AddRow("[white].ai list[/]", "列出所有AI任务及运行状态")
+                .AddRow("[white].ai reload[/]", "重载AI配置并重启任务")
+                .AddRow("[white].ai run <任务名>[/]", "手动触发指定任务")
+                .AddRow("[white].ai clear[/]", "清除所有任务上下文缓存")
                 .AddRow("[white].fx[/]", "错误分析/客户端诊断 (输入 .fx 查看子命令)")
                 .AddRow("[white].fx get[/]", "获取MC服务端错误日志")
                 .AddRow("[white].fx list[/]", "列出所有错误分析结果")

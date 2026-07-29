@@ -4,7 +4,10 @@ using RtCli.Modules.Unit;
 using Spectre.Console;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -72,6 +75,16 @@ namespace RtCli.Modules.Function
         public string Trigger { get; set; } = "";
 
         /// <summary>
+        /// 执行前置条件（trigger满足后、execute执行前检查）
+        /// 支持格式:
+        ///   变量比较: {rt.server_running} == "true"
+        ///   check script 脚本名称 运算符 值: check script example_cs == "true"
+        ///   check file 路径 true/false: check file "E:\path\to\file" true
+        ///   多条件用 and / or 连接
+        /// </summary>
+        public string Condition { get; set; } = "";
+
+        /// <summary>
         /// 执行内容
         /// script:脚本名称 - 执行Scripts中已配置的脚本
         /// backup - 执行当前服务端备份
@@ -113,6 +126,314 @@ namespace RtCli.Modules.Function
         {
             Output.Log(Markup.Escape(msg), msgType, ThisName);
         }
+
+        #region 条件求值引擎
+
+        /// <summary>
+        /// 评估执行前置条件，支持 and/or 组合、{rt.xxx}变量、check script、check file
+        /// </summary>
+        private static bool EvaluateCondition(string condition)
+        {
+            try
+            {
+                // 先按 or 分割（优先级最低）
+                var orParts = SplitByOperator(condition, " or ");
+                foreach (var orPart in orParts)
+                {
+                    // 再按 and 分割
+                    var andParts = SplitByOperator(orPart.Trim(), " and ");
+                    bool allMatch = true;
+                    foreach (var andPart in andParts)
+                    {
+                        if (!EvaluateSingleCondition(andPart.Trim()))
+                        {
+                            allMatch = false;
+                            break;
+                        }
+                    }
+                    if (allMatch)
+                        return true;
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log($"条件求值异常: {ex.Message}", 2);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 按操作符分割，忽略引号内的内容
+        /// </summary>
+        private static List<string> SplitByOperator(string input, string op)
+        {
+            var result = new List<string>();
+            var parts = input.Split(new[] { op }, StringSplitOptions.None);
+            foreach (var part in parts)
+            {
+                var trimmed = part.Trim();
+                if (!string.IsNullOrEmpty(trimmed))
+                    result.Add(trimmed);
+            }
+            return result.Count > 0 ? result : new List<string> { input };
+        }
+
+        /// <summary>
+        /// 评估单个条件
+        /// </summary>
+        private static bool EvaluateSingleCondition(string condition)
+        {
+            condition = condition.Trim();
+            if (string.IsNullOrEmpty(condition))
+                return true;
+
+            // check script 脚本名称 运算符 值
+            if (condition.StartsWith("check script ", StringComparison.OrdinalIgnoreCase))
+            {
+                return EvaluateCheckScript(condition.Substring("check script ".Length).Trim());
+            }
+
+            // check file 路径 true/false
+            if (condition.StartsWith("check file ", StringComparison.OrdinalIgnoreCase))
+            {
+                return EvaluateCheckFile(condition.Substring("check file ".Length).Trim());
+            }
+
+            // 变量比较: {rt.xxx} 运算符 值
+            return EvaluateVariableComparison(condition);
+        }
+
+        /// <summary>
+        /// 评估变量比较表达式: {rt.xxx} == "value" 或 {rt.xxx} >= 10
+        /// </summary>
+        private static bool EvaluateVariableComparison(string expr)
+        {
+            // 提取 {rt.xxx} 变量
+            var varMatch = Regex.Match(expr, @"\{rt\.(\w+)\}");
+            if (!varMatch.Success)
+            {
+                // 没有变量，直接尝试解析为 bool
+                return bool.TryParse(expr, out var b) && b;
+            }
+
+            string varName = varMatch.Groups[1].Value;
+            string varValue = GetRuntimeVariable(varName);
+
+            // 提取运算符和右值
+            string remaining = expr.Substring(varMatch.Index + varMatch.Length).Trim();
+            var (op, rightValue) = ExtractOperatorAndValue(remaining);
+
+            if (string.IsNullOrEmpty(op))
+                return !string.IsNullOrEmpty(varValue);
+
+            return CompareValues(varValue, op, rightValue);
+        }
+
+        /// <summary>
+        /// 从剩余字符串中提取运算符和值
+        /// </summary>
+        private static (string op, string value) ExtractOperatorAndValue(string remaining)
+        {
+            // 按优先级匹配运算符（长运算符优先）
+            string[] operators = { ">=", "<=", "!=", "==", ">", "<", " contains ", " startsWith ", " endsWith " };
+            foreach (var op in operators)
+            {
+                int idx = remaining.IndexOf(op, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0)
+                {
+                    string value = remaining.Substring(idx + op.Length).Trim();
+                    // 去除引号
+                    value = value.Trim('"', '\'');
+                    string cleanOp = op.Trim();
+                    return (cleanOp, value);
+                }
+            }
+            return ("", "");
+        }
+
+        /// <summary>
+        /// 比较两个值
+        /// </summary>
+        private static bool CompareValues(string left, string op, string right)
+        {
+            switch (op)
+            {
+                case "==":
+                    return left == right;
+                case "!=":
+                    return left != right;
+                case "contains":
+                    return left.Contains(right);
+                case "startsWith":
+                    return left.StartsWith(right);
+                case "endsWith":
+                    return left.EndsWith(right);
+                case ">":
+                case ">=":
+                case "<":
+                case "<=":
+                    if (double.TryParse(left, out var lNum) && double.TryParse(right, out var rNum))
+                    {
+                        return op switch
+                        {
+                            ">" => lNum > rNum,
+                            ">=" => lNum >= rNum,
+                            "<" => lNum < rNum,
+                            "<=" => lNum <= rNum,
+                            _ => false
+                        };
+                    }
+                    // 非数字按字符串比较
+                    return op switch
+                    {
+                        ">" => string.Compare(left, right, StringComparison.Ordinal) > 0,
+                        ">=" => string.Compare(left, right, StringComparison.Ordinal) >= 0,
+                        "<" => string.Compare(left, right, StringComparison.Ordinal) < 0,
+                        "<=" => string.Compare(left, right, StringComparison.Ordinal) <= 0,
+                        _ => false
+                    };
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// check script 脚本名称 运算符 值
+        /// </summary>
+        private static bool EvaluateCheckScript(string args)
+        {
+            // 格式: 脚本名称 运算符 "值"
+            var parts = SplitScriptArgs(args);
+            if (parts.Count < 3)
+                return false;
+
+            string scriptName = parts[0];
+            string op = parts[1];
+            string expectedValue = parts[2];
+
+            // 执行脚本获取返回值
+            string scriptResult = ExecuteScriptForResult(scriptName);
+
+            return CompareValues(scriptResult, op, expectedValue);
+        }
+
+        /// <summary>
+        /// 分割脚本检查参数（支持引号）
+        /// </summary>
+        private static List<string> SplitScriptArgs(string input)
+        {
+            var result = new List<string>();
+            var matches = Regex.Matches(input, @"(?:""([^""]*)""|'([^']*)'|(\S+))");
+            foreach (Match m in matches)
+            {
+                string val = m.Groups[1].Success ? m.Groups[1].Value :
+                             m.Groups[2].Success ? m.Groups[2].Value :
+                             m.Groups[3].Value;
+                if (!string.IsNullOrEmpty(val))
+                    result.Add(val);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 执行脚本并获取返回值（通过stdout捕获）
+        /// </summary>
+        private static string ExecuteScriptForResult(string scriptName)
+        {
+            try
+            {
+                // 捕获脚本输出作为返回值
+                var sw = new System.IO.StringWriter();
+                var originalOut = Console.Out;
+                try
+                {
+                    Console.SetOut(sw);
+                    Scripts.ExecuteScriptByName(scriptName);
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+                return sw.ToString().Trim();
+            }
+            catch (Exception ex)
+            {
+                Log($"执行脚本 {scriptName} 失败: {ex.Message}", 2);
+                return "";
+            }
+        }
+
+        /// <summary>
+        /// check file 路径 true/false
+        /// </summary>
+        private static bool EvaluateCheckFile(string args)
+        {
+            // 格式: "路径" true/false 或 路径 true/false
+            var parts = SplitScriptArgs(args);
+            if (parts.Count < 2)
+                return false;
+
+            string filePath = parts[0];
+            if (!bool.TryParse(parts[parts.Count - 1], out var shouldExist))
+                return false;
+
+            bool exists = File.Exists(filePath) || Directory.Exists(filePath);
+            return shouldExist ? exists : !exists;
+        }
+
+        /// <summary>
+        /// 获取运行时变量值
+        /// </summary>
+        private static string GetRuntimeVariable(string varName)
+        {
+            try
+            {
+                switch (varName.ToLowerInvariant())
+                {
+                    case "server_running":
+                        return (Analyzer.IsRunModeActive || Analyzer.IsAttached).ToString().ToLowerInvariant();
+                    case "server_key":
+                        return Config.App?.CurrentServer ?? "";
+                    case "server_name":
+                        return Config.CurrentServer?.ServerName ?? "";
+                    case "mode":
+                        return Analyzer.CurrentMode ?? "";
+                    case "player_count":
+                        return "0"; // TODO: 从Analyzer获取在线人数
+                    case "uptime_minutes":
+                        return ((int)(DateTime.Now - Process.GetCurrentProcess().StartTime).TotalMinutes).ToString();
+                    case "tps":
+                        return "0"; // TODO: 从Analyzer获取TPS
+                    case "memory_usage_mb":
+                        return ((int)Process.GetCurrentProcess().WorkingSet64 / 1024 / 1024).ToString();
+                    case "cpu_usage":
+                        return Process.GetCurrentProcess().TotalProcessorTime.TotalSeconds.ToString("F0");
+                    case "auto_backup_enabled":
+                        return (Config.App?.AutoBackupEnabled ?? false).ToString().ToLowerInvariant();
+                    case "scheduler_running":
+                        return _isRunning.ToString().ToLowerInvariant();
+                    case "time":
+                        return DateTime.Now.ToString("HH:mm:ss");
+                    case "date":
+                        return DateTime.Now.ToString("yyyy-MM-dd");
+                    case "timestamp":
+                        return ((long)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1)).TotalSeconds).ToString();
+                    default:
+                        // 尝试从当前服务器配置中读取同名属性
+                        if (Config.CurrentServer != null)
+                        {
+                            var prop = Config.CurrentServer.GetType().GetProperty(varName);
+                            if (prop != null)
+                                return prop.GetValue(Config.CurrentServer)?.ToString() ?? "";
+                        }
+                        return "";
+                }
+            }
+            catch { return ""; }
+        }
+
+        #endregion
 
         public static void Initialize()
         {
@@ -541,8 +862,31 @@ namespace RtCli.Modules.Function
                 case "ConfigReloadEvent":
                     EventBus.Subscribe<ConfigReloadEvent>(e => handler(e), subId);
                     break;
+                case "PlayerJoinEvent":
+                    EventBus.Subscribe<PlayerJoinEvent>(e => handler(e), subId);
+                    break;
+                case "PlayerConnectEvent":
+                    EventBus.Subscribe<PlayerConnectEvent>(e => handler(e), subId);
+                    break;
+                case "PlayerLostEvent":
+                    EventBus.Subscribe<PlayerLostEvent>(e => handler(e), subId);
+                    break;
+                case "PlayerLeaveEvent":
+                    EventBus.Subscribe<PlayerLeaveEvent>(e => handler(e), subId);
+                    break;
+                case "PlayerCommandEvent":
+                    EventBus.Subscribe<PlayerCommandEvent>(e => handler(e), subId);
+                    break;
+                case "PlayerChatEvent":
+                    EventBus.Subscribe<PlayerChatEvent>(e => handler(e), subId);
+                    break;
+                case "PlayerSetModeEvent":
+                    EventBus.Subscribe<PlayerSetModeEvent>(e => handler(e), subId);
+                    break;
+                case "CustomPlayerEvent":
                 default:
-                    Log($"任务 {taskName} 未知事件: {eventName}", 2);
+                    // 自定义事件名和CustomPlayerEvent都通过CustomPlayerEvent订阅
+                    EventBus.Subscribe<CustomPlayerEvent>(e => handler(e), subId);
                     break;
             }
 
@@ -609,6 +953,16 @@ namespace RtCli.Modules.Function
                         var wait = delayTime - DateTime.Now;
                         if (wait.TotalSeconds > 0)
                             await Task.Delay((int)wait.TotalMilliseconds);
+                    }
+                }
+
+                // 检查执行前置条件
+                if (!string.IsNullOrWhiteSpace(task.Condition))
+                {
+                    if (!EvaluateCondition(task.Condition))
+                    {
+                        Log($"任务 {taskName} 条件不满足，跳过执行: {task.Condition}", 1);
+                        return;
                     }
                 }
 

@@ -82,12 +82,89 @@ namespace RtCli.Modules.Unit
             "1.18.2",
             "1.16.5",
             "1.12.2",
+            "1.8.8",
         };
 
         // 自动同意EULA（全局设置，适用于所有服务端）
         public bool AutoAgreeEula { get; set; } = false;
 
+        // 启动程序后自动开启服务端并启动AI自动化管理
+        public bool StartRunAi { get; set; } = false;
+
+        // 玩家事件监听
+        public PlayerEventConfig PlayerEvent { get; set; } = new PlayerEventConfig();
+
         public string Debug { get; set; } = "No";
+    }
+
+    /// <summary>
+    /// 玩家事件监听配置
+    /// </summary>
+    public class PlayerEventConfig
+    {
+        public bool Enabled { get; set; } = false;
+        public int Ticks { get; set; } = 10;
+
+        // 各事件的正则表达式列表（支持多个，匹配任意一个）
+        // 使用命名组提取参数: player_name, player_trigger_time, player_ip, player_lost_reason, player_mode
+        public List<string> PlayerJoin { get; set; } = new List<string>
+        {
+            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+joined the game"
+        };
+
+        public List<string> Connect { get; set; } = new List<string>
+        {
+            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\[/(?<player_ip>[\d\.]+):\d+\]\s+logged in"
+        };
+
+        public List<string> Lost { get; set; } = new List<string>
+        {
+            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+lost connection(?<player_lost_reason>.*)"
+        };
+
+        public List<string> Leaves { get; set; } = new List<string>
+        {
+            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+left the game"
+        };
+
+        public List<string> Command { get; set; } = new List<string>
+        {
+            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+issued server command:\s*(?<command>.*)"
+        };
+
+        public List<string> Chat { get; set; } = new List<string>
+        {
+            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+<(?<player_name>\w+)>\s*(?<message>.*)"
+        };
+
+        public List<string> Setmode { get; set; } = new List<string>
+        {
+            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+Set own game mode to\s+(?<player_mode>\w+ Mode)"
+        };
+
+        // 自定义事件: 键名=事件名, 值=配置(patterns+parameters)
+        public Dictionary<string, CustomPlayerEventConfig> Customs { get; set; } = new Dictionary<string, CustomPlayerEventConfig>
+        {
+            ["PlayerMoveTooFast"] = new CustomPlayerEventConfig
+            {
+                Patterns = new List<string>
+                {
+                    @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+moved too quickly!\s+(?<speed>[\d.,]+)",
+                    @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+moved wrongly!"
+                },
+                Parameters = new List<string> { "speed" }
+            }
+        };
+    }
+
+    /// <summary>
+    /// 自定义玩家事件配置
+    /// </summary>
+    public class CustomPlayerEventConfig
+    {
+        public List<string> Patterns { get; set; } = new List<string>();
+        // 参数名列表，对应正则表达式中的命名组名
+        public List<string> Parameters { get; set; } = new List<string>();
     }
 
     public static class Config
@@ -276,6 +353,20 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#");
             sb.AppendLine("#  EULA设置:");
             sb.AppendLine("#    auto_agree_eula - 自动同意Minecraft EULA (true/false, 全局设置)");
+            sb.AppendLine("#    start_run_ai    - 启动程序后自动开启MC服务端并启动AI自动化管理 (true/false)");
+            sb.AppendLine("#");
+            sb.AppendLine("#  玩家事件监听 (player_event):");
+            sb.AppendLine("#    enabled  - 是否启用控制台消息监听并发布玩家事件 (true/false)");
+            sb.AppendLine("#    ticks    - 每次监听的延迟(ms, 推荐10, 人数越多建议越小)");
+            sb.AppendLine("#    player_join  - 玩家加入事件正则列表(传递: player_name, player_trigger_time)");
+            sb.AppendLine("#    connect      - 玩家连接事件正则列表(额外传递: player_ip)");
+            sb.AppendLine("#    lost         - 玩家断开事件正则列表(额外传递: player_lost_reason)");
+            sb.AppendLine("#    leaves       - 玩家离开事件正则列表(传递: player_name, player_trigger_time)");
+            sb.AppendLine("#    command      - 玩家命令事件正则列表(额外传递: command)");
+            sb.AppendLine("#    chat         - 玩家聊天事件正则列表(额外传递: message)");
+            sb.AppendLine("#    setmode      - 玩家切换模式事件正则列表(额外传递: player_mode)");
+            sb.AppendLine("#    customs      - 自定义事件(键名=事件名, 值含patterns正则列表和parameters参数名列表)");
+            sb.AppendLine("#    正则表达式中使用命名组提取参数, 如 (?<player_name>\\w+) 等");
             sb.AppendLine("#");
             sb.AppendLine("#  使用 .server change <标识> 切换当前服务端");
             sb.AppendLine("#  使用 .server list 查看所有服务端  .server add 添加  .server del 删除");
@@ -359,6 +450,11 @@ namespace RtCli.Modules.Unit
                 {
                     sb.AppendLine();
                     sb.AppendLine("# 自动同意Minecraft EULA(全局设置, 请确认你已经阅读并同意 https://www.minecraft.net/eula)");
+                }
+                else if (trimmedLine.StartsWith("start_run_ai:"))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("# 启动程序后自动开启MC服务端并启动AI自动化管理(.ai命令功能)");
                 }
                 else if (trimmedLine.StartsWith("enable_auto_tips:"))
                 {
@@ -468,12 +564,17 @@ namespace RtCli.Modules.Unit
                 else if (trimmedLine.StartsWith("popular_versions:"))
                 {
                     sb.AppendLine();
-                    sb.AppendLine("# 引导中显示的流行版本列表");
+                    sb.AppendLine("# 引导中显示的流行版本列表，这些版本基本支持");
                 }
                 else if (trimmedLine.StartsWith("skip_select"))
                 {
                     sb.AppendLine();
                     sb.AppendLine("# 跳过模式选择");
+                }
+                else if (trimmedLine.StartsWith("player_event:"))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("# 玩家事件监听设置(监听控制台消息并发布事件, 正则中使用命名组提取参数)");
                 }
                 else if (trimmedLine.StartsWith("debug:"))
                 {
@@ -497,6 +598,12 @@ namespace RtCli.Modules.Unit
             ContentManager.ReloadAll();
             Scripts.Reload();
             Intelligence.StartAutoBackup();
+
+            // 若AI自动化管理正在运行，则重载任务配置
+            if (Intelligence.AiAutoRunner.IsRunning)
+            {
+                try { Intelligence.AiAutoRunner.Reload(); } catch { }
+            }
 
             Output.Log("所有配置文件已热重载完成。", 1, "Config");
             EventBus.Publish(new ConfigReloadEvent());

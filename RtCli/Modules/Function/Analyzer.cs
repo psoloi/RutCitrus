@@ -35,6 +35,10 @@ namespace RtCli.Modules.Function
         internal static readonly List<string> _logBuffer = new List<string>();
         private const int MaxLogBufferSize = 5000;
 
+        // 实时崩溃检测状态(去重用)
+        private static DateTime _lastCrashSignalTime = DateTime.MinValue;
+        private static readonly object _crashSignalLock = new object();
+
         private static CancellationTokenSource? _clientGuideCts;
         private static volatile bool _clientGuideActive = false;
         private static readonly List<ClientGuideMatch> _lastClientGuideMatches = new List<ClientGuideMatch>();
@@ -149,6 +153,9 @@ namespace RtCli.Modules.Function
                         if (!ShouldHideConsole())
                             Output.Log(e.Data, 0, _connectedServerName);
 
+                        ProcessPlayerEventLine(e.Data);
+                        ProcessCrashDetectionLine(e.Data);
+
                         // 自动检测EULA提示
                         if (e.Data.Contains("eula=false", StringComparison.OrdinalIgnoreCase) ||
                             e.Data.Contains("You need to agree to the EULA", StringComparison.OrdinalIgnoreCase))
@@ -192,6 +199,8 @@ namespace RtCli.Modules.Function
                         AddToLogBuffer(e.Data);
                         if (!ShouldHideConsole())
                             Output.Log(e.Data, 0, _connectedServerName);
+                        ProcessPlayerEventLine(e.Data);
+                        ProcessCrashDetectionLine(e.Data);
                     }
                 };
 
@@ -625,6 +634,12 @@ namespace RtCli.Modules.Function
                         break;
 
                     ReadNewLogLines(logFile, serverName);
+
+                    // 玩家事件监听延迟(ticks)，人数越多建议越小
+                    int ticks = Config.App.PlayerEvent?.Enabled == true
+                        ? Math.Max(1, Config.App.PlayerEvent.Ticks)
+                        : 50;
+                    Thread.Sleep(ticks);
                 }
             }
             catch (OperationCanceledException) { }
@@ -650,6 +665,7 @@ namespace RtCli.Modules.Function
                     {
                         if (!ShouldHideConsole())
                             Output.Log(line, 0, serverName);
+                        ProcessPlayerEventLine(line);
                     }
                 }
 
@@ -1899,6 +1915,185 @@ namespace RtCli.Modules.Function
                 }
             }
         }
+
+        /// <summary>
+        /// 实时检测日志行中的服务器崩溃信号(精准关键字单行命中即判定)
+        /// 命中后通过 EventBus 发布事件，并触发 AI 崩溃检测任务(60秒去重)
+        /// </summary>
+        private static void ProcessCrashDetectionLine(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return;
+
+            // 精准崩溃标志(单行命中即判定，避免误报)
+            bool isCrashSignal =
+                line.Contains("---- Minecraft Crash Report ----", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("This crash report has been saved to", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Shutting down the server", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Server thread/FATAL", StringComparison.OrdinalIgnoreCase) ||
+                (line.Contains("Server thread/ERROR", StringComparison.OrdinalIgnoreCase) &&
+                 line.Contains("Crash", StringComparison.OrdinalIgnoreCase));
+
+            if (!isCrashSignal) return;
+
+            lock (_crashSignalLock)
+            {
+                // 去重：60 秒内不重复触发
+                if ((DateTime.Now - _lastCrashSignalTime).TotalSeconds < 60) return;
+                _lastCrashSignalTime = DateTime.Now;
+            }
+
+            Output.Log($"检测到服务器崩溃信号: {line}", 2, "Analyzer");
+            EventBus.Publish(new ServerCrashEvent(Config.App.CurrentServer, -1));
+
+            // 触发 AI 崩溃检测任务(延迟2秒等待崩溃报告文件写入完成)
+            if (Intelligence.AiAutoRunner.IsRunning)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(2000);
+                        await Intelligence.AiAutoRunner.TriggerTaskAsync("crash_detect");
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"触发崩溃检测AI任务失败: {ex.Message}", 2, "Analyzer");
+                    }
+                });
+            }
+        }
+
+        #region 玩家事件监听
+
+        private static void ProcessPlayerEventLine(string line)
+        {
+            try
+            {
+                var pe = Config.App.PlayerEvent;
+                if (pe == null || !pe.Enabled) return;
+
+                // player_join
+                TryMatchAndPublish(line, pe.PlayerJoin, (m) =>
+                {
+                    EventBus.Publish(new PlayerJoinEvent(
+                        GetGroupValue(m, "player_name"),
+                        GetGroupValue(m, "player_trigger_time")));
+                });
+
+                // connect (额外传递 player_ip)
+                TryMatchAndPublish(line, pe.Connect, (m) =>
+                {
+                    EventBus.Publish(new PlayerConnectEvent(
+                        GetGroupValue(m, "player_name"),
+                        GetGroupValue(m, "player_trigger_time"),
+                        GetGroupValue(m, "player_ip")));
+                });
+
+                // lost (额外传递 player_lost_reason)
+                TryMatchAndPublish(line, pe.Lost, (m) =>
+                {
+                    EventBus.Publish(new PlayerLostEvent(
+                        GetGroupValue(m, "player_name"),
+                        GetGroupValue(m, "player_trigger_time"),
+                        GetGroupValue(m, "player_lost_reason").Trim()));
+                });
+
+                // leaves
+                TryMatchAndPublish(line, pe.Leaves, (m) =>
+                {
+                    EventBus.Publish(new PlayerLeaveEvent(
+                        GetGroupValue(m, "player_name"),
+                        GetGroupValue(m, "player_trigger_time")));
+                });
+
+                // command (额外传递 command)
+                TryMatchAndPublish(line, pe.Command, (m) =>
+                {
+                    EventBus.Publish(new PlayerCommandEvent(
+                        GetGroupValue(m, "player_name"),
+                        GetGroupValue(m, "player_trigger_time"),
+                        GetGroupValue(m, "command").Trim()));
+                });
+
+                // chat (额外传递 message)
+                TryMatchAndPublish(line, pe.Chat, (m) =>
+                {
+                    EventBus.Publish(new PlayerChatEvent(
+                        GetGroupValue(m, "player_name"),
+                        GetGroupValue(m, "player_trigger_time"),
+                        GetGroupValue(m, "message").Trim()));
+                });
+
+                // setmode (额外传递 player_mode)
+                TryMatchAndPublish(line, pe.Setmode, (m) =>
+                {
+                    EventBus.Publish(new PlayerSetModeEvent(
+                        GetGroupValue(m, "player_name"),
+                        GetGroupValue(m, "player_trigger_time"),
+                        GetGroupValue(m, "player_mode").Trim()));
+                });
+
+                // customs (自定义事件)
+                if (pe.Customs != null && pe.Customs.Count > 0)
+                {
+                    foreach (var kvp in pe.Customs)
+                    {
+                        string eventName = kvp.Key;
+                        var customCfg = kvp.Value;
+                        if (customCfg?.Patterns == null || customCfg.Patterns.Count == 0) continue;
+
+                        TryMatchAndPublish(line, customCfg.Patterns, (m) =>
+                        {
+                            var ev = new CustomPlayerEvent(
+                                eventName,
+                                GetGroupValue(m, "player_name"),
+                                GetGroupValue(m, "player_trigger_time"));
+
+                            if (customCfg.Parameters != null)
+                            {
+                                foreach (var paramName in customCfg.Parameters)
+                                {
+                                    string val = GetGroupValue(m, paramName);
+                                    if (!string.IsNullOrEmpty(val))
+                                        ev.Parameters[paramName] = val.Trim();
+                                }
+                            }
+                            EventBus.Publish(ev);
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"玩家事件监听异常: {ex.Message}", 2, "PlayerEvent");
+            }
+        }
+
+        private static void TryMatchAndPublish(string line, List<string> patterns, Action<Match> onMatch)
+        {
+            if (patterns == null || patterns.Count == 0) return;
+            foreach (var pattern in patterns)
+            {
+                if (string.IsNullOrWhiteSpace(pattern)) continue;
+                try
+                {
+                    var match = Regex.Match(line, pattern);
+                    if (match.Success)
+                    {
+                        onMatch(match);
+                        return; // 一个行只触发一次
+                    }
+                }
+                catch { } // 忽略无效正则
+            }
+        }
+
+        private static string GetGroupValue(Match m, string name)
+        {
+            return m.Groups.TryGetValue(name, out var g) ? g.Value : "";
+        }
+
+        #endregion
 
         private static void DetachCore()
         {

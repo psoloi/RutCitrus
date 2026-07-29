@@ -114,7 +114,7 @@ namespace RtCli.Modules.Unit
             new BaseEntry(
                 @"java\.net\.UnknownHostException",
                 "DNS解析失败",
-                "无法解析主机名，请检查网络连接和DNS设置，尝试更换DNS为 8.8.8.8 或 1.1.1.1",
+                "无法解析主机名，请检查网络连接和DNS设置",
                 ""),
             new BaseEntry(
                 @"java\.io\.FileNotFoundException|java\.nio\.file\.NoSuchFileException",
@@ -149,7 +149,7 @@ namespace RtCli.Modules.Unit
             new BaseEntry(
                 @"java\.lang\.UnsupportedClassVersionError",
                 "类版本不支持",
-                "Java版本过低无法加载类文件，请升级Java版本到插件要求的版本",
+                "Java版本过低无法加载类文件，请升级Java版本到插件要求的版本，或自行均衡乃至构建",
                 ""),
             new BaseEntry(
                 @"org\.yaml\.snakeyaml\.error\.YAMLException|org\.yaml\.snakeyaml\.scanner\.ScannerException|while parsing a block mapping|while parsing a block collection",
@@ -169,7 +169,7 @@ namespace RtCli.Modules.Unit
             new BaseEntry(
                 @"Timings reset|Timings report|timings",
                 "性能分析",
-                "这是Timings性能分析相关信息，如非主动操作请忽略，可使用 /timings paste 获取性能报告",
+                "这是Timings性能分析相关信息，如非主动操作请忽略，可使用 /timings paste 获取性能报告，不建议使用timings建议使用spark",
                 ""),
             new BaseEntry(
                 @"World .* is corrupt|Chunk .* is corrupt|Corrupted chunk",
@@ -179,7 +179,7 @@ namespace RtCli.Modules.Unit
             new BaseEntry(
                 @"Keeping entity .* that already exists|Duplicate entity|Entity id .* already exists",
                 "实体重复",
-                "存在重复实体，通常是区块数据异常导致，可使用 /kill @e[type=!player] 清理或使用插件如 ClearLag 清理",
+                "存在重复实体，通常是区块数据异常导致，可使用 /kill @e[type=!player] 清理或使用插件如 LagFixer 清理",
                 ""),
             new BaseEntry(
                 @"Can.t keep up!.*overloaded",
@@ -290,10 +290,10 @@ namespace RtCli.Modules.Unit
                 "Java版本不兼容：该插件/模组需要更高版本的Java。class file version对照：52=Java8, 53=Java9, 54=Java10, 55=Java11, 56=Java12, 57=Java13, 58=Java14, 59=Java15, 60=Java16, 61=Java17, 62=Java18, 63=Java19, 64=Java20, 65=Java21, 66=Java22, 67=Java23, 69=Java25。请升级Java到对应版本或更高版本"),
             new TipsEntry(
                 @"Setting online-mode to false|Online mode is disabled|server is running in offline mode",
-                "已关闭正版验证(online-mode=false)，任何玩家可以使用离线版加入服务器，建议安装登录插件(如AuthMe、LoginSecurity)或开启白名单(/whitelist on)防止恶意登录"),
+                "已关闭正版验证(online-mode=false)，任何玩家可以使用离线版加入服务器，建议安装登录插件(如AuthMeReload、JPremium)或开启白名单(/whitelist on)防止恶意登录"),
             new TipsEntry(
                 @"Can.t keep up!.*overloaded",
-                "服务端过载，TPS可能已降低。检查：1.是否有高消耗插件 2.实体数量是否过多 3.红石机械是否过于复杂 4.考虑升级硬件或增加JVM内存"),
+                "服务端过载，TPS可能已降低。检查方向：高消耗插件/模组、实体数量、红石机械复杂度、机器性能、配置问题、服务器崩溃"),
             new TipsEntry(
                 @"The server has stopped responding and has been forcibly shutdown!",
                 "Watchdog检测到服务端无响应并强制关闭，主线程被阻塞。检查崩溃前的日志定位阻塞原因，可能是死循环插件或无限等待的I/O操作"),
@@ -305,7 +305,7 @@ namespace RtCli.Modules.Unit
                 "服务端核心的版本可更新"),
             new TipsEntry(
                 @"Loading LegacyAPI|This server is running an outdated version of",
-                "服务端或插件API版本过旧，部分插件可能无法正常工作，建议更新服务端核心"),
+                "服务端或插件API版本过旧，部分插件可能无法正常工作，建议更新服务端核心，使用只能工具自行构建或寻找替代方案"),
             new TipsEntry(
                 @"java\.lang\.OutOfMemoryError: Java heap space",
                 "Java堆内存不足，请在启动参数中增加 -Xmx 值（如 -Xmx4G），同时检查是否存在内存泄漏的插件"),
@@ -320,7 +320,7 @@ namespace RtCli.Modules.Unit
                 "Guice/依赖注入框架错误，通常是插件初始化失败，检查插件是否与服务端版本兼容"),
             new TipsEntry(
                 @"Error occurred while enabling|Disabling plugin",
-                "插件启用时出错被自动禁用，查看详细堆栈信息定位问题，通常是配置错误或缺少依赖"),
+                "插件启用时出错被自动禁用，查看详细堆栈信息定位问题，通常是配置错误(看有没有JSON/YAML字样)或缺少依赖"),
             new TipsEntry(
                 @"Could not pass event (.+) to (.+)",
                 "插件事件处理异常，$2在处理$1事件时出错，检查该插件是否为最新版本，或向插件作者反馈"),
@@ -329,7 +329,7 @@ namespace RtCli.Modules.Unit
                 "世界文件中存在损坏的区块，可使用区块修复工具(如 MCA Selector)修复或删除损坏区块让服务端重新生成"),
             new TipsEntry(
                 @"Moved too quickly!|Moved wrongly!",
-                "玩家移动异常被服务端修正，频繁出现可能是：1.网络延迟高 2.服务端TPS低 3.玩家可能作弊或插件的自定义物品导致。可在spigot.yml中调整相关阈值"),
+                "玩家移动异常被服务端修正，频繁出现可能是：1.网络延迟高 2.服务端TPS低 3.玩家可能作弊或插件的自定义属性导致。可在spigot.yml中调整相关阈值"),
         };
 
         public static void Initialize()
@@ -565,6 +565,49 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#    retry_count          - 最大重试次数");
             sb.AppendLine("#    save_response        - 是否保存AI回复到ai_save.yml");
             sb.AppendLine("#");
+            sb.AppendLine("#  ServerAutoAi (服务端自动AI管理):");
+            sb.AppendLine("#    prompt               - 系统提示词(总)");
+            sb.AppendLine("#    max_tokens           - AI输出的最大token数");
+            sb.AppendLine("#    api_endpoint         - AI API地址(留空则复用Console_Error的配置)");
+            sb.AppendLine("#    api_key              - API密钥(留空则复用Console_Error的配置)");
+            sb.AppendLine("#    model                - AI模型名称(留空则复用Console_Error的配置)");
+            sb.AppendLine("#    temperature          - 生成温度(建议较低, 0.3-0.6)");
+            sb.AppendLine("#    request_timeout_seconds - 请求超时时间(秒)");
+            sb.AppendLine("#    retry_on_error       - 异常时是否自动重连");
+            sb.AppendLine("#    retry_count          - 最大重试次数");
+            sb.AppendLine("#    save_response        - 是否保存AI回复(上下文缓存)到ai_save.yml");
+            sb.AppendLine("#    context_cache_size   - 上下文缓存最大条数(每个任务独立)");
+            sb.AppendLine("#    max_tool_rounds      - AI允许调用工具的最大轮次(防无限循环)");
+            sb.AppendLine("#    tools                - 工具配置(enabled/allow/deny/tools_prompt)");
+            sb.AppendLine("#    skills               - 技能列表(name/description/behavior)");
+            sb.AppendLine("#    rules                - 规则列表(多行字符串, 使用 - | 格式)");
+            sb.AppendLine("#    tasks                - 任务列表(键名为类别, 含name/trigger/input/limit/prompt/interval/actions)");
+            sb.AppendLine("#");
+            sb.AppendLine("#  内置工具:");
+            sb.AppendLine("#    read_file            - 读取MC服务端目录中文件内容");
+            sb.AppendLine("#    get_server_plugin_list - 获取MC服务端插件列表");
+            sb.AppendLine("#    get_server_log       - 获取MC服务端日志");
+            sb.AppendLine("#    run_script           - 运行Scripts中已配置的脚本");
+            sb.AppendLine("#    modify_file          - 修改MC服务端目录中文件内容");
+            sb.AppendLine("#    toggle_plugin        - 启用/禁用插件(jar<->disjar)");
+            sb.AppendLine("#    run_command          - 运行程序命令或向服务器发送命令(禁止/op)");
+            sb.AppendLine("#    restart_server       - 重启MC服务端");
+            sb.AppendLine("#");
+            sb.AppendLine("#  工具调用格式: [rt:tools\"(工具名称{参数JSON})\"]");
+            sb.AppendLine("#    示例: [rt:tools\"(get_server_log{\"lines\":100})\"]");
+            sb.AppendLine("#    示例: [rt:tools\"(toggle_plugin{\"plugin\":\"Example.jar\",\"disable\":true})\"]");
+            sb.AppendLine("#");
+            sb.AppendLine("#  tasks 任务字段说明:");
+            sb.AppendLine("#    name      - 任务名称/主题");
+            sb.AppendLine("#    trigger   - 触发条件(always/server_running/server_stopped/crash_detected)");
+            sb.AppendLine("#                条件表达式: tps < 18 / cpu > 85 / memory > 80 / players == 0 / idle_minutes > 360");
+            sb.AppendLine("#    input     - 数据源(server_logs/app_logs/server_tps/server_plugin/host_cpu/host_memory)");
+            sb.AppendLine("#                扩展源: server_players/server_status/crash_report");
+            sb.AppendLine("#    limit     - 提示词+输入内容最大token量");
+            sb.AppendLine("#    prompt    - 该分类的提示词");
+            sb.AppendLine("#    interval  - Cron表达式(如 0 0 0/1 * * ? 每小时)");
+            sb.AppendLine("#    actions   - 执行动作(ai 进行AI分析, tools:工具名1,工具名2 限定可用工具)");
+            sb.AppendLine("#");
             sb.AppendLine("# ==============================================================================");
             sb.AppendLine();
 
@@ -574,57 +617,206 @@ namespace RtCli.Modules.Unit
             var yaml = serializer.Serialize(Ai);
 
             var lines = yaml.Split('\n');
+            bool inServerAutoAi = false;
             foreach (var line in lines)
             {
                 var trimmed = line.Trim();
-                if (trimmed.StartsWith("prompt:"))
+                if (trimmed.StartsWith("server_auto_ai:"))
                 {
-                    sb.AppendLine("# 系统提示词");
-                }
-                else if (trimmed.StartsWith("max_tokens:"))
-                {
+                    inServerAutoAi = true;
                     sb.AppendLine();
-                    sb.AppendLine("# AI输出的最大token数");
+                    sb.AppendLine("# ====================== 服务端自动AI管理 ======================");
+                    sb.AppendLine("# 启用后可通过 .ai 命令进行无人自动化管理MC服务端");
+                    sb.AppendLine(line.TrimEnd('\r'));
+                    continue;
                 }
-                else if (trimmed.StartsWith("api_endpoint:"))
+                if (inServerAutoAi)
                 {
-                    sb.AppendLine();
-                    sb.AppendLine("# AI API地址(兼容OpenAI格式，如 http://localhost:11434/v1/chat/completions 或 https://api.openai.com/v1/chat/completions)");
+                    if (line.Length > 0 && !char.IsWhiteSpace(line[0]) && !trimmed.StartsWith("-") && !trimmed.StartsWith("#"))
+                    {
+                        inServerAutoAi = false;
+                    }
                 }
-                else if (trimmed.StartsWith("api_key:"))
+                if (!inServerAutoAi)
                 {
-                    sb.AppendLine();
-                    sb.AppendLine("# API密钥(本地模型如Ollama留空即可，OpenAI等云服务需要填写)");
+                    if (trimmed.StartsWith("prompt:"))
+                    {
+                        sb.AppendLine("# 系统提示词");
+                    }
+                    else if (trimmed.StartsWith("max_tokens:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# AI输出的最大token数");
+                    }
+                    else if (trimmed.StartsWith("api_endpoint:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# AI API地址(兼容OpenAI格式，如 http://localhost:11434/v1/chat/completions 或 https://api.openai.com/v1/chat/completions)");
+                    }
+                    else if (trimmed.StartsWith("api_key:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# API密钥(本地模型如Ollama留空即可，OpenAI等云服务需要填写)");
+                    }
+                    else if (trimmed.StartsWith("model:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# AI模型名称(如 qwen2.5:7b、gpt-4o-mini、deepseek-chat 等)");
+                    }
+                    else if (trimmed.StartsWith("temperature:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 生成温度(0.0-2.0，越低越确定，越高越随机)");
+                    }
+                    else if (trimmed.StartsWith("request_timeout_seconds:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 请求超时时间(秒)");
+                    }
+                    else if (trimmed.StartsWith("retry_on_error:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 异常时是否自动重连");
+                    }
+                    else if (trimmed.StartsWith("retry_count:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 最大重试次数");
+                    }
+                    else if (trimmed.StartsWith("save_response:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 是否保存AI回复到ai_save.yml");
+                    }
                 }
-                else if (trimmed.StartsWith("model:"))
+                else
                 {
-                    sb.AppendLine();
-                    sb.AppendLine("# AI模型名称(如 qwen2.5:7b、gpt-4o-mini、deepseek-chat 等)");
-                }
-                else if (trimmed.StartsWith("temperature:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 生成温度(0.0-2.0，越低越确定，越高越随机)");
-                }
-                else if (trimmed.StartsWith("request_timeout_seconds:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 请求超时时间(秒)");
-                }
-                else if (trimmed.StartsWith("retry_on_error:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 异常时是否自动重连");
-                }
-                else if (trimmed.StartsWith("retry_count:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 最大重试次数");
-                }
-                else if (trimmed.StartsWith("save_response:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否保存AI回复到ai_save.yml");
+                    if (trimmed.StartsWith("prompt:"))
+                    {
+                        sb.AppendLine("# 系统提示词(总)");
+                    }
+                    else if (trimmed.StartsWith("max_tokens:"))
+                    {
+                        sb.AppendLine("# AI输出的最大token数");
+                    }
+                    else if (trimmed.StartsWith("api_endpoint:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# AI API地址(留空则复用Console_Error的配置)");
+                    }
+                    else if (trimmed.StartsWith("api_key:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# API密钥(留空则复用Console_Error的配置)");
+                    }
+                    else if (trimmed.StartsWith("model:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# AI模型名称(留空则复用Console_Error的配置)");
+                    }
+                    else if (trimmed.StartsWith("temperature:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 生成温度(建议较低, 0.3-0.6)");
+                    }
+                    else if (trimmed.StartsWith("request_timeout_seconds:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 请求超时时间(秒)");
+                    }
+                    else if (trimmed.StartsWith("retry_on_error:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 异常时是否自动重连");
+                    }
+                    else if (trimmed.StartsWith("retry_count:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 最大重试次数");
+                    }
+                    else if (trimmed.StartsWith("save_response:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 是否保存AI回复(上下文缓存)到ai_save.yml");
+                    }
+                    else if (trimmed.StartsWith("context_cache_size:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 上下文缓存最大条数(每个任务独立缓存)");
+                    }
+                    else if (trimmed.StartsWith("max_tool_rounds:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# AI允许调用工具的最大轮次(防止无限循环)");
+                    }
+                    else if (trimmed.StartsWith("tools:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 工具配置(enabled/allow/deny/tools_prompt)");
+                    }
+                    else if (trimmed.StartsWith("enabled:"))
+                    {
+                        sb.AppendLine("# 是否启用工具调用功能");
+                    }
+                    else if (trimmed.StartsWith("allow:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 允许使用的工具列表(为空则允许所有未在deny中的工具)");
+                    }
+                    else if (trimmed.StartsWith("deny:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 禁止使用的工具列表(优先级高于allow)");
+                    }
+                    else if (trimmed.StartsWith("tools_prompt:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 每个工具调用的提示词(键为工具名)");
+                    }
+                    else if (trimmed.StartsWith("skills:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 技能列表(每个技能包含name/description/behavior)");
+                    }
+                    else if (trimmed.StartsWith("rules:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 规则列表(多行字符串, 使用 - | 格式)");
+                    }
+                    else if (trimmed.StartsWith("tasks:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 任务列表(键名为类别, 含name/trigger/input/limit/prompt/interval/actions)");
+                    }
+                    else if (trimmed.StartsWith("name:"))
+                    {
+                        sb.AppendLine("# 任务名称/主题");
+                    }
+                    else if (trimmed.StartsWith("trigger:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 触发条件(tps < 18 / server_running / always)");
+                    }
+                    else if (trimmed.StartsWith("input:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 数据源(server_logs/app_logs/server_tps/server_plugin/host_cpu/host_memory)");
+                    }
+                    else if (trimmed.StartsWith("limit:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 提示词+输入内容最大token量");
+                    }
+                    else if (trimmed.StartsWith("interval:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# Cron表达式(如 0 0 0/1 * * ? 每小时执行一次)");
+                    }
+                    else if (trimmed.StartsWith("actions:"))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("# 执行动作(- ai 进行AI分析, - tools:工具名1,工具名2 限定可用工具)");
+                    }
                 }
 
                 sb.AppendLine(line.TrimEnd('\r'));
@@ -800,13 +992,17 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#                    ServerStartEvent, ServerStopEvent, ServerDoneEvent,");
             sb.AppendLine("#                    ServerCrashEvent, AutoRestartEvent, BackupStartEvent,");
             sb.AppendLine("#                    BackupCompleteEvent, TaskExecuteEvent, SchedulerStartEvent,");
-            sb.AppendLine("#                    SchedulerStopEvent, CommandExecuteEvent, ConfigReloadEvent");
+            sb.AppendLine("#                    SchedulerStopEvent, CommandExecuteEvent, ConfigReloadEvent,");
+            sb.AppendLine("#                    PlayerJoinEvent, PlayerConnectEvent, PlayerLostEvent,");
+            sb.AppendLine("#                    PlayerLeaveEvent, PlayerCommandEvent, PlayerChatEvent,");
+            sb.AppendLine("#                    PlayerSetModeEvent, CustomPlayerEvent(需在player_event.customs中定义)");
             sb.AppendLine("#    enabled       - 是否启用 (true/false)");
             sb.AppendLine("#    input         - 传入脚本的参数（字符串）");
             sb.AppendLine("#");
             sb.AppendLine("#  C# 脚本要求:");
             sb.AppendLine("#    必须包含一个 Script 类，并实现 Execute 方法:");
             sb.AppendLine("#    public class Script { public void Execute(string input = \"\", string eventName = \"\") { ... } }");
+            sb.AppendLine("#    玩家事件触发时, input传入事件参数JSON(含player_name, player_trigger_time等)");
             sb.AppendLine("#");
             sb.AppendLine("#  Python 脚本要求:");
             sb.AppendLine("#    需要系统安装 Python 解释器，脚本通过命令行参数接收 input 和 --event");
@@ -953,9 +1149,22 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#                      ServerDoneEvent, ServerCrashEvent, AutoRestartEvent,");
             sb.AppendLine("#                      BackupStartEvent, BackupCompleteEvent, TaskExecuteEvent,");
             sb.AppendLine("#                      SchedulerStartEvent, SchedulerStopEvent,");
-            sb.AppendLine("#                      CommandExecuteEvent, ConfigReloadEvent");
+            sb.AppendLine("#                      CommandExecuteEvent, ConfigReloadEvent,");
+            sb.AppendLine("#                      PlayerJoinEvent, PlayerConnectEvent, PlayerLostEvent,");
+            sb.AppendLine("#                      PlayerLeaveEvent, PlayerCommandEvent, PlayerChatEvent,");
+            sb.AppendLine("#                      PlayerSetModeEvent, CustomPlayerEvent(需在player_event.customs中定义)");
             sb.AppendLine("#                      组合条件: every: 30 and event: ServerStartEvent");
             sb.AppendLine("#                      组合条件: daily: \"08:00\" or event: ServerStartEvent");
+            sb.AppendLine("#    condition     - 执行前置条件(trigger满足后、execute执行前检查，留空则不检查):");
+            sb.AppendLine("#                      变量比较: {rt.server_running} == \"true\"");
+            sb.AppendLine("#                      变量比较: {rt.player_count} >= 10");
+            sb.AppendLine("#                      脚本检查: check script example_cs == \"true\"");
+            sb.AppendLine("#                      文件检查: check file \"E:\\path\\file\" true  (true=需存在,false=需不存在)");
+            sb.AppendLine("#                      多条件: {rt.server_running} == \"true\" and check file \"data.lock\" false");
+            sb.AppendLine("#                      运算符: == != > >= < <= contains startsWith endsWith");
+            sb.AppendLine("#                      可用{rt.xxx}变量: server_running, server_key, player_count,");
+            sb.AppendLine("#                      uptime_minutes, tps, memory_usage_mb, cpu_usage,");
+            sb.AppendLine("#                      auto_backup_enabled, scheduler_running, time, date");
             sb.AppendLine("#    execute        - 执行内容:");
             sb.AppendLine("#                      script:脚本名称  - 执行Scripts中已配置的脚本");
             sb.AppendLine("#                      backup            - 执行当前服务端备份");
@@ -968,7 +1177,7 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#                      server_restart    - 关闭并重启服务端");
             sb.AppendLine("#                      server_restart:5  - 关闭服务端5分钟后重启");
             sb.AppendLine("#                      send_command:list - 向MC服务端发送指令");
-            sb.AppendLine("#                      command:/say hello - 发送命令到MC服务端(旧格式)");
+            sb.AppendLine("#                      command:rt        - 发送控制台命令");
             sb.AppendLine("#    pass_parameters - 是否开启参数传递(将条件产生的参数传递给脚本)");
             sb.AppendLine("#");
             sb.AppendLine("#  rules 规则配置:");
@@ -1086,6 +1295,11 @@ namespace RtCli.Modules.Unit
                 {
                     sb.AppendLine();
                     sb.AppendLine("# 触发条件");
+                }
+                else if (trimmed.StartsWith("condition:"))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("# 执行前置条件(trigger满足后检查，留空则不检查)");
                 }
                 else if (trimmed.StartsWith("execute:"))
                 {
@@ -1355,6 +1569,8 @@ namespace RtCli.Modules.Unit
     public class AiSetting
     {
         public AiConsoleError Console_Error { get; set; } = new AiConsoleError();
+
+        public AiServerAuto ServerAutoAi { get; set; } = new AiServerAuto();
     }
 
     public class AiConsoleError
@@ -1378,6 +1594,221 @@ namespace RtCli.Modules.Unit
         public int RetryCount { get; set; } = 3;
 
         public bool SaveResponse { get; set; } = true;
+    }
+
+    /// <summary>
+    /// 服务端自动AI管理配置(无人自动化管理MC服务端)
+    /// </summary>
+    public class AiServerAuto
+    {
+        /// <summary>系统提示词(总)</summary>
+        public string Prompt { get; set; } = "你是一个Minecraft服务端智能维护员，负责自动监测和处理服务器异常。请基于提供的日志、TPS、插件列表等信息分析问题，并在需要时调用工具采取行动。回答时严格按照要求格式输出，如需调用工具请使用 [rt:tools\"(工具名称{参数})\"] 格式。";
+
+        /// <summary>AI输出的最大token数</summary>
+        public int MaxTokens { get; set; } = 4096;
+
+        /// <summary>AI API地址(兼容OpenAI格式)</summary>
+        public string ApiEndpoint { get; set; } = "http://localhost:11434/v1/chat/completions";
+
+        /// <summary>API密钥(本地模型如Ollama留空即可)</summary>
+        public string ApiKey { get; set; } = "";
+
+        /// <summary>AI模型名称</summary>
+        public string Model { get; set; } = "qwen2.5:7b";
+
+        /// <summary>生成温度(0.0-2.0)</summary>
+        public double Temperature { get; set; } = 0.4;
+
+        /// <summary>请求超时时间(秒)</summary>
+        public int RequestTimeoutSeconds { get; set; } = 180;
+
+        /// <summary>异常时是否自动重连</summary>
+        public bool RetryOnError { get; set; } = true;
+
+        /// <summary>最大重试次数</summary>
+        public int RetryCount { get; set; } = 3;
+
+        /// <summary>是否保存AI回复(上下文缓存)到ai_save.yml</summary>
+        public bool SaveResponse { get; set; } = true;
+
+        /// <summary>上下文缓存最大条数(每个任务独立缓存)</summary>
+        public int ContextCacheSize { get; set; } = 20;
+
+        /// <summary>AI允许调用工具的最大轮次(防止无限循环)</summary>
+        public int MaxToolRounds { get; set; } = 5;
+
+        /// <summary>工具配置</summary>
+        public AiToolsConfig Tools { get; set; } = new AiToolsConfig();
+
+        /// <summary>技能列表</summary>
+        public List<AiSkill> Skills { get; set; } = new List<AiSkill>();
+
+        /// <summary>规则(多行字符串列表)</summary>
+        public List<string> Rules { get; set; } = new List<string>
+        {
+            "禁止向服务器发送 /op 命令，禁止提升任何玩家为管理员。",
+            "禁止删除或修改 server.properties、bukkit.yml、spigot.yml 等核心配置文件，除非用户明确授权。",
+            "在执行重启服务器、关闭插件等破坏性操作前，必须先在日志中说明原因。",
+            "工具调用必须严格使用 [rt:tools\"(工具名称{参数})\"] 格式，参数为JSON对象字符串。",
+            "每次分析后必须输出结论和后续建议，不能只调用工具而不给结论。"
+        };
+
+        /// <summary>任务列表(键名为任务类别)</summary>
+        public Dictionary<string, AiTask> Tasks { get; set; } = new Dictionary<string, AiTask>
+        {
+            // 1. TPS 异常监测(每小时检查一次，TPS 低于 18 时触发)
+            ["tps_monitor"] = new AiTask
+            {
+                Enabled = false,
+                Name = "服务器TPS监测",
+                Trigger = "tps < 18",
+                Input = new List<string> { "server_logs", "server_tps" },
+                Limit = 4000,
+                Prompt = "请你作为一个mc服务器智能维护员，保证服务器稳定情况下决策实在不行时再重启服务器，现在服务器的tps似乎有一些异常，请根据日志判断当前服务器是否出现什么问题，然后按照一下格式回答1.服务器发生什么 2.下次应该如何避免该问题再度发生后续还需要服务器管理员做什么 3.在该情况下你做了什么，是否重启了服务器",
+                Interval = "0 0 0/1 * * ?",
+                Actions = new List<string> { "ai", "tools:restart_server,get_server_log,get_server_plugin_list" }
+            },
+
+            // 2. 服务器崩溃检测(每分钟检查日志中是否出现崩溃关键字)
+            ["crash_detect"] = new AiTask
+            {
+                Enabled = false,
+                Name = "服务器崩溃检测",
+                Trigger = "crash_detected",
+                Input = new List<string> { "crash_report", "server_logs", "server_status" },
+                Limit = 6000,
+                Prompt = "请你作为一个mc服务器智能维护员，检测到服务器可能已经崩溃。请根据崩溃报告和最近的服务器日志分析以下内容：1.服务器崩溃的根本原因是什么(如内存溢出、插件异常、区块损坏等) 2.崩溃前服务器发生了什么 3.是否应该自动重启服务器，如果重启需要在日志中说明原因 4.后续服务器管理员需要做什么来避免再次崩溃。如果确认服务器已崩溃且需要重启，请调用 restart_server 工具。",
+                Interval = "0 * * * * ?",
+                Actions = new List<string> { "ai", "tools:restart_server,get_server_log,read_file" }
+            },
+
+            // 3. 长时间无人自动关闭(每30分钟检查，持续6小时无人时触发)
+            ["idle_shutdown"] = new AiTask
+            {
+                Enabled = false,
+                Name = "长时间无人自动关闭",
+                Trigger = "idle_minutes > 360",
+                Input = new List<string> { "server_players", "server_status", "server_tps" },
+                Limit = 2000,
+                Prompt = "请你作为一个mc服务器智能维护员，服务器已经持续6小时没有任何玩家在线。请根据当前服务器状态判断：1.当前服务器运行状态是否正常 2.是否应该关闭服务器以节省系统资源 3.如果决定关闭服务器，请使用 run_command 工具发送 stop 命令优雅关闭服务器，并在关闭前说明原因。注意：关闭服务器前请确认确实没有玩家在线，且当前不是服务器热门时间段。",
+                Interval = "0 0/30 * * * ?",
+                Actions = new List<string> { "ai", "tools:run_command,get_server_log" }
+            },
+
+            // 4. 服务器活跃度报告(每分钟检查，玩家全部退出后持续10分钟时触发)
+            ["activity_report"] = new AiTask
+            {
+                Enabled = false,
+                Name = "服务器活跃度报告",
+                Trigger = "idle_minutes > 10",
+                Input = new List<string> { "server_logs", "server_players", "server_status" },
+                Limit = 8000,
+                Prompt = "请你作为一个mc服务器数据分析员，服务器玩家已全部退出并持续10分钟，或服务器已关闭。请根据提供的服务器日志和状态信息生成一份服务器活跃度报告，报告需包含以下内容：1.本次运行时段的总在线人数峰值 2.玩家活跃时间段分析(从日志中提取玩家加入和离开的时间) 3.服务器热门时间段预估 4.本次运行期间服务器是否出现异常(卡顿、崩溃、警告等) 5.对服务器运营的建议(如建议在哪些时间段开放活动等)。请以清晰的报告格式输出，不要调用任何工具。",
+                Interval = "0 * * * * ?",
+                Actions = new List<string> { "ai" }
+            },
+
+            // 5. 服务器关闭时生成报告(服务器停止时触发)
+            ["shutdown_report"] = new AiTask
+            {
+                Enabled = false,
+                Name = "服务器关闭报告",
+                Trigger = "server_stopped",
+                Input = new List<string> { "server_logs", "server_status" },
+                Limit = 6000,
+                Prompt = "请你作为一个mc服务器数据分析员，检测到服务器已经停止运行。请根据服务器日志生成本次运行总结报告：1.服务器本次运行时长 2.运行期间是否出现异常或错误 3.运行期间的玩家活跃情况 4.服务器停止的可能原因 5.下次启动前需要检查或准备的事项。请以清晰的报告格式输出，不要调用任何工具。",
+                Interval = "0 0/5 * * * ?",
+                Actions = new List<string> { "ai" }
+            },
+
+            // 6. 主机资源监控(每5分钟检查，CPU或内存过高时触发分析)
+            ["host_resource_monitor"] = new AiTask
+            {
+                Enabled = false,
+                Name = "主机资源监控",
+                Trigger = "cpu > 85",
+                Input = new List<string> { "host_cpu", "host_memory", "server_tps", "server_logs" },
+                Limit = 3000,
+                Prompt = "请你作为一个mc服务器智能维护员，主机CPU使用率过高。请分析：1.当前主机CPU和内存使用情况 2.服务器TPS是否受到影响 3.是否需要重启服务器或关闭部分插件来释放资源 4.给出优化建议。如果需要关闭插件，请使用 toggle_plugin 工具；如果需要重启，请使用 restart_server 工具。",
+                Interval = "0 0/5 * * ?",
+                Actions = new List<string> { "ai", "tools:toggle_plugin,restart_server,get_server_plugin_list" }
+            }
+        };
+    }
+
+    /// <summary>
+    /// AI工具配置
+    /// </summary>
+    public class AiToolsConfig
+    {
+        /// <summary>是否启用工具调用功能</summary>
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>允许使用的工具列表(为空则允许所有未在deny中的工具)</summary>
+        public List<string> Allow { get; set; } = new List<string>();
+
+        /// <summary>禁止使用的工具列表(优先级高于allow)</summary>
+        public List<string> Deny { get; set; } = new List<string>();
+
+        /// <summary>每个工具调用的提示词(键为工具名)</summary>
+        public Dictionary<string, string> ToolsPrompt { get; set; } = new Dictionary<string, string>
+        {
+            ["read_file"] = "读取MC服务端目录中指定文件的内容。参数: {\"path\":\"相对路径\"}",
+            ["get_server_plugin_list"] = "获取MC服务端的插件列表(包含启用/禁用状态)。无需参数。",
+            ["get_server_log"] = "获取MC服务端最近的日志。参数: {\"lines\":100} 指定行数。",
+            ["run_script"] = "运行Scripts中已配置的脚本。参数: {\"name\":\"脚本名称\",\"input\":\"参数\"}",
+            ["modify_file"] = "修改MC服务端目录中文件的内容。参数: {\"path\":\"相对路径\",\"content\":\"新内容\"}",
+            ["toggle_plugin"] = "启用或禁用插件(通过jar/disjar后缀切换)。参数: {\"plugin\":\"文件名\",\"disable\":true}",
+            ["run_command"] = "运行程序命令或向MC服务器发送命令(禁止/op)。参数: {\"command\":\"命令内容\"}",
+            ["restart_server"] = "重启MC服务端。无需参数。"
+        };
+    }
+
+    /// <summary>
+    /// AI技能
+    /// </summary>
+    public class AiSkill
+    {
+        /// <summary>技能名称</summary>
+        public string Name { get; set; } = "";
+
+        /// <summary>技能描述</summary>
+        public string Description { get; set; } = "";
+
+        /// <summary>技能行为(详细说明)</summary>
+        public string Behavior { get; set; } = "";
+    }
+
+    /// <summary>
+    /// AI自动监测任务
+    /// </summary>
+    public class AiTask
+    {
+        /// <summary>是否启用</summary>
+        public bool Enabled { get; set; } = true;
+
+        /// <summary>任务名称/主题</summary>
+        public string Name { get; set; } = "";
+
+        /// <summary>触发条件(支持: "always"、"server_running"、"server_stopped"、"crash_detected"、
+        /// "tps &lt; 18"、"cpu &gt; 85"、"memory &gt; 80"、"players == 0"、"idle_minutes &gt; 360" 等)</summary>
+        public string Trigger { get; set; } = "always";
+
+        /// <summary>输入内容数据源(支持: server_logs, app_logs, server_tps, server_plugin,
+        /// host_cpu, host_memory, server_players, server_status, crash_report)</summary>
+        public List<string> Input { get; set; } = new List<string> { "server_logs" };
+
+        /// <summary>提示词/输入内容最大token量</summary>
+        public int Limit { get; set; } = 4000;
+
+        /// <summary>该分类的提示词</summary>
+        public string Prompt { get; set; } = "";
+
+        /// <summary>Cron间隔表达式(如 "0 0 0/1 * * ?" 表示每小时)</summary>
+        public string Interval { get; set; } = "0 0 0/1 * * ?";
+
+        /// <summary>执行动作列表(支持 "ai" 进行AI分析、 "tools:工具名1,工具名2" 限定可用工具)</summary>
+        public List<string> Actions { get; set; } = new List<string> { "ai" };
     }
 
     public class TipsEntry

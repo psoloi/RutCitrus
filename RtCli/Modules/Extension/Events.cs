@@ -7,7 +7,7 @@ namespace RtCli.Modules.Extension
 {
     public abstract class RtEvent
     {
-        public string EventName => GetType().Name;
+        public virtual string EventName => GetType().Name;
         public DateTime Timestamp { get; } = DateTime.Now;
         public bool IsCancelled { get; set; }
     }
@@ -247,4 +247,83 @@ namespace RtCli.Modules.Extension
     {
         public ConfigReloadEvent() { }
     }
+
+    #region 玩家事件
+
+    public class PlayerJoinEvent : RtEvent
+    {
+        public string PlayerName { get; set; } = "";
+        public string PlayerTriggerTime { get; set; } = "";
+        public PlayerJoinEvent(string playerName = "", string triggerTime = "")
+        { PlayerName = playerName; PlayerTriggerTime = triggerTime; }
+    }
+
+    public class PlayerConnectEvent : RtEvent
+    {
+        public string PlayerName { get; set; } = "";
+        public string PlayerTriggerTime { get; set; } = "";
+        public string PlayerIp { get; set; } = "";
+        public PlayerConnectEvent(string playerName = "", string triggerTime = "", string playerIp = "")
+        { PlayerName = playerName; PlayerTriggerTime = triggerTime; PlayerIp = playerIp; }
+    }
+
+    public class PlayerLostEvent : RtEvent
+    {
+        public string PlayerName { get; set; } = "";
+        public string PlayerTriggerTime { get; set; } = "";
+        public string PlayerLostReason { get; set; } = "";
+        public PlayerLostEvent(string playerName = "", string triggerTime = "", string lostReason = "")
+        { PlayerName = playerName; PlayerTriggerTime = triggerTime; PlayerLostReason = lostReason; }
+    }
+
+    public class PlayerLeaveEvent : RtEvent
+    {
+        public string PlayerName { get; set; } = "";
+        public string PlayerTriggerTime { get; set; } = "";
+        public PlayerLeaveEvent(string playerName = "", string triggerTime = "")
+        { PlayerName = playerName; PlayerTriggerTime = triggerTime; }
+    }
+
+    public class PlayerCommandEvent : RtEvent
+    {
+        public string PlayerName { get; set; } = "";
+        public string PlayerTriggerTime { get; set; } = "";
+        public string Command { get; set; } = "";
+        public PlayerCommandEvent(string playerName = "", string triggerTime = "", string command = "")
+        { PlayerName = playerName; PlayerTriggerTime = triggerTime; Command = command; }
+    }
+
+    public class PlayerChatEvent : RtEvent
+    {
+        public string PlayerName { get; set; } = "";
+        public string PlayerTriggerTime { get; set; } = "";
+        public string Message { get; set; } = "";
+        public PlayerChatEvent(string playerName = "", string triggerTime = "", string message = "")
+        { PlayerName = playerName; PlayerTriggerTime = triggerTime; Message = message; }
+    }
+
+    public class PlayerSetModeEvent : RtEvent
+    {
+        public string PlayerName { get; set; } = "";
+        public string PlayerTriggerTime { get; set; } = "";
+        public string PlayerMode { get; set; } = "";
+        public PlayerSetModeEvent(string playerName = "", string triggerTime = "", string playerMode = "")
+        { PlayerName = playerName; PlayerTriggerTime = triggerTime; PlayerMode = playerMode; }
+    }
+
+    /// <summary>
+    /// 自定义玩家事件，Parameters包含用户定义的参数键值对
+    /// </summary>
+    public class CustomPlayerEvent : RtEvent
+    {
+        private readonly string _customEventName;
+        public override string EventName => _customEventName;
+        public string PlayerName { get; set; } = "";
+        public string PlayerTriggerTime { get; set; } = "";
+        public Dictionary<string, string> Parameters { get; set; } = new Dictionary<string, string>();
+        public CustomPlayerEvent(string eventName = "CustomPlayerEvent", string playerName = "", string triggerTime = "")
+        { _customEventName = eventName; PlayerName = playerName; PlayerTriggerTime = triggerTime; }
+    }
+
+    #endregion
 }

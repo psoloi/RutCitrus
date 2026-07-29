@@ -7,12 +7,19 @@ using RtCli.Modules.Unit;
 using Spectre.Console;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Management;
 using System.Net.Http;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Hangfire;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
 namespace RtCli.Modules.Function
 {
@@ -29,6 +36,7 @@ namespace RtCli.Modules.Function
             "1.18.2",
             "1.16.5",
             "1.12.2",
+            "1.8.8",
         };
 
         private static string[] GetPopularVersions()
@@ -58,7 +66,7 @@ namespace RtCli.Modules.Function
             new ServerTypeInfo("Mohist (Forge混合端)", ServerApi.Manual, "mohist.jar", website: "https://mohistmc.com/downloads"),
             new ServerTypeInfo("CatServer (Forge混合端)", ServerApi.Manual, "catserver.jar", website: "https://github.com/Luohuayu/CatServer/"),
             new ServerTypeInfo("Silkard (Fabric混合端)", ServerApi.Manual, "silkard.jar", website: "https://mohistmc.cn/downloads"),
-            new ServerTypeInfo("Leaf (Paper分支)", ServerApi.Manual, "leaf.jar", website: "https://github.com/Winds-Studio/Leaf/releases"),
+            new ServerTypeInfo("Leaf (Paper分支)", ServerApi.Leaf, "leaf.jar", "leaf"),
             new ServerTypeInfo("Leaves (Paper分支)", ServerApi.Manual, "leaves.jar", website: "https://github.com/LeavesMC/Leaves/releases"),
             new ServerTypeInfo("Luminol (Folia分支)", ServerApi.Manual, "luminol.jar", website: "https://github.com/LuminolMC/Luminol/releases"),
             new ServerTypeInfo("Pufferfish (Paper分支)", ServerApi.Manual, "pufferfish.jar", website: "https://ci.pufferfish.host/"),
@@ -199,6 +207,10 @@ namespace RtCli.Modules.Function
 
                 case ServerApi.PaperMC:
                     downloadedJar = await DownloadPaperMC(workPath, serverInfo.ProjectId!, serverInfo.DefaultFileName);
+                    break;
+
+                case ServerApi.Leaf:
+                    downloadedJar = await DownloadLeaf(workPath, serverInfo.ProjectId!);
                     break;
 
                 case ServerApi.Purpur:
@@ -364,6 +376,86 @@ namespace RtCli.Modules.Function
                 }
 
                 string downloadUrl = $"https://api.papermc.io/v2/projects/{projectId}/versions/{version}/builds/{latestBuild}/downloads/{fileName}";
+                string jarName = $"{projectId}-{version}.jar";
+                string jarPath = Path.Combine(workPath, jarName);
+
+                if (File.Exists(jarPath))
+                {
+                    Output.Log($"文件已存在: {jarPath}", 1, ThisProgramName);
+                    return jarName;
+                }
+
+                bool downloaded = await DownloadServerJar(downloadUrl, jarPath, $"{projectId} {version} (build {latestBuild})");
+                return downloaded ? jarName : null;
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"获取 {projectId} 版本列表失败: {ex.Message}", 3, ThisProgramName);
+                return null;
+            }
+        }
+
+        private static async Task<string?> DownloadLeaf(string workPath, string projectId)
+        {
+            string ThisProgramName = "Guide";
+            try
+            {
+                Output.Log($"正在获取 {projectId} 版本列表...", 1, ThisProgramName);
+
+                string projectJson = await _httpClient.GetStringAsync($"https://api.leafmc.one/v2/projects/{projectId}");
+                var project = JObject.Parse(projectJson);
+                var allVersions = project["versions"]!.Select(v => v.ToString()).ToList();
+
+                var availablePopular = allVersions.Where(v => GetPopularVersions().Contains(v)).ToList();
+                if (!availablePopular.Any())
+                {
+                    availablePopular = allVersions.Take(10).ToList();
+                }
+
+                var versionChoices = new List<string>();
+                versionChoices.Add($"[[最新版]] {allVersions.Last()}");
+                foreach (var v in availablePopular)
+                {
+                    versionChoices.Add(v);
+                }
+
+                var selectedVersion = AnsiConsole.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title($"选择 {projectId} 版本：")
+                        .AddChoices(versionChoices));
+
+                string version;
+                if (selectedVersion.StartsWith("[[最新版]] "))
+                {
+                    version = allVersions.Last();
+                }
+                else
+                {
+                    version = selectedVersion;
+                }
+
+                string buildsJson = await _httpClient.GetStringAsync($"https://api.leafmc.one/v2/projects/{projectId}/versions/{version}");
+                var buildsData = JObject.Parse(buildsJson);
+                var builds = buildsData["builds"]!.Select(b => b.ToString()).ToList();
+
+                if (!builds.Any())
+                {
+                    Output.Log($"版本 {version} 没有可用的构建。", 2, ThisProgramName);
+                    return null;
+                }
+
+                string latestBuild = builds.Last();
+
+                string buildDetailJson = await _httpClient.GetStringAsync($"https://api.leafmc.one/v2/projects/{projectId}/versions/{version}/builds/{latestBuild}");
+                var buildDetail = JObject.Parse(buildDetailJson);
+                string? fileName = buildDetail["downloads"]?["application"]?["name"]?.ToString();
+
+                if (string.IsNullOrEmpty(fileName))
+                {
+                    fileName = $"{projectId}-{version}-{latestBuild}.jar";
+                }
+
+                string downloadUrl = $"https://api.leafmc.one/v2/projects/{projectId}/versions/{version}/builds/{latestBuild}/downloads/{fileName}";
                 string jarName = $"{projectId}-{version}.jar";
                 string jarPath = Path.Combine(workPath, jarName);
 
@@ -1575,7 +1667,7 @@ namespace RtCli.Modules.Function
             _tipsRunning = false;
         }
 
-        private enum ServerApi { Vanilla, VanillaSnapshot, PaperMC, Purpur, Fabric, Manual }
+        private enum ServerApi { Vanilla, VanillaSnapshot, PaperMC, Leaf, Purpur, Fabric, Manual }
 
         private class ServerTypeInfo
         {
@@ -1594,5 +1686,1812 @@ namespace RtCli.Modules.Function
                 Website = website;
             }
         }
+
+        #region AI自动化管理 - 内置工具集
+
+        /// <summary>
+        /// AI内置工具集 - 实现MC服务端自动化管理工具
+        /// </summary>
+        internal static class AiTools
+        {
+            private const string ToolsName = "AiTools";
+
+            /// <summary>所有内置工具名称列表</summary>
+            public static readonly string[] BuiltInTools = new[]
+            {
+                "read_file",
+                "get_server_plugin_list",
+                "get_server_log",
+                "run_script",
+                "modify_file",
+                "toggle_plugin",
+                "run_command",
+                "restart_server"
+            };
+
+            private static void Log(string msg, int level = 1)
+            {
+                Output.Log(msg, level, ToolsName);
+            }
+
+            /// <summary>
+            /// 检查工具是否被允许调用
+            /// </summary>
+            public static bool IsToolAllowed(string toolName, AiToolsConfig toolsConfig, List<string>? taskAllowedTools = null)
+            {
+                if (toolsConfig == null || !toolsConfig.Enabled) return false;
+
+                // deny 优先
+                if (toolsConfig.Deny != null && toolsConfig.Deny.Contains(toolName))
+                    return false;
+
+                // 任务级别限制
+                if (taskAllowedTools != null && taskAllowedTools.Count > 0)
+                {
+                    if (!taskAllowedTools.Contains(toolName))
+                        return false;
+                }
+
+                // allow 为空则允许所有未在 deny 中的
+                if (toolsConfig.Allow == null || toolsConfig.Allow.Count == 0)
+                    return true;
+
+                return toolsConfig.Allow.Contains(toolName);
+            }
+
+            /// <summary>
+            /// 执行工具调用
+            /// </summary>
+            public static async Task<string> ExecuteToolAsync(string toolName, string argsJson)
+            {
+                try
+                {
+                    JObject args = string.IsNullOrWhiteSpace(argsJson) ? new JObject() : (JObject.Parse(argsJson));
+
+                    string result = toolName switch
+                    {
+                        "read_file" => Tool_ReadFile(args),
+                        "get_server_plugin_list" => Tool_GetServerPluginList(args),
+                        "get_server_log" => Tool_GetServerLog(args),
+                        "run_script" => Tool_RunScript(args),
+                        "modify_file" => Tool_ModifyFile(args),
+                        "toggle_plugin" => Tool_TogglePlugin(args),
+                        "run_command" => Tool_RunCommand(args),
+                        "restart_server" => await Tool_RestartServerAsync(args),
+                        _ => $"[错误] 未知工具: {toolName}"
+                    };
+
+                    return result ?? "[工具执行完毕，无返回内容]";
+                }
+                catch (JsonException je)
+                {
+                    return $"[参数解析失败] {je.Message}，原始参数: {argsJson}";
+                }
+                catch (Exception ex)
+                {
+                    return $"[工具执行异常] {ex.Message}";
+                }
+            }
+
+            /// <summary>
+            /// 获取工具描述信息(供AI提示词使用)
+            /// </summary>
+            public static string GetToolsDescription(AiToolsConfig toolsConfig)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("可用工具列表(通过 [rt:tools\"(工具名{参数JSON})\"] 调用):");
+
+                if (toolsConfig?.ToolsPrompt != null)
+                {
+                    foreach (var kv in toolsConfig.ToolsPrompt)
+                    {
+                        sb.AppendLine($"- {kv.Key}: {kv.Value}");
+                    }
+                }
+                else
+                {
+                    foreach (var t in BuiltInTools)
+                        sb.AppendLine($"- {t}");
+                }
+
+                return sb.ToString();
+            }
+
+            #region 工具实现
+
+            /// <summary>读取MC服务端目录中文件内容</summary>
+            private static string Tool_ReadFile(JObject args)
+            {
+                string? relPath = args["path"]?.ToString();
+                if (string.IsNullOrWhiteSpace(relPath))
+                    return "[错误] 缺少参数: path";
+
+                string workPath = GetServerWorkPath();
+                if (string.IsNullOrEmpty(workPath))
+                    return "[错误] 未配置MC服务端工作目录";
+
+                // 防止路径穿越
+                string fullPath = Path.GetFullPath(Path.Combine(workPath, relPath));
+                string rootPath = Path.GetFullPath(workPath);
+                if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase))
+                    return "[错误] 禁止访问工作目录外的文件";
+
+                if (!File.Exists(fullPath))
+                    return $"[错误] 文件不存在: {relPath}";
+
+                var info = new FileInfo(fullPath);
+                // 限制读取大小(避免超大文件)
+                long maxSize = 512 * 1024; // 512KB
+                if (info.Length > maxSize)
+                    return $"[错误] 文件过大({info.Length} 字节)，最大支持 {maxSize} 字节";
+
+                try
+                {
+                    string content = File.ReadAllText(fullPath, Encoding.GetEncoding(0));
+                    Log($"读取文件: {relPath} ({content.Length} 字符)", 1);
+                    return content;
+                }
+                catch (Exception ex)
+                {
+                    return $"[读取失败] {ex.Message}";
+                }
+            }
+
+            /// <summary>获取MC服务端插件列表</summary>
+            private static string Tool_GetServerPluginList(JObject args)
+            {
+                string workPath = GetServerWorkPath();
+                if (string.IsNullOrEmpty(workPath))
+                    return "[错误] 未配置MC服务端工作目录";
+
+                string pluginsDir = Path.Combine(workPath, "plugins");
+                if (!Directory.Exists(pluginsDir))
+                    return "[信息] plugins 目录不存在";
+
+                var result = new JArray();
+                try
+                {
+                    var files = new DirectoryInfo(pluginsDir)
+                        .GetFiles("*.jar")
+                        .Concat(new DirectoryInfo(pluginsDir).GetFiles("*.disjar"))
+                        .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    foreach (var file in files)
+                    {
+                        bool isDisabled = file.Extension.Equals(".disjar", StringComparison.OrdinalIgnoreCase);
+                        result.Add(new JObject
+                        {
+                            ["file"] = file.Name,
+                            ["enabled"] = !isDisabled,
+                            ["size"] = file.Length
+                        });
+                    }
+
+                    Log($"获取插件列表: 共 {result.Count} 个插件", 1);
+                    return result.ToString(Formatting.Indented);
+                }
+                catch (Exception ex)
+                {
+                    return $"[获取失败] {ex.Message}";
+                }
+            }
+
+            /// <summary>获取MC服务端日志</summary>
+            private static string Tool_GetServerLog(JObject args)
+            {
+                int lines = args["lines"]?.ToObject<int>() ?? 100;
+                if (lines <= 0) lines = 100;
+                if (lines > 2000) lines = 2000;
+
+                List<string> logLines = new List<string>();
+
+                // 优先使用内存缓冲区
+                lock (Analyzer._logBufferLock)
+                {
+                    if (Analyzer._logBuffer.Count > 0)
+                    {
+                        int start = Math.Max(0, Analyzer._logBuffer.Count - lines);
+                        for (int i = start; i < Analyzer._logBuffer.Count; i++)
+                            logLines.Add(Analyzer._logBuffer[i]);
+                    }
+                }
+
+                // 缓冲区为空则尝试从日志文件读取
+                if (logLines.Count == 0)
+                {
+                    string workPath = GetServerWorkPath();
+                    if (!string.IsNullOrEmpty(workPath))
+                    {
+                        string logFile = Path.Combine(workPath, "logs", "latest.log");
+                        if (File.Exists(logFile))
+                        {
+                            try
+                            {
+                                var allLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0));
+                                int start = Math.Max(0, allLines.Length - lines);
+                                for (int i = start; i < allLines.Length; i++)
+                                    logLines.Add(allLines[i]);
+                            }
+                            catch (Exception ex)
+                            {
+                                return $"[读取日志文件失败] {ex.Message}";
+                            }
+                        }
+                    }
+                }
+
+                if (logLines.Count == 0)
+                    return "[信息] 暂无日志数据(服务端可能未启动或未连接)";
+
+                Log($"获取日志: 最近 {logLines.Count} 行", 1);
+                return string.Join("\n", logLines);
+            }
+
+            /// <summary>运行Scripts中已配置的脚本</summary>
+            private static string Tool_RunScript(JObject args)
+            {
+                string? scriptName = args["name"]?.ToString();
+                string? input = args["input"]?.ToString();
+
+                if (string.IsNullOrWhiteSpace(scriptName))
+                    return "[错误] 缺少参数: name";
+
+                try
+                {
+                    var settings = Scripts.GetSettings();
+                    if (settings.Scripts.TryGetValue(scriptName, out var item))
+                    {
+                        if (!string.IsNullOrWhiteSpace(input))
+                            item.Input = input;
+
+                        Scripts.ExecuteScript(scriptName, item);
+                        Log($"运行脚本: {scriptName}", 1);
+                        return $"[成功] 脚本 {scriptName} 已触发执行";
+                    }
+                    return $"[错误] 未找到脚本: {scriptName}";
+                }
+                catch (Exception ex)
+                {
+                    return $"[脚本执行失败] {ex.Message}";
+                }
+            }
+
+            /// <summary>修改MC服务端目录中文件内容</summary>
+            private static string Tool_ModifyFile(JObject args)
+            {
+                string? relPath = args["path"]?.ToString();
+                string? content = args["content"]?.ToString();
+
+                if (string.IsNullOrWhiteSpace(relPath))
+                    return "[错误] 缺少参数: path";
+                if (content == null)
+                    return "[错误] 缺少参数: content";
+
+                string workPath = GetServerWorkPath();
+                if (string.IsNullOrEmpty(workPath))
+                    return "[错误] 未配置MC服务端工作目录";
+
+                string fullPath = Path.GetFullPath(Path.Combine(workPath, relPath));
+                string rootPath = Path.GetFullPath(workPath);
+                if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase))
+                    return "[错误] 禁止修改工作目录外的文件";
+
+                // 防止修改核心配置文件
+                string fileName = Path.GetFileName(fullPath).ToLowerInvariant();
+                string[] protectedFiles = { "server.properties", "bukkit.yml", "spigot.yml", "paper.yml", "eula.txt" };
+                if (protectedFiles.Contains(fileName))
+                    return $"[错误] 受保护的核心文件 {fileName} 禁止修改";
+
+                try
+                {
+                    string? dir = Path.GetDirectoryName(fullPath);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                        Directory.CreateDirectory(dir);
+
+                    File.WriteAllText(fullPath, content, Encoding.GetEncoding(0));
+                    Log($"修改文件: {relPath} ({content.Length} 字符)", 1);
+                    return $"[成功] 已修改文件: {relPath}";
+                }
+                catch (Exception ex)
+                {
+                    return $"[修改失败] {ex.Message}";
+                }
+            }
+
+            /// <summary>启用或禁用插件(jar&lt;-&gt;disjar)</summary>
+            private static string Tool_TogglePlugin(JObject args)
+            {
+                string? pluginName = args["plugin"]?.ToString();
+                bool disable = args["disable"]?.ToObject<bool>() ?? true;
+
+                if (string.IsNullOrWhiteSpace(pluginName))
+                    return "[错误] 缺少参数: plugin";
+
+                string workPath = GetServerWorkPath();
+                if (string.IsNullOrEmpty(workPath))
+                    return "[错误] 未配置MC服务端工作目录";
+
+                string pluginsDir = Path.Combine(workPath, "plugins");
+                if (!Directory.Exists(pluginsDir))
+                    return "[错误] plugins 目录不存在";
+
+                // 规范化文件名
+                string fileName = pluginName;
+                if (!fileName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase) &&
+                    !fileName.EndsWith(".disjar", StringComparison.OrdinalIgnoreCase))
+                {
+                    fileName += ".jar";
+                }
+
+                string sourcePath = Path.Combine(pluginsDir, fileName);
+                string targetName;
+                string targetPath;
+
+                if (disable)
+                {
+                    // 将 .jar 改为 .disjar
+                    if (fileName.EndsWith(".disjar", StringComparison.OrdinalIgnoreCase))
+                        return $"[信息] 插件 {fileName} 已是禁用状态";
+
+                    targetName = Path.GetFileNameWithoutExtension(fileName) + ".disjar";
+                    targetPath = Path.Combine(pluginsDir, targetName);
+
+                    if (!File.Exists(sourcePath))
+                        return $"[错误] 插件文件不存在: {fileName}";
+
+                    try
+                    {
+                        File.Move(sourcePath, targetPath);
+                        Log($"禁用插件: {fileName} -> {targetName}", 1);
+                        return $"[成功] 已禁用插件: {targetName}";
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"[禁用失败] {ex.Message}";
+                    }
+                }
+                else
+                {
+                    // 将 .disjar 改为 .jar
+                    if (fileName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase))
+                        return $"[信息] 插件 {fileName} 已是启用状态";
+
+                    // 确保 .disjar 后缀
+                    if (!fileName.EndsWith(".disjar", StringComparison.OrdinalIgnoreCase))
+                        fileName += ".disjar";
+
+                    sourcePath = Path.Combine(pluginsDir, fileName);
+                    targetName = Path.GetFileNameWithoutExtension(fileName) + ".jar";
+                    targetPath = Path.Combine(pluginsDir, targetName);
+
+                    if (!File.Exists(sourcePath))
+                        return $"[错误] 插件文件不存在: {fileName}";
+
+                    try
+                    {
+                        File.Move(sourcePath, targetPath);
+                        Log($"启用插件: {fileName} -> {targetName}", 1);
+                        return $"[成功] 已启用插件: {targetName} (需重启服务端生效)";
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"[启用失败] {ex.Message}";
+                    }
+                }
+            }
+
+            /// <summary>运行程序命令或向MC服务器发送命令(禁止/op)</summary>
+            private static string Tool_RunCommand(JObject args)
+            {
+                string? command = args["command"]?.ToString();
+                if (string.IsNullOrWhiteSpace(command))
+                    return "[错误] 缺少参数: command";
+
+                // 安全检查: 禁止 /op 命令
+                string trimmedCmd = command.Trim();
+                if (IsForbiddenCommand(trimmedCmd))
+                    return $"[错误] 禁止执行的命令: {trimmedCmd}";
+
+                // 判断是发送到MC服务器还是运行系统命令
+                // 以 / 开头或匹配MC命令特征则发送到服务器
+                bool isMcCommand = trimmedCmd.StartsWith("/") || IsMcServerCommand(trimmedCmd);
+
+                if (isMcCommand)
+                {
+                    string mcCmd = trimmedCmd.TrimStart('/');
+                    try
+                    {
+                        Analyzer.SendCommand(mcCmd);
+                        Log($"向服务器发送命令: {mcCmd}", 1);
+                        return $"[成功] 已发送命令到服务器: {mcCmd}";
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"[发送命令失败] {ex.Message}";
+                    }
+                }
+                else
+                {
+                    // 系统命令执行(受限)
+                    try
+                    {
+                        var psi = new ProcessStartInfo
+                        {
+                            FileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "cmd.exe" : "/bin/sh",
+                            Arguments = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                                ? $"/c {trimmedCmd}"
+                                : $"-c \"{trimmedCmd.Replace("\"", "\\\"")}\"",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            CreateNoWindow = true,
+                            StandardOutputEncoding = Encoding.GetEncoding(0),
+                            StandardErrorEncoding = Encoding.GetEncoding(0)
+                        };
+
+                        using var proc = Process.Start(psi);
+                        if (proc == null)
+                            return "[错误] 无法启动进程";
+
+                        if (!proc.WaitForExit(30000))
+                        {
+                            try { proc.Kill(); } catch { }
+                            return "[错误] 命令执行超时(30秒)";
+                        }
+
+                        string stdout = proc.StandardOutput.ReadToEnd();
+                        string stderr = proc.StandardError.ReadToEnd();
+
+                        var sb = new StringBuilder();
+                        if (!string.IsNullOrWhiteSpace(stdout))
+                            sb.Append("STDOUT:\n").Append(stdout).Append("\n");
+                        if (!string.IsNullOrWhiteSpace(stderr))
+                            sb.Append("STDERR:\n").Append(stderr);
+
+                        Log($"运行系统命令: {trimmedCmd} (退出码: {proc.ExitCode})", 1);
+                        return sb.Length > 0 ? sb.ToString() : $"[成功] 命令执行完毕 (退出码: {proc.ExitCode})";
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"[系统命令执行失败] {ex.Message}";
+                    }
+                }
+            }
+
+            /// <summary>重启MC服务端</summary>
+            private static async Task<string> Tool_RestartServerAsync(JObject args)
+            {
+                try
+                {
+                    if (!Analyzer.IsRunModeActive)
+                        return "[错误] MC服务端未运行(仅支持Run/Rcon/Management模式的重启)";
+
+                    Log("AI 触发重启服务器...", 2);
+
+                    Analyzer.StopServer();
+                    await Task.Delay(2000);
+                    Analyzer.StartServer();
+
+                    return "[成功] 已触发服务器重启";
+                }
+                catch (Exception ex)
+                {
+                    return $"[重启失败] {ex.Message}";
+                }
+            }
+
+            #endregion
+
+            #region 辅助方法
+
+            private static string GetServerWorkPath()
+            {
+                string? workPath = Config.CurrentServer.WorkPath;
+                if (!string.IsNullOrWhiteSpace(workPath) && Directory.Exists(workPath))
+                    return workPath;
+                return "";
+            }
+
+            /// <summary>判断是否为禁止的命令(如 /op)</summary>
+            private static bool IsForbiddenCommand(string command)
+            {
+                string lower = command.ToLowerInvariant().TrimStart('/');
+                string[] forbidden = { "op ", "op:", "deop ", "deop:", "ban ", "pardon ", "whitelist add", "whitelist remove" };
+
+                foreach (var f in forbidden)
+                {
+                    if (lower.StartsWith(f))
+                        return true;
+                }
+
+                // 严格匹配 /op
+                if (lower == "op" || lower.StartsWith("op "))
+                    return true;
+
+                return false;
+            }
+
+            /// <summary>判断是否为MC服务器命令(而非系统命令)</summary>
+            private static bool IsMcServerCommand(string command)
+            {
+                string lower = command.ToLowerInvariant().TrimStart('/');
+                string[] mcCommands = {
+                    "say", "list", "stop", "save-all", "save-on", "save-off", "save-flush",
+                    "whitelist", "ban", "banlist", "pardon", "kick", "tp", "teleport",
+                    "gamemode", "gamerule", "give", "clear", "effect", "enchant",
+                    "setblock", "fill", "clone", "execute", "function", "particle",
+                    "playsound", "title", "tellraw", "bossbar", "scoreboard", "tag",
+                    "team", "advancement", "recipe", "xp", "experience", "spawnpoint",
+                    "setworldspawn", "weather", "time", "difficulty", "defaultgamemode",
+                    "seed", "reload", "perms", "permission", "plugins", "version", "tps",
+                    "gc", "restart", "timings"
+                };
+
+                foreach (var mc in mcCommands)
+                {
+                    if (lower == mc || lower.StartsWith(mc + " "))
+                        return true;
+                }
+
+                return false;
+            }
+
+            /// <summary>获取主机CPU使用率(%)</summary>
+            public static double GetCpuUsage()
+            {
+                try
+                {
+                    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    {
+                        using var searcher = new ManagementObjectSearcher("SELECT LoadPercentage FROM Win32_Processor");
+                        foreach (var obj in searcher.Get())
+                        {
+                            return Convert.ToDouble(obj["LoadPercentage"]);
+                        }
+                    }
+                }
+                catch { }
+                return -1;
+            }
+
+            /// <summary>获取主机内存使用情况(已用MB, 总MB)</summary>
+            public static (double usedMb, double totalMb) GetMemoryUsage()
+            {
+                try
+                {
+                    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    {
+                        using var searcher = new ManagementObjectSearcher("SELECT TotalVisibleMemorySize, FreePhysicalMemory FROM Win32_OperatingSystem");
+                        foreach (var obj in searcher.Get())
+                        {
+                            double totalKb = Convert.ToDouble(obj["TotalVisibleMemorySize"]);
+                            double freeKb = Convert.ToDouble(obj["FreePhysicalMemory"]);
+                            double usedKb = totalKb - freeKb;
+                            return (usedKb / 1024.0, totalKb / 1024.0);
+                        }
+                    }
+                }
+                catch { }
+                return (-1, -1);
+            }
+
+            /// <summary>获取MC服务器TPS(通过发送 /tps 命令并解析, 此处返回占位说明)</summary>
+            public static string GetServerTpsInfo()
+            {
+                try
+                {
+                    if (!Analyzer.IsRunModeActive && !Analyzer.IsAttached)
+                        return "[服务器未运行，无法获取TPS]";
+
+                    // 尝试从最近日志中查找 TPS 信息
+                    List<string> recentLines = new List<string>();
+                    lock (Analyzer._logBufferLock)
+                    {
+                        int start = Math.Max(0, Analyzer._logBuffer.Count - 100);
+                        for (int i = start; i < Analyzer._logBuffer.Count; i++)
+                            recentLines.Add(Analyzer._logBuffer[i]);
+                    }
+
+                    // 查找 TPS 相关行
+                    var tpsPattern = new Regex(@"tps[^\d]*(\d+(?:\.\d+)?)", RegexOptions.IgnoreCase);
+                    foreach (var line in recentLines)
+                    {
+                        var match = tpsPattern.Match(line);
+                        if (match.Success)
+                            return $"TPS: {match.Groups[1].Value} (来源: 日志)";
+                    }
+
+                    // 没找到则发送命令请求
+                    Analyzer.SendCommand("tps");
+                    return "[已发送 /tps 命令到服务器，请稍后查看日志获取TPS数据]";
+                }
+                catch (Exception ex)
+                {
+                    return $"[获取TPS失败] {ex.Message}";
+                }
+            }
+
+            #endregion
+        }
+
+        #endregion
+
+        #region AI自动化管理 - 运行器
+
+        /// <summary>
+        /// AI自动化管理运行器 - 实现MC服务端无人自动化管理
+        /// </summary>
+        internal static class AiAutoRunner
+        {
+            private const string RunnerName = "AiAuto";
+
+            /// <summary>工具调用格式正则: [rt:tools"(工具名{参数JSON})"]</summary>
+            private static readonly Regex ToolCallPattern = new Regex(
+                @"\[rt:tools""?\(([^{}\s]+)\s*(\{[^}]*\})?\)""?\]",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+            /// <summary>任务上下文缓存(键:任务类别, 值:消息列表)</summary>
+            private static readonly Dictionary<string, List<ChatMessage>> _contextCache = new();
+            private static readonly object _cacheLock = new();
+
+            private static readonly HttpClient _httpClient = new HttpClient();
+            private static bool _isRunning = false;
+            private static readonly object _runLock = new();
+
+            /// <summary>是否正在运行</summary>
+            public static bool IsRunning => _isRunning;
+
+            /// <summary>当前会话状态(用于.ui显示)</summary>
+            public static readonly Dictionary<string, DateTime> LastRunTime = new();
+            public static readonly Dictionary<string, int> RunCount = new();
+
+            /// <summary>上次检测到有玩家在线的时间(用于空闲时长计算)</summary>
+            private static DateTime _lastPlayerOnlineTime = DateTime.Now;
+            /// <summary>上次检测到服务器崩溃的时间</summary>
+            private static DateTime? _lastCrashTime = null;
+
+            private static void Log(string msg, int level = 1)
+            {
+                Output.Log(msg, level, RunnerName);
+            }
+
+            /// <summary>启动AI自动化</summary>
+            public static void Start()
+            {
+                lock (_runLock)
+                {
+                    if (_isRunning)
+                    {
+                        Log("AI自动化管理已在运行中。", 2);
+                        return;
+                    }
+
+                    var config = ContentManager.Ai.ServerAutoAi;
+                    if (config == null)
+                    {
+                        Log("未配置 server_auto_ai，无法启动。", 3);
+                        return;
+                    }
+
+                    // 确保MC服务端启动
+                    if (Analyzer.NeedsRunServer && !Analyzer.IsRunModeActive)
+                    {
+                        // 校验服务器工作目录有效性
+                        string? workPath = Config.CurrentServer.WorkPath;
+                        if (string.IsNullOrWhiteSpace(workPath))
+                        {
+                            Log("未配置MC服务端工作目录(work_path)，无法启动AI自动化。", 3);
+                            return;
+                        }
+                        if (!Directory.Exists(workPath))
+                        {
+                            Log($"MC服务端工作目录不存在: {workPath}，无法启动AI自动化。", 3);
+                            return;
+                        }
+                        if (!HasServerCoreFile(workPath))
+                        {
+                            Log($"MC服务端工作目录中未发现服务端核心文件(*.jar): {workPath}，无法启动AI自动化。", 3);
+                            return;
+                        }
+
+                        Log("MC服务端未启动，正在自动启动...", 1);
+                        Analyzer.StartServer();
+                        Thread.Sleep(3000);
+
+                        // 校验服务端是否真正启动成功
+                        if (!Analyzer.IsRunModeActive)
+                        {
+                            Log("MC服务端启动失败(可能Java路径错误、启动参数错误或核心文件损坏)，AI自动化管理未启动。", 3);
+                            return;
+                        }
+                    }
+                    else if (!Analyzer.NeedsRunServer && !Analyzer.IsAttached)
+                    {
+                        Log("当前模式为 OnlyRcon，请先使用 .server get + .server connect 连接服务端后再次启动AI。", 2);
+                        return;
+                    }
+
+                    _isRunning = true;
+                    RegisterAllTasks();
+                    Log($"AI自动化管理已启动，共注册 {config.Tasks.Count} 个任务。", 1);
+                }
+            }
+
+            /// <summary>检查工作目录中是否存在服务端核心文件(*.jar)</summary>
+            private static bool HasServerCoreFile(string workPath)
+            {
+                try
+                {
+                    return Directory.GetFiles(workPath, "*.jar").Length > 0;
+                }
+                catch { return false; }
+            }
+
+            /// <summary>停止AI自动化</summary>
+            public static void Stop()
+            {
+                lock (_runLock)
+                {
+                    if (!_isRunning) return;
+
+                    foreach (var kv in config_TasksSnapshot())
+                    {
+                        try { RecurringJob.RemoveIfExists($"ai_{kv.Key}"); } catch { }
+                    }
+
+                    _isRunning = false;
+                    Log("AI自动化管理已停止。", 1);
+                }
+            }
+
+            /// <summary>重载任务配置</summary>
+            public static void Reload()
+            {
+                if (!_isRunning)
+                {
+                    Start();
+                    return;
+                }
+
+                Stop();
+                Thread.Sleep(500);
+                Start();
+                Log("AI自动化管理已重载。", 1);
+            }
+
+            /// <summary>列出所有任务状态</summary>
+            public static void ListTasks()
+            {
+                var config = ContentManager.Ai.ServerAutoAi;
+                if (config?.Tasks == null || config.Tasks.Count == 0)
+                {
+                    Log("未配置任何AI任务。", 1);
+                    return;
+                }
+
+                Log($"AI自动化状态: {(_isRunning ? "[green]运行中[/]" : "[red]已停止[/]")} 任务数: {config.Tasks.Count}", 1);
+                foreach (var kv in config.Tasks)
+                {
+                    string status = kv.Value.Enabled ? "[green]启用[/]" : "[red]禁用[/]";
+                    string lastRun = LastRunTime.TryGetValue(kv.Key, out var t) ? t.ToString("HH:mm:ss") : "未运行";
+                    int count = RunCount.TryGetValue(kv.Key, out var c) ? c : 0;
+                    Log($"  - [{kv.Key}] {kv.Value.Name} | {status} | 触发: {kv.Value.Trigger} | 间隔: {kv.Value.Interval} | 已执行: {count} | 最后: {lastRun}", 1);
+                }
+            }
+
+            /// <summary>手动触发指定任务(跳过trigger检查，强制执行)</summary>
+            public static async Task<bool> TriggerTaskAsync(string taskKey)
+            {
+                var config = ContentManager.Ai.ServerAutoAi;
+                if (config?.Tasks == null || !config.Tasks.TryGetValue(taskKey, out var task))
+                {
+                    Log($"未找到任务: {taskKey}", 2);
+                    return false;
+                }
+
+                if (!task.Enabled)
+                {
+                    Log($"任务 {taskKey} 已禁用，无法触发。", 2);
+                    return false;
+                }
+
+                Log($"手动触发任务: {taskKey}", 1);
+                await ExecuteTaskAsync(taskKey, task, skipTrigger: true);
+                return true;
+            }
+
+            /// <summary>注册所有任务到调度器</summary>
+            private static void RegisterAllTasks()
+            {
+                var config = ContentManager.Ai.ServerAutoAi;
+                if (config?.Tasks == null) return;
+
+                foreach (var kv in config.Tasks)
+                {
+                    if (!kv.Value.Enabled) continue;
+
+                    string jobKey = $"ai_{kv.Key}";
+                    string cronExpr = NormalizeCron(kv.Value.Interval);
+
+                    try
+                    {
+                        RecurringJob.AddOrUpdate(
+                            jobKey,
+                            () => HangfireExecute(kv.Key),
+                            cronExpr);
+                        Log($"任务 [{kv.Key}] 已注册: {kv.Value.Name} | Cron: {cronExpr}", 1);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"任务 [{kv.Key}] 注册失败: {ex.Message}", 3);
+                    }
+                }
+            }
+
+            /// <summary>Hangfire执行入口</summary>
+            public static async Task HangfireExecute(string taskKey)
+            {
+                var config = ContentManager.Ai.ServerAutoAi;
+                if (config?.Tasks == null || !config.Tasks.TryGetValue(taskKey, out var task))
+                    return;
+
+                if (!_isRunning) return;
+                if (!task.Enabled) return;
+
+                try
+                {
+                    await ExecuteTaskAsync(taskKey, task);
+                }
+                catch (Exception ex)
+                {
+                    Log($"任务 [{taskKey}] 执行异常: {ex.Message}", 3);
+                }
+            }
+
+            /// <summary>快照任务列表(供停止时使用)</summary>
+            private static IEnumerable<KeyValuePair<string, AiTask>> config_TasksSnapshot()
+            {
+                var config = ContentManager.Ai.ServerAutoAi;
+                if (config?.Tasks == null) return new List<KeyValuePair<string, AiTask>>();
+                return config.Tasks.ToList();
+            }
+
+            /// <summary>
+            /// 执行单个AI任务
+            /// </summary>
+            /// <param name="skipTrigger">是否跳过触发条件检查(手动/事件触发时为true)</param>
+            private static async Task ExecuteTaskAsync(string taskKey, AiTask task, bool skipTrigger = false)
+            {
+                // 1. 检查触发条件(cron轮询时检查；手动/事件触发时跳过)
+                if (!skipTrigger && !EvaluateTrigger(task.Trigger))
+                {
+                    Log($"任务 [{taskKey}] 触发条件不满足: {task.Trigger}", 1);
+                    return;
+                }
+
+                // 2. 收集输入数据
+                string inputData = CollectInput(task.Input, task.Limit);
+                if (string.IsNullOrWhiteSpace(inputData))
+                {
+                    Log($"任务 [{taskKey}] 无可用的输入数据，跳过本次执行。", 1);
+                    return;
+                }
+
+                // 3. 解析动作
+                bool doAi = false;
+                List<string> allowedTools = new List<string>();
+                foreach (var action in task.Actions)
+                {
+                    string a = action.Trim().TrimStart('-').Trim();
+                    if (string.IsNullOrEmpty(a)) continue;
+
+                    if (a.Equals("ai", StringComparison.OrdinalIgnoreCase))
+                    {
+                        doAi = true;
+                    }
+                    else if (a.StartsWith("tools:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string tools = a.Substring("tools:".Length).Trim();
+                        foreach (var t in tools.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                            allowedTools.Add(t);
+                    }
+                }
+
+                if (!doAi)
+                {
+                    Log($"任务 [{taskKey}] 未配置 - ai 动作，跳过AI分析。", 1);
+                    return;
+                }
+
+                // 4. 执行AI分析(含工具调用循环)
+                Log($"任务 [{taskKey}] 开始AI分析...", 1);
+
+                var config = ContentManager.Ai.ServerAutoAi;
+                int maxRounds = config.MaxToolRounds > 0 ? config.MaxToolRounds : 5;
+                string? finalResponse = await RunAiWithToolsAsync(taskKey, task, inputData, allowedTools, maxRounds);
+
+                // 5. 更新统计
+                lock (_cacheLock)
+                {
+                    LastRunTime[taskKey] = DateTime.Now;
+                    if (!RunCount.ContainsKey(taskKey)) RunCount[taskKey] = 0;
+                    RunCount[taskKey]++;
+                }
+
+                // 6. 保存回复
+                if (!string.IsNullOrWhiteSpace(finalResponse) && config.SaveResponse)
+                {
+                    SaveAiContextResponse(taskKey, task.Name, inputData, finalResponse);
+                }
+
+                Log($"任务 [{taskKey}] AI分析完成。", 1);
+            }
+
+            /// <summary>
+            /// 评估触发条件
+            /// </summary>
+            private static bool EvaluateTrigger(string trigger)
+            {
+                if (string.IsNullOrWhiteSpace(trigger)) return true;
+                string t = trigger.Trim().ToLowerInvariant();
+
+                if (t == "always" || t == "true" || t == "1") return true;
+                if (t == "server_running") return Analyzer.IsRunModeActive || Analyzer.IsAttached;
+
+                // TPS 条件: tps < 18, tps > 20
+                var tpsMatch = Regex.Match(t, @"tps\s*(>=|<=|>|<|=|==)\s*(\d+(?:\.\d+)?)");
+                if (tpsMatch.Success)
+                {
+                    double currentTps = TryGetCurrentTps();
+                    if (currentTps < 0) return false; // 无法获取TPS, 不触发
+
+                    double threshold = double.Parse(tpsMatch.Groups[2].Value);
+                    string op = tpsMatch.Groups[1].Value;
+                    return op switch
+                    {
+                        ">" => currentTps > threshold,
+                        ">=" => currentTps >= threshold,
+                        "<" => currentTps < threshold,
+                        "<=" => currentTps <= threshold,
+                        "=" or "==" => Math.Abs(currentTps - threshold) < 0.01,
+                        _ => false
+                    };
+                }
+
+                // CPU 条件: cpu > 80
+                var cpuMatch = Regex.Match(t, @"cpu\s*(>=|<=|>|<|=|==)\s*(\d+(?:\.\d+)?)");
+                if (cpuMatch.Success)
+                {
+                    double cpu = AiTools.GetCpuUsage();
+                    if (cpu < 0) return false;
+                    double threshold = double.Parse(cpuMatch.Groups[2].Value);
+                    string op = cpuMatch.Groups[1].Value;
+                    return op switch
+                    {
+                        ">" => cpu > threshold,
+                        ">=" => cpu >= threshold,
+                        "<" => cpu < threshold,
+                        "<=" => cpu <= threshold,
+                        "=" or "==" => Math.Abs(cpu - threshold) < 0.01,
+                        _ => false
+                    };
+                }
+
+                // 内存条件: memory > 80 (百分比)
+                var memMatch = Regex.Match(t, @"memory\s*(>=|<=|>|<|=|==)\s*(\d+(?:\.\d+)?)");
+                if (memMatch.Success)
+                {
+                    var (used, total) = AiTools.GetMemoryUsage();
+                    if (total <= 0) return false;
+                    double percent = (used / total) * 100;
+                    double threshold = double.Parse(memMatch.Groups[2].Value);
+                    string op = memMatch.Groups[1].Value;
+                    return op switch
+                    {
+                        ">" => percent > threshold,
+                        ">=" => percent >= threshold,
+                        "<" => percent < threshold,
+                        "<=" => percent <= threshold,
+                        "=" or "==" => Math.Abs(percent - threshold) < 0.01,
+                        _ => false
+                    };
+                }
+
+                // 在线玩家数量条件: players == 0, players > 0, players < 5
+                var playersMatch = Regex.Match(t, @"players\s*(>=|<=|>|<|=|==)\s*(\d+)");
+                if (playersMatch.Success)
+                {
+                    int currentPlayers = GetOnlinePlayerCount();
+                    if (currentPlayers > 0)
+                        _lastPlayerOnlineTime = DateTime.Now;
+
+                    int threshold = int.Parse(playersMatch.Groups[2].Value);
+                    string op = playersMatch.Groups[1].Value;
+                    return op switch
+                    {
+                        ">" => currentPlayers > threshold,
+                        ">=" => currentPlayers >= threshold,
+                        "<" => currentPlayers < threshold,
+                        "<=" => currentPlayers <= threshold,
+                        "=" or "==" => currentPlayers == threshold,
+                        _ => false
+                    };
+                }
+
+                // 空闲时长条件(分钟): idle_minutes > 360 (即6小时)
+                var idleMatch = Regex.Match(t, @"idle_minutes\s*(>=|<=|>|<|=|==)\s*(\d+(?:\.\d+)?)");
+                if (idleMatch.Success)
+                {
+                    if (GetOnlinePlayerCount() > 0)
+                    {
+                        _lastPlayerOnlineTime = DateTime.Now;
+                        return false; // 当前有玩家，不满足空闲条件
+                    }
+
+                    double idleMinutes = (DateTime.Now - _lastPlayerOnlineTime).TotalMinutes;
+                    double threshold = double.Parse(idleMatch.Groups[2].Value);
+                    string op = idleMatch.Groups[1].Value;
+                    return op switch
+                    {
+                        ">" => idleMinutes > threshold,
+                        ">=" => idleMinutes >= threshold,
+                        "<" => idleMinutes < threshold,
+                        "<=" => idleMinutes <= threshold,
+                        "=" or "==" => Math.Abs(idleMinutes - threshold) < 1,
+                        _ => false
+                    };
+                }
+
+                // 崩溃检测: crash_detected
+                if (t == "crash_detected")
+                {
+                    bool crashed = DetectServerCrash();
+                    if (crashed)
+                    {
+                        _lastCrashTime = DateTime.Now;
+                        return true;
+                    }
+                    return false;
+                }
+
+                // 服务器已停止: server_stopped
+                if (t == "server_stopped")
+                {
+                    return !Analyzer.IsRunModeActive && !Analyzer.IsAttached;
+                }
+
+                // 未知条件默认通过(避免阻塞)
+                Log($"未知触发条件(默认通过): {trigger}", 1);
+                return true;
+            }
+
+            /// <summary>获取当前在线玩家数(通过日志解析加入/离开事件估算)</summary>
+            private static int GetOnlinePlayerCount()
+            {
+                try
+                {
+                    var recentLines = new List<string>();
+                    lock (Analyzer._logBufferLock)
+                    {
+                        int start = Math.Max(0, Analyzer._logBuffer.Count - 500);
+                        for (int i = start; i < Analyzer._logBuffer.Count; i++)
+                            recentLines.Add(Analyzer._logBuffer[i]);
+                    }
+
+                    int count = 0;
+                    for (int i = 0; i < recentLines.Count; i++)
+                    {
+                        string line = recentLines[i];
+                        if (Regex.IsMatch(line, @"joined the game|logged in", RegexOptions.IgnoreCase))
+                            count++;
+                        else if (Regex.IsMatch(line, @"left the game|lost connection|disconnected", RegexOptions.IgnoreCase))
+                            count--;
+                    }
+                    return Math.Max(0, count);
+                }
+                catch { return 0; }
+            }
+
+            /// <summary>检测服务器是否崩溃(cron兜底轮询，使用精准关键字单行命中判定)</summary>
+            private static bool DetectServerCrash()
+            {
+                try
+                {
+                    var recentLines = new List<string>();
+                    lock (Analyzer._logBufferLock)
+                    {
+                        int start = Math.Max(0, Analyzer._logBuffer.Count - 100);
+                        for (int i = start; i < Analyzer._logBuffer.Count; i++)
+                            recentLines.Add(Analyzer._logBuffer[i]);
+                    }
+
+                    if (recentLines.Count == 0) return false;
+
+                    // 精准崩溃标志(与 Analyzer.ProcessCrashDetectionLine 保持一致)
+                    foreach (var line in recentLines)
+                    {
+                        if (line.Contains("---- Minecraft Crash Report ----", StringComparison.OrdinalIgnoreCase) ||
+                            line.Contains("This crash report has been saved to", StringComparison.OrdinalIgnoreCase) ||
+                            line.Contains("Shutting down the server", StringComparison.OrdinalIgnoreCase) ||
+                            line.Contains("Server thread/FATAL", StringComparison.OrdinalIgnoreCase) ||
+                            (line.Contains("Server thread/ERROR", StringComparison.OrdinalIgnoreCase) &&
+                             line.Contains("Crash", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                catch { return false; }
+            }
+
+            /// <summary>获取最近的崩溃报告内容</summary>
+            private static string GetRecentCrashInfo()
+            {
+                try
+                {
+                    string? workPath = Config.CurrentServer.WorkPath;
+                    if (string.IsNullOrEmpty(workPath)) return "[未配置工作目录]";
+
+                    string crashDir = Path.Combine(workPath, "crash-reports");
+                    if (!Directory.Exists(crashDir)) return "[无崩溃报告目录]";
+
+                    var latestCrash = new DirectoryInfo(crashDir)
+                        .GetFiles("*.txt")
+                        .OrderByDescending(f => f.LastWriteTime)
+                        .FirstOrDefault();
+
+                    if (latestCrash == null) return "[无崩溃报告文件]";
+
+                    string content = File.ReadAllText(latestCrash.FullName, Encoding.GetEncoding(0));
+                    if (content.Length > 4000)
+                        content = content.Substring(0, 4000) + "\n...(内容已截断)";
+
+                    return $"崩溃报告文件: {latestCrash.Name}\n生成时间: {latestCrash.LastWriteTime}\n\n{content}";
+                }
+                catch (Exception ex) { return $"[获取崩溃报告失败: {ex.Message}]"; }
+            }
+
+            /// <summary>尝试获取当前TPS</summary>
+            private static double TryGetCurrentTps()
+            {
+                try
+                {
+                    List<string> recentLines = new List<string>();
+                    lock (Analyzer._logBufferLock)
+                    {
+                        int start = Math.Max(0, Analyzer._logBuffer.Count - 50);
+                        for (int i = start; i < Analyzer._logBuffer.Count; i++)
+                            recentLines.Add(Analyzer._logBuffer[i]);
+                    }
+
+                    // 匹配各种TPS格式
+                    var patterns = new[]
+                    {
+                        new Regex(@"tps[^\d]*(\d+(?:\.\d+)?)", RegexOptions.IgnoreCase),
+                        new Regex(@"from\s+the\s+last\s+\w+\s*,\s*tps[^\d]*(\d+(?:\.\d+)?)", RegexOptions.IgnoreCase),
+                        new Regex(@"""tps""\s*:\s*(\d+(?:\.\d+)?)", RegexOptions.IgnoreCase)
+                    };
+
+                    for (int i = recentLines.Count - 1; i >= 0; i--)
+                    {
+                        foreach (var p in patterns)
+                        {
+                            var m = p.Match(recentLines[i]);
+                            if (m.Success && double.TryParse(m.Groups[1].Value, out double tps))
+                                return tps;
+                        }
+                    }
+                }
+                catch { }
+                return -1;
+            }
+
+            /// <summary>
+            /// 收集任务输入数据
+            /// </summary>
+            private static string CollectInput(List<string> inputs, int limit)
+            {
+                if (inputs == null || inputs.Count == 0) return "";
+
+                var sb = new StringBuilder();
+                int charLimit = limit * 4; // 1 token ≈ 4字符的粗略估算
+                if (charLimit <= 0) charLimit = 16000;
+
+                foreach (var input in inputs)
+                {
+                    string? content = null;
+                    string label = input;
+
+                    try
+                    {
+                        switch (input.ToLowerInvariant())
+                        {
+                            case "server_logs":
+                                content = GetRecentServerLogs(200);
+                                label = "服务器日志(最近200行)";
+                                break;
+                            case "app_logs":
+                                content = GetRecentAppLogs(100);
+                                label = "程序日志(最近100行)";
+                                break;
+                            case "server_tps":
+                                content = AiTools.GetServerTpsInfo();
+                                label = "服务器TPS";
+                                break;
+                            case "server_plugin":
+                                content = GetPluginListSummary();
+                                label = "服务器插件列表";
+                                break;
+                            case "host_cpu":
+                                double cpu = AiTools.GetCpuUsage();
+                                content = cpu < 0 ? "[无法获取CPU信息]" : $"CPU使用率: {cpu:F1}%";
+                                label = "主机CPU";
+                                break;
+                            case "host_memory":
+                                var (used, total) = AiTools.GetMemoryUsage();
+                                content = total < 0 ? "[无法获取内存信息]" : $"内存: 已用 {used:F0}MB / 总 {total:F0}MB ({used / total * 100:F1}%)";
+                                label = "主机内存";
+                                break;
+                            case "server_players":
+                                int playerCount = GetOnlinePlayerCount();
+                                content = $"当前在线玩家数: {playerCount}\n上次检测到有玩家的时间: {_lastPlayerOnlineTime:yyyy-MM-dd HH:mm:ss}\n空闲时长: {(DateTime.Now - _lastPlayerOnlineTime).TotalMinutes:F1} 分钟";
+                                label = "服务器在线玩家";
+                                break;
+                            case "server_status":
+                                var statusSb = new StringBuilder();
+                                statusSb.AppendLine($"服务器运行状态: {(Analyzer.IsRunModeActive || Analyzer.IsAttached ? "运行中" : "已停止")}");
+                                statusSb.AppendLine($"需要运行服务端模式: {Analyzer.NeedsRunServer}");
+                                statusSb.AppendLine($"运行模式激活: {Analyzer.IsRunModeActive}");
+                                statusSb.AppendLine($"已附加进程: {Analyzer.IsAttached}");
+                                statusSb.AppendLine($"上次崩溃时间: {(_lastCrashTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "无")}");
+                                content = statusSb.ToString();
+                                label = "服务器状态";
+                                break;
+                            case "crash_report":
+                                content = GetRecentCrashInfo();
+                                label = "崩溃报告";
+                                break;
+                            default:
+                                content = $"[未知输入源: {input}]";
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        content = $"[获取 {input} 失败: {ex.Message}]";
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(content))
+                    {
+                        // 截断超长内容
+                        if (content.Length > charLimit / Math.Max(1, inputs.Count))
+                            content = content.Substring(0, charLimit / Math.Max(1, inputs.Count)) + "\n...(内容已截断)";
+
+                        sb.AppendLine($"=== {label} ===");
+                        sb.AppendLine(content);
+                        sb.AppendLine();
+                    }
+                }
+
+                return sb.ToString();
+            }
+
+            /// <summary>获取最近的MC服务端日志</summary>
+            private static string GetRecentServerLogs(int lines)
+            {
+                var logLines = new List<string>();
+                lock (Analyzer._logBufferLock)
+                {
+                    if (Analyzer._logBuffer.Count > 0)
+                    {
+                        int start = Math.Max(0, Analyzer._logBuffer.Count - lines);
+                        for (int i = start; i < Analyzer._logBuffer.Count; i++)
+                            logLines.Add(Analyzer._logBuffer[i]);
+                    }
+                }
+
+                if (logLines.Count == 0)
+                {
+                    string? workPath = Config.CurrentServer.WorkPath;
+                    if (!string.IsNullOrEmpty(workPath))
+                    {
+                        string logFile = Path.Combine(workPath, "logs", "latest.log");
+                        if (File.Exists(logFile))
+                        {
+                            var allLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0));
+                            int start = Math.Max(0, allLines.Length - lines);
+                            for (int i = start; i < allLines.Length; i++)
+                                logLines.Add(allLines[i]);
+                        }
+                    }
+                }
+
+                return logLines.Count == 0 ? "[暂无服务端日志]" : string.Join("\n", logLines);
+            }
+
+            /// <summary>获取程序自身日志</summary>
+            private static string GetRecentAppLogs(int lines)
+            {
+                try
+                {
+                    string logDir = Config.LogsPath;
+                    if (!Directory.Exists(logDir)) return "[无程序日志目录]";
+
+                    var logFile = new DirectoryInfo(logDir)
+                        .GetFiles("*.log")
+                        .OrderByDescending(f => f.LastWriteTime)
+                        .FirstOrDefault();
+
+                    if (logFile == null) return "[无程序日志文件]";
+
+                    var allLines = File.ReadAllLines(logFile.FullName, Encoding.UTF8);
+                    int start = Math.Max(0, allLines.Length - lines);
+                    var sb = new StringBuilder();
+                    for (int i = start; i < allLines.Length; i++)
+                        sb.AppendLine(allLines[i]);
+                    return sb.ToString();
+                }
+                catch (Exception ex)
+                {
+                    return $"[读取程序日志失败: {ex.Message}]";
+                }
+            }
+
+            /// <summary>获取插件列表摘要</summary>
+            private static string GetPluginListSummary()
+            {
+                string? workPath = Config.CurrentServer.WorkPath;
+                if (string.IsNullOrEmpty(workPath)) return "[未配置工作目录]";
+
+                string pluginsDir = Path.Combine(workPath, "plugins");
+                if (!Directory.Exists(pluginsDir)) return "[plugins 目录不存在]";
+
+                try
+                {
+                    var files = new DirectoryInfo(pluginsDir)
+                        .GetFiles("*.jar")
+                        .Concat(new DirectoryInfo(pluginsDir).GetFiles("*.disjar"))
+                        .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    if (files.Count == 0) return "[无插件]";
+
+                    var sb = new StringBuilder();
+                    int enabled = 0, disabled = 0;
+                    foreach (var f in files)
+                    {
+                        bool isDisabled = f.Extension.Equals(".disjar", StringComparison.OrdinalIgnoreCase);
+                        if (isDisabled) disabled++; else enabled++;
+                        sb.AppendLine($"  {(isDisabled ? "[禁用]" : "[启用]")} {f.Name}");
+                    }
+                    sb.Insert(0, $"共 {files.Count} 个插件(启用: {enabled}, 禁用: {disabled}):\n");
+                    return sb.ToString();
+                }
+                catch (Exception ex)
+                {
+                    return $"[获取插件列表失败: {ex.Message}]";
+                }
+            }
+
+            /// <summary>
+            /// 运行AI对话(含工具调用循环)
+            /// </summary>
+            private static async Task<string?> RunAiWithToolsAsync(
+                string taskKey, AiTask task, string inputData,
+                List<string> allowedTools, int maxRounds)
+            {
+                var config = ContentManager.Ai.ServerAutoAi;
+
+                // 构建系统提示
+                string systemPrompt = BuildSystemPrompt(task, allowedTools);
+
+                // 获取/初始化上下文缓存
+                List<ChatMessage> contextMessages;
+                lock (_cacheLock)
+                {
+                    if (!_contextCache.TryGetValue(taskKey, out var existing))
+                    {
+                        contextMessages = new List<ChatMessage>();
+                        _contextCache[taskKey] = contextMessages;
+                    }
+                    else
+                    {
+                        contextMessages = existing;
+                    }
+
+                    // 控制缓存大小
+                    int maxCache = config.ContextCacheSize > 0 ? config.ContextCacheSize : 20;
+                    while (contextMessages.Count > maxCache * 2)
+                    {
+                        contextMessages.RemoveAt(0);
+                    }
+                }
+
+                // 构建用户消息
+                string userContent = $"{task.Prompt}\n\n=== 输入数据 ===\n{inputData}\n\n请根据以上数据分析并给出结论。如需调用工具请使用 [rt:tools\"(工具名{{参数JSON}})\"] 格式。";
+
+                // 调用AI
+                string? aiResponse = await CallAiAsync(systemPrompt, userContent, contextMessages);
+                if (string.IsNullOrWhiteSpace(aiResponse))
+                {
+                    Log($"任务 [{taskKey}] AI返回空内容。", 2);
+                    return null;
+                }
+
+                // 记录到缓存
+                lock (_cacheLock)
+                {
+                    contextMessages.Add(new ChatMessage { Role = "user", Content = userContent });
+                    contextMessages.Add(new ChatMessage { Role = "assistant", Content = aiResponse });
+                }
+
+                Log($"任务 [{taskKey}] AI首轮回复:\n{aiResponse}", 1);
+
+                // 工具调用循环
+                for (int round = 1; round <= maxRounds; round++)
+                {
+                    var toolCalls = ParseToolCalls(aiResponse!);
+                    if (toolCalls.Count == 0) break;
+
+                    Log($"任务 [{taskKey}] 第 {round} 轮工具调用，共 {toolCalls.Count} 个。", 1);
+
+                    // 执行所有工具调用
+                    var toolResults = new StringBuilder();
+                    foreach (var (toolName, argsJson) in toolCalls)
+                    {
+                        if (!AiTools.IsToolAllowed(toolName, config.Tools, allowedTools))
+                        {
+                            string msg = $"[工具 {toolName} 不允许调用]";
+                            toolResults.AppendLine($"--- 工具 {toolName} 结果 ---\n{msg}\n");
+                            Log($"任务 [{taskKey}] 工具 {toolName} 不允许调用", 2);
+                            continue;
+                        }
+
+                        Log($"任务 [{taskKey}] 调用工具: {toolName} 参数: {argsJson}", 1);
+                        string result = await AiTools.ExecuteToolAsync(toolName, argsJson);
+                        toolResults.AppendLine($"--- 工具 {toolName} 结果 ---\n{result}\n");
+                    }
+
+                    // 将工具结果反馈给AI
+                    string followUpContent = $"工具执行结果如下:\n\n{toolResults}\n\n请根据以上工具执行结果继续分析，并给出最终结论。如不需要更多工具调用，请直接输出结论。";
+
+                    lock (_cacheLock)
+                    {
+                        contextMessages.Add(new ChatMessage { Role = "user", Content = followUpContent });
+                    }
+
+                    string? followUpResponse = await CallAiAsync(systemPrompt, followUpContent, contextMessages);
+                    if (string.IsNullOrWhiteSpace(followUpResponse))
+                    {
+                        Log($"任务 [{taskKey}] AI第{round + 1}轮返回空内容。", 2);
+                        break;
+                    }
+
+                    lock (_cacheLock)
+                    {
+                        contextMessages.Add(new ChatMessage { Role = "assistant", Content = followUpResponse });
+                    }
+
+                    aiResponse = followUpResponse;
+                    Log($"任务 [{taskKey}] AI第{round + 1}轮回复:\n{aiResponse}", 1);
+
+                    // 检查是否还有工具调用
+                    var nextToolCalls = ParseToolCalls(aiResponse);
+                    if (nextToolCalls.Count == 0)
+                    {
+                        Log($"任务 [{taskKey}] AI已完成分析，无更多工具调用。", 1);
+                        break;
+                    }
+                }
+
+                return aiResponse;
+            }
+
+            /// <summary>构建系统提示词</summary>
+            private static string BuildSystemPrompt(AiTask task, List<string> allowedTools)
+            {
+                var config = ContentManager.Ai.ServerAutoAi;
+                var sb = new StringBuilder();
+
+                sb.AppendLine(config.Prompt);
+                sb.AppendLine();
+
+                // 任务上下文
+                sb.AppendLine($"# 当前任务: {task.Name}");
+                sb.AppendLine($"# 任务提示: {task.Prompt}");
+                sb.AppendLine();
+
+                // 工具说明
+                if (config.Tools != null && config.Tools.Enabled)
+                {
+                    sb.AppendLine("# 工具说明");
+                    sb.AppendLine(AiTools.GetToolsDescription(config.Tools));
+
+                    if (allowedTools.Count > 0)
+                    {
+                        sb.AppendLine($"# 本次任务允许调用的工具: {string.Join(", ", allowedTools)}");
+                    }
+                    sb.AppendLine();
+                }
+
+                // 技能
+                if (config.Skills != null && config.Skills.Count > 0)
+                {
+                    sb.AppendLine("# 可用技能");
+                    foreach (var skill in config.Skills)
+                    {
+                        sb.AppendLine($"- {skill.Name}: {skill.Description}");
+                        if (!string.IsNullOrWhiteSpace(skill.Behavior))
+                            sb.AppendLine($"  行为: {skill.Behavior}");
+                    }
+                    sb.AppendLine();
+                }
+
+                // 规则
+                if (config.Rules != null && config.Rules.Count > 0)
+                {
+                    sb.AppendLine("# 必须遵守的规则");
+                    foreach (var rule in config.Rules)
+                    {
+                        sb.AppendLine($"- {rule}");
+                    }
+                    sb.AppendLine();
+                }
+
+                sb.AppendLine("# 输出要求");
+                sb.AppendLine("- 如需调用工具，必须在回复中包含 [rt:tools\"(工具名{参数JSON})\"] 格式的调用。");
+                sb.AppendLine("- 工具调用格式示例: [rt:tools\"(get_server_log{\"lines\":100})\"]");
+                sb.AppendLine("- 每次回复可以包含多个工具调用。");
+                sb.AppendLine("- 在调用工具后，请等待工具返回结果后再继续分析。");
+                sb.AppendLine("- 最终必须给出明确的结论和建议。");
+
+                return sb.ToString();
+            }
+
+            /// <summary>解析AI回复中的工具调用</summary>
+            private static List<(string toolName, string argsJson)> ParseToolCalls(string content)
+            {
+                var result = new List<(string, string)>();
+                var matches = ToolCallPattern.Matches(content);
+
+                foreach (Match m in matches)
+                {
+                    string toolName = m.Groups[1].Value.Trim();
+                    string argsJson = m.Groups[2].Success ? m.Groups[2].Value.Trim() : "{}";
+                    result.Add((toolName, argsJson));
+                }
+
+                return result;
+            }
+
+            /// <summary>调用AI API(带上下文)</summary>
+            private static async Task<string?> CallAiAsync(string systemPrompt, string userContent, List<ChatMessage> contextMessages)
+            {
+                var config = ContentManager.Ai.ServerAutoAi;
+                if (config == null) return null;
+
+                // 复用Console_Error配置(若ServerAutoAi未配置)
+                string apiEndpoint = string.IsNullOrWhiteSpace(config.ApiEndpoint) ? ContentManager.Ai.Console_Error.ApiEndpoint : config.ApiEndpoint;
+                string apiKey = string.IsNullOrWhiteSpace(config.ApiKey) ? ContentManager.Ai.Console_Error.ApiKey : config.ApiKey;
+                string model = string.IsNullOrWhiteSpace(config.Model) ? ContentManager.Ai.Console_Error.Model : config.Model;
+
+                if (string.IsNullOrWhiteSpace(apiEndpoint))
+                {
+                    Log("AI API地址未配置。", 3);
+                    return null;
+                }
+
+                try
+                {
+                    using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(config.RequestTimeoutSeconds) };
+                    if (!string.IsNullOrWhiteSpace(apiKey))
+                        httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
+
+                    // 构建消息列表(系统提示 + 上下文 + 当前用户消息)
+                    var messages = new List<object>
+                    {
+                        new { role = "system", content = systemPrompt }
+                    };
+
+                    // 添加上下文(历史消息)
+                    lock (_cacheLock)
+                    {
+                        foreach (var msg in contextMessages)
+                        {
+                            messages.Add(new { role = msg.Role, content = msg.Content });
+                        }
+                    }
+
+                    // 当前用户消息
+                    messages.Add(new { role = "user", content = userContent });
+
+                    var requestBody = new
+                    {
+                        model = model,
+                        messages = messages,
+                        max_tokens = config.MaxTokens,
+                        temperature = config.Temperature,
+                        stream = false
+                    };
+
+                    var json = JsonConvert.SerializeObject(requestBody);
+                    var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                    HttpResponseMessage response;
+
+                    if (config.RetryOnError)
+                    {
+                        var retryPipeline = new ResiliencePipelineBuilder<HttpResponseMessage>()
+                            .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+                            {
+                                MaxRetryAttempts = config.RetryCount,
+                                Delay = TimeSpan.FromSeconds(3),
+                                BackoffType = DelayBackoffType.Exponential,
+                                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                                    .Handle<HttpRequestException>()
+                                    .Handle<TaskCanceledException>()
+                                    .HandleResult(r => !r.IsSuccessStatusCode),
+                                OnRetry = args =>
+                                {
+                                    Log($"AI请求失败，正在重试 ({args.AttemptNumber + 1}/{config.RetryCount})...", 2);
+                                    return default;
+                                }
+                            })
+                            .Build();
+
+                        response = await retryPipeline.ExecuteAsync(async token =>
+                        {
+                            return await httpClient.PostAsync(apiEndpoint, content, token);
+                        });
+                    }
+                    else
+                    {
+                        response = await httpClient.PostAsync(apiEndpoint, content);
+                    }
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        string errorBody = await response.Content.ReadAsStringAsync();
+                        Log($"AI请求失败 (HTTP {(int)response.StatusCode}): {errorBody}", 3);
+                        return null;
+                    }
+
+                    var responseBody = await response.Content.ReadAsStringAsync();
+                    var jsonResponse = JObject.Parse(responseBody);
+                    string? aiMessage = jsonResponse["choices"]?[0]?["message"]?["content"]?.ToString();
+
+                    return aiMessage;
+                }
+                catch (TaskCanceledException)
+                {
+                    Log("AI请求超时。", 3);
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    Log($"AI调用出错: {ex.Message}", 3);
+                    return null;
+                }
+            }
+
+            /// <summary>保存AI回复到ai_save.yml(上下文缓存格式)</summary>
+            private static void SaveAiContextResponse(string taskKey, string taskName, string inputData, string aiResponse)
+            {
+                try
+                {
+                    string filePath = Path.Combine(Config.DataPath, "ai_save.yml");
+                    var existing = new List<Dictionary<string, object>>();
+
+                    if (File.Exists(filePath))
+                    {
+                        try
+                        {
+                            var yaml = File.ReadAllText(filePath);
+                            var deserializer = new DeserializerBuilder()
+                                .WithNamingConvention(UnderscoredNamingConvention.Instance)
+                                .Build();
+                            var loaded = deserializer.Deserialize<List<Dictionary<string, object>>>(yaml);
+                            if (loaded != null) existing = loaded;
+                        }
+                        catch { }
+                    }
+
+                    // 截断过长的输入内容
+                    string trimmedInput = inputData.Length > 2000 ? inputData.Substring(0, 1997) + "..." : inputData;
+
+                    existing.Add(new Dictionary<string, object>
+                    {
+                        ["task_key"] = taskKey,
+                        ["task_name"] = taskName,
+                        ["input_summary"] = trimmedInput,
+                        ["ai_response"] = aiResponse,
+                        ["timestamp"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                    });
+
+                    // 限制保存条数(避免无限增长)
+                    if (existing.Count > 500)
+                        existing = existing.Skip(existing.Count - 500).ToList();
+
+                    var serializer = new SerializerBuilder()
+                        .WithNamingConvention(UnderscoredNamingConvention.Instance)
+                        .Build();
+                    File.WriteAllText(filePath, serializer.Serialize(existing));
+                }
+                catch (Exception ex)
+                {
+                    Log($"保存AI回复失败: {ex.Message}", 2);
+                }
+            }
+
+            /// <summary>
+            /// 标准化Cron表达式
+            /// Hangfire使用Quartz格式(6位或7位): 秒 分 时 日 月 周 [年]
+            /// 用户输入示例: "0 0 0/1 * * ?" 表示每小时
+            /// </summary>
+            private static string NormalizeCron(string cronExpr)
+            {
+                if (string.IsNullOrWhiteSpace(cronExpr)) return "0 0 * * * *"; // 默认每小时
+
+                string trimmed = cronExpr.Trim();
+
+                // 将 ? 替换为 * (Hangfire不识别 ?)
+                trimmed = trimmed.Replace('?', '*');
+
+                // 检查字段数
+                var parts = trimmed.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+
+                // Hangfire需要6或7个字段
+                if (parts.Length == 5)
+                {
+                    // 5位Cron: 分 时 日 月 周 -> 秒 分 时 日 月 周
+                    trimmed = "0 " + trimmed;
+                }
+                else if (parts.Length < 5)
+                {
+                    Log($"Cron表达式字段不足，使用默认每小时: {cronExpr}", 2);
+                    return "0 0 * * * *";
+                }
+
+                return trimmed;
+            }
+
+            /// <summary>清除指定任务的上下文缓存</summary>
+            public static void ClearContextCache(string taskKey)
+            {
+                lock (_cacheLock)
+                {
+                    if (_contextCache.ContainsKey(taskKey))
+                    {
+                        _contextCache[taskKey].Clear();
+                        Log($"已清除任务 [{taskKey}] 的上下文缓存。", 1);
+                    }
+                }
+            }
+
+            /// <summary>清除所有任务的上下文缓存</summary>
+            public static void ClearAllContextCache()
+            {
+                lock (_cacheLock)
+                {
+                    _contextCache.Clear();
+                    Log("已清除所有任务的上下文缓存。", 1);
+                }
+            }
+        }
+
+        #endregion
+
+        #region AI自动化管理 - 数据模型
+
+        /// <summary>聊天消息(用于上下文缓存)</summary>
+        internal class ChatMessage
+        {
+            public string Role { get; set; } = "user";
+            public string Content { get; set; } = "";
+        }
+
+        #endregion
     }
 }

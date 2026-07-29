@@ -16,5 +16,9 @@ namespace RtCli.Modules.Extension
         {
             // 插件bridge，支持插件的加载、卸载、更新、配置、管理等功能
         }
+        public static void API()
+        { 
+
+        }
     }
 }
