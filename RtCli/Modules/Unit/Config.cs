@@ -4,6 +4,7 @@ using System.Text;
 using RtCli.Modules.Extension;
 using RtCli.Modules.Function;
 using Spectre.Console;
+using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -72,6 +73,12 @@ namespace RtCli.Modules.Unit
 
         // 隐藏MC服务端控制台消息
         public List<string> HideConsoleServers { get; set; } = new List<string>();
+
+        // 控制台显示过滤正则表达式列表(匹配的内容将被移除，仅影响控制台显示，不影响日志文件记录和gRPC广播)
+        public List<string> ConsoleStripPatterns { get; set; } = new List<string>
+        {
+            @"^\[\d{2}:\d{2}:\d{2}\]\s*"
+        };
 
         public List<string> PopularVersions { get; set; } = new List<string>
         {
@@ -260,19 +267,7 @@ namespace RtCli.Modules.Unit
                 return;
             }
 
-            try
-            {
-                var yaml = File.ReadAllText(configPath);
-                var deserializer = new DeserializerBuilder()
-                    .WithNamingConvention(UnderscoredNamingConvention.Instance)
-                    .Build();
-                App = deserializer.Deserialize<AppConfig>(yaml) ?? new AppConfig();
-            }
-            catch
-            {
-                Output.Log("配置文件解析失败，使用默认配置", 2, "Config");
-                App = new AppConfig();
-            }
+            App = LoadYamlConfig<AppConfig>(configPath, new AppConfig(), "config.yml");
 
             // 确保当前服务端标识有效
             if (!App.ServerList.ContainsKey(App.CurrentServer))
@@ -350,6 +345,11 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#");
             sb.AppendLine("#  隐藏控制台消息:");
             sb.AppendLine("#    hide_console_servers - 隐藏指定服务端标识的控制台消息(为空则不隐藏)");
+            sb.AppendLine("#");
+            sb.AppendLine("#  控制台显示过滤:");
+            sb.AppendLine("#    console_strip_patterns - 正则表达式列表，匹配的内容将从控制台显示中移除");
+            sb.AppendLine("#                              (仅影响控制台显示，不影响日志文件记录和gRPC广播)");
+            sb.AppendLine("#                              默认移除MC日志行首时间戳，如 [12:34:56] ... 中的 [12:34:56] ");
             sb.AppendLine("#");
             sb.AppendLine("#  EULA设置:");
             sb.AppendLine("#    auto_agree_eula - 自动同意Minecraft EULA (true/false, 全局设置)");
@@ -561,6 +561,11 @@ namespace RtCli.Modules.Unit
                     sb.AppendLine();
                     sb.AppendLine("# 隐藏指定服务端标识的控制台消息(为空则不隐藏)");
                 }
+                else if (trimmedLine.StartsWith("console_strip_patterns:"))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("# 控制台显示过滤正则表达式列表(匹配的内容将从控制台显示中移除，不影响日志和广播)");
+                }
                 else if (trimmedLine.StartsWith("popular_versions:"))
                 {
                     sb.AppendLine();
@@ -614,6 +619,72 @@ namespace RtCli.Modules.Unit
             string configPath = Path.Combine(absoluteDataPath, ConfigFileName);
             SaveConfig(configPath);
             Output.Log("配置文件已保存。", 1, "Config");
+        }
+
+        /// <summary>
+        /// 通用YAML配置文件加载，解析失败时输出详细错误位置(行号/列号)并自动备份错误文件
+        /// </summary>
+        /// <typeparam name="T">配置类型</typeparam>
+        /// <param name="filePath">配置文件完整路径</param>
+        /// <param name="defaultValue">解析失败时的默认值</param>
+        /// <param name="configName">配置名称(用于日志显示)</param>
+        /// <returns>解析结果或默认值</returns>
+        public static T LoadYamlConfig<T>(string filePath, T defaultValue, string configName) where T : new()
+        {
+            if (!File.Exists(filePath))
+                return defaultValue;
+
+            try
+            {
+                var yaml = File.ReadAllText(filePath);
+                var deserializer = new DeserializerBuilder()
+                    .WithNamingConvention(UnderscoredNamingConvention.Instance)
+                    .Build();
+                return deserializer.Deserialize<T>(yaml) ?? defaultValue;
+            }
+            catch (YamlException yex)
+            {
+                string location = $"行 {yex.Start.Line}, 列 {yex.Start.Column}";
+                string detail = yex.InnerException?.Message ?? yex.Message;
+                Output.Log($"{configName} 解析失败 [{location}]: {detail}", 3, "Config");
+                Output.Log($"错误文件已备份，请修正后使用 .reload 重载", 2, "Config");
+                BackupConfigFile(filePath);
+                return defaultValue;
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"{configName} 解析失败: {ex.Message}", 3, "Config");
+                Output.Log($"错误文件已备份，请修正后使用 .reload 重载", 2, "Config");
+                BackupConfigFile(filePath);
+                return defaultValue;
+            }
+        }
+
+        /// <summary>
+        /// 备份配置文件(格式: 原文件名.back (n)，自动递增编号避免覆盖)
+        /// </summary>
+        public static void BackupConfigFile(string filePath)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(filePath) ?? "";
+                string fileName = Path.GetFileName(filePath);
+
+                int n = 1;
+                string backupPath;
+                do
+                {
+                    backupPath = Path.Combine(dir, $"{fileName}.back ({n})");
+                    n++;
+                } while (File.Exists(backupPath));
+
+                File.Copy(filePath, backupPath, true);
+                Output.Log($"已备份错误配置文件: {backupPath}", 2, "Config");
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"备份配置文件失败: {ex.Message}", 3, "Config");
+            }
         }
 
         public static void ClearContent()

@@ -51,14 +51,19 @@ namespace RtCli.Modules
                 string? currentProcessPath = Environment.ProcessPath;
                 Program.ReleaseMutex();
                 Console.Clear();
-                if (currentProcessPath != null)
-                {
-                    Process.Start(currentProcessPath);
-                }
-                else
+                if (currentProcessPath == null)
                 {
                     Output.Log("进程路径环境异常无法重新加载！", 3, "Reload");
+                    return;
                 }
+
+                Process.Start(currentProcessPath);
+
+                // 启动新进程后必须立即终止当前(旧)进程，否则两个进程会同时争抢同一控制台输入
+                // 导致：命令输入异常、TAB补全异常、关闭时出现多次关闭消息
+                // 置 _isEnd 防止 Environment.Exit 触发的 ProcessExit 事件再次执行 End() 重复清理
+                _isEnd = true;
+                Environment.Exit(0);
             }
             catch (Exception)
             {

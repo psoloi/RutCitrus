@@ -33,7 +33,28 @@ namespace RtCli.Modules.Unit
             (".server add", "添加服务端"),
             (".server del", "删除服务端"),
             (".server status", "查看MC服务端状态"),
-            (".auto", "查看计划任务"),
+            (".server start", "启动MC服务端"),
+            (".server stop", "停止MC服务端"),
+            (".server detach", "断开MC服务端连接(OnlyRcon)"),
+            (".ai", "AI自动化管理"),
+            (".ai start", "启动AI自动化管理"),
+            (".ai stop", "停止AI自动化管理"),
+            (".ai list", "列出AI任务及运行状态"),
+            (".ai reload", "重载AI配置并重启任务"),
+            (".ai run", "手动触发指定AI任务"),
+            (".ai clear", "清除AI任务上下文缓存"),
+            (".auto", "计划任务调度器"),
+            (".auto start", "启动调度器"),
+            (".auto stop", "停止调度器"),
+            (".auto list", "列出所有计划任务"),
+            (".auto on", "启用指定计划任务"),
+            (".auto off", "禁用指定计划任务"),
+            (".fx", "错误分析/诊断/过滤工具"),
+            (".fx get", "获取并分析MC服务端错误日志"),
+            (".fx list", "列出错误分析结果"),
+            (".fx del", "删除所有错误分析结果"),
+            (".fx filter config", "备份/对照/还原配置文件"),
+            (".fx filter plugin", "列出/启用/禁用插件"),
             (".help", "查看功能命令帮助"),
         };
 
@@ -289,6 +310,261 @@ namespace RtCli.Modules.Unit
                         }
                     }
 
+                    // .server start/stop/detach - MC服务端生命周期
+                    if (cmd == ".server start")
+                    {
+                        if (Analyzer.NeedsRunServer)
+                        {
+                            Analyzer.StartServer();
+                            return (true, "MC服务端启动命令已发送");
+                        }
+                        return (false, "OnlyRcon模式下不支持 .server start，请使用 .server get + .server connect 连接");
+                    }
+
+                    if (cmd == ".server stop")
+                    {
+                        if (Analyzer.NeedsRunServer)
+                        {
+                            Analyzer.StopServer();
+                            return (true, "MC服务端停止命令已发送");
+                        }
+                        return (false, "OnlyRcon模式下不支持 .server stop");
+                    }
+
+                    if (cmd == ".server detach")
+                    {
+                        if (!Analyzer.NeedsRunServer)
+                        {
+                            Analyzer.Detach();
+                            return (true, "已断开与MC服务端的连接");
+                        }
+                        return (false, "当前模式下不支持 .server detach，请使用 .server stop 停止服务端");
+                    }
+
+                    // .ai 系列命令 - AI自动化管理
+                    if (cmd == ".ai")
+                    {
+                        const string msg = ".ai 命令: start/stop/list/reload/run <任务名>/clear [任务名|all]";
+                        Output.Log(msg, 1, "Backend");
+                        return (true, msg);
+                    }
+
+                    if (cmd == ".ai start")
+                    {
+                        Intelligence.AiAutoRunner.Start();
+                        bool running = Intelligence.AiAutoRunner.IsRunning;
+                        return (running, running ? "AI自动化管理已启动" : "AI自动化管理启动失败，请查看日志");
+                    }
+
+                    if (cmd == ".ai stop")
+                    {
+                        Intelligence.AiAutoRunner.Stop();
+                        return (true, "AI自动化管理已停止");
+                    }
+
+                    if (cmd == ".ai list")
+                    {
+                        Intelligence.AiAutoRunner.ListTasks();
+                        var sb = new StringBuilder();
+                        sb.AppendLine($"AI自动化管理: {(Intelligence.AiAutoRunner.IsRunning ? "运行中" : "已停止")}");
+                        var aiConfig = ContentManager.Ai?.ServerAutoAi;
+                        if (aiConfig?.Tasks != null && aiConfig.Tasks.Count > 0)
+                        {
+                            foreach (var kv in aiConfig.Tasks)
+                            {
+                                string st = kv.Value.Enabled ? "启用" : "禁用";
+                                int cnt = Intelligence.AiAutoRunner.RunCount.TryGetValue(kv.Key, out var c) ? c : 0;
+                                string last = Intelligence.AiAutoRunner.LastRunTime.TryGetValue(kv.Key, out var t) ? t.ToString("MM-dd HH:mm") : "-";
+                                sb.AppendLine($"  {kv.Key} - {kv.Value.Name} [{st}] 触发:{kv.Value.Trigger} 间隔:{kv.Value.Interval} 已执行:{cnt} 最后:{last}");
+                            }
+                        }
+                        else
+                        {
+                            sb.AppendLine("未配置任何AI任务");
+                        }
+                        BroadcastToPanel(sb.ToString());
+                        return (true, "AI任务列表已输出");
+                    }
+
+                    if (cmd == ".ai reload")
+                    {
+                        Intelligence.AiAutoRunner.Reload();
+                        return (true, "AI自动化管理已重载");
+                    }
+
+                    if (cmd.StartsWith(".ai run "))
+                    {
+                        var taskName = cmd[".ai run ".Length..].Trim();
+                        if (string.IsNullOrWhiteSpace(taskName))
+                            return (false, "用法: .ai run <任务名>");
+                        bool ok = Intelligence.AiAutoRunner.TriggerTaskAsync(taskName).GetAwaiter().GetResult();
+                        return (ok, ok ? $"已手动触发任务: {taskName}" : $"触发任务失败: {taskName}（任务不存在或已禁用）");
+                    }
+
+                    if (cmd == ".ai run")
+                    {
+                        return (true, "用法: .ai run <任务名>");
+                    }
+
+                    if (cmd.StartsWith(".ai clear "))
+                    {
+                        var taskName = cmd[".ai clear ".Length..].Trim();
+                        if (string.IsNullOrWhiteSpace(taskName) || taskName.Equals("all", StringComparison.OrdinalIgnoreCase))
+                            Intelligence.AiAutoRunner.ClearAllContextCache();
+                        else
+                            Intelligence.AiAutoRunner.ClearContextCache(taskName);
+                        return (true, $"已清除任务上下文缓存: {taskName}");
+                    }
+
+                    if (cmd == ".ai clear")
+                    {
+                        Intelligence.AiAutoRunner.ClearAllContextCache();
+                        return (true, "已清除所有AI任务上下文缓存");
+                    }
+
+                    // .auto 系列命令 - 计划任务调度器
+                    if (cmd == ".auto")
+                    {
+                        const string msg = ".auto 命令: on/off <任务名>/list/start/stop";
+                        Output.Log(msg, 1, "Backend");
+                        return (true, msg);
+                    }
+
+                    if (cmd == ".auto start")
+                    {
+                        Scheduler.Start();
+                        return (Scheduler.IsRunning, Scheduler.IsRunning ? "调度器已启动" : "调度器启动失败");
+                    }
+
+                    if (cmd == ".auto stop")
+                    {
+                        Scheduler.Stop();
+                        return (true, "调度器已停止");
+                    }
+
+                    if (cmd == ".auto list")
+                    {
+                        Scheduler.ListTasks();
+                        var sb = new StringBuilder();
+                        sb.AppendLine($"调度器: {(Scheduler.IsRunning ? "运行中" : "已停止")}");
+                        if (Scheduler.Settings.Tasks.Count > 0)
+                        {
+                            foreach (var kvp in Scheduler.Settings.Tasks)
+                            {
+                                string status = kvp.Value.Enabled ? "启用" : "禁用";
+                                if (kvp.Value.ServerKeys.Count > 0 && !kvp.Value.ServerKeys.Contains(Config.App.CurrentServer))
+                                    status = "不适用";
+                                if (!string.IsNullOrEmpty(kvp.Value.Rules.ExpireAt) &&
+                                    DateTime.TryParse(kvp.Value.Rules.ExpireAt, out var exp) && DateTime.Now > exp)
+                                    status = "已过期";
+                                string queue = kvp.Value.Rules.Queue ?? "Fast";
+                                sb.AppendLine($"  {kvp.Key} [{status}] 触发:{kvp.Value.Trigger} 执行:{kvp.Value.Execute} 队列:{queue}");
+                            }
+                        }
+                        else
+                        {
+                            sb.AppendLine("未配置任何计划任务");
+                        }
+                        BroadcastToPanel(sb.ToString());
+                        return (true, "计划任务列表已输出");
+                    }
+
+                    if (cmd.StartsWith(".auto on "))
+                    {
+                        var taskName = cmd[".auto on ".Length..].Trim();
+                        Scheduler.SetTaskEnabled(taskName, true);
+                        return (true, $"已启用任务: {taskName}");
+                    }
+
+                    if (cmd == ".auto on")
+                    {
+                        return (true, "用法: .auto on <任务名>");
+                    }
+
+                    if (cmd.StartsWith(".auto off "))
+                    {
+                        var taskName = cmd[".auto off ".Length..].Trim();
+                        Scheduler.SetTaskEnabled(taskName, false);
+                        return (true, $"已禁用任务: {taskName}");
+                    }
+
+                    if (cmd == ".auto off")
+                    {
+                        return (true, "用法: .auto off <任务名>");
+                    }
+
+                    // .fx 系列命令 - 错误分析/客户端诊断/过滤工具
+                    if (cmd == ".fx")
+                    {
+                        const string msg = ".fx 命令: get/list/del/filter config/filter plugin/clientguide/base/ai";
+                        Output.Log(msg, 1, "Backend");
+                        return (true, msg);
+                    }
+
+                    if (cmd == ".fx get")
+                    {
+                        Analyzer.AnalyzeErrors();
+                        return (true, "错误日志分析已完成，详情见日志");
+                    }
+
+                    if (cmd.StartsWith(".fx get "))
+                    {
+                        var path = cmd[".fx get ".Length..].Trim().Trim('"');
+                        Analyzer.AnalyzeErrors(path);
+                        return (true, $"已分析外部日志: {path}");
+                    }
+
+                    if (cmd == ".fx list")
+                    {
+                        Analyzer.ListErrors(null);
+                        var errors = ContentManager.LoadErrorLog();
+                        var sb = new StringBuilder();
+                        sb.AppendLine($"共 {errors.Count} 条错误分析结果");
+                        foreach (var kv in errors.OrderBy(kv => kv.Key))
+                        {
+                            string summary = (kv.Value.Split('\n').FirstOrDefault() ?? "");
+                            if (summary.Length > 80) summary = summary.Substring(0, 77) + "...";
+                            sb.AppendLine($"  [{kv.Key}] {summary}");
+                        }
+                        BroadcastToPanel(sb.ToString());
+                        return (true, "错误分析结果列表已输出");
+                    }
+
+                    if (cmd.StartsWith(".fx list "))
+                    {
+                        var arg = cmd[".fx list ".Length..].Trim();
+                        if (int.TryParse(arg, out int idx))
+                        {
+                            Analyzer.ListErrors(idx);
+                            return (true, $"已查看第 {idx} 条分析结果");
+                        }
+                        return (false, $"无效的参数: {arg}，用法: .fx list <n>");
+                    }
+
+                    if (cmd == ".fx del")
+                    {
+                        Analyzer.DeleteErrors();
+                        return (true, "已删除所有错误分析结果");
+                    }
+
+                    if (cmd == ".fx filter")
+                    {
+                        Analyzer.FilterInfo();
+                        return (true, "过滤工具说明已输出");
+                    }
+
+                    if (cmd == ".fx filter config")
+                    {
+                        Analyzer.FilterConfig(null);
+                        return (true, "配置文件备份/对照已执行，详情见日志");
+                    }
+
+                    if (cmd == ".fx filter plugin")
+                    {
+                        Analyzer.FilterPlugin(null);
+                        return (true, "插件列表已输出，详情见日志");
+                    }
+
                     // MC 命令转发
                     if (cmd.StartsWith("/"))
                     {
@@ -400,12 +676,49 @@ namespace RtCli.Modules.Unit
         /// </summary>
         public static (bool Success, string Content, string Message) GetConfigContent()
         {
+            return GetConfigFileContent("config.yml");
+        }
+
+        /// <summary>
+        /// 保存 config.yml 文件内容并热重载。
+        /// </summary>
+        public static (bool Success, string Message) SaveConfigContent(string content)
+        {
+            return SaveConfigFileContent("config.yml", content);
+        }
+
+        // 可被面板编辑的配置文件白名单(文件名 -> 显示信息)
+        private static readonly (string FileName, string DisplayName, string Description)[] _editableConfigFiles =
+        {
+            ("config.yml", "主配置", "RtCli 主配置文件：环境检查、服务端列表、备份、玩家事件等"),
+            ("regex_settings.yml", "正则配置", "正则表达式配置：错误匹配、客户端引导、自定义条目"),
+            ("ai_settings.yml", "AI配置", "AI 自动化管理配置：模型、提示词、自动监测任务"),
+            ("scheduler_settings.yml", "调度器配置", "计划任务调度器配置：定时与事件触发的自动化任务"),
+            ("scripts_settings.yml", "脚本配置", "脚本引擎配置：C#/Python 脚本项与触发事件"),
+        };
+
+        /// <summary>
+        /// 列出可编辑的配置文件清单。
+        /// </summary>
+        public static IEnumerable<(string FileName, string DisplayName, string Description)> ListConfigFiles()
+        {
+            return _editableConfigFiles;
+        }
+
+        /// <summary>
+        /// 读取指定配置文件内容(白名单限制)。
+        /// </summary>
+        public static (bool Success, string Content, string Message) GetConfigFileContent(string fileName)
+        {
             try
             {
-                var configPath = Path.Combine(Config.DataPath, "config.yml");
-                if (!File.Exists(configPath))
-                    return (false, "", "配置文件不存在");
-                var content = File.ReadAllText(configPath);
+                if (string.IsNullOrWhiteSpace(fileName) || !_editableConfigFiles.Any(f => f.FileName == fileName))
+                    return (false, "", $"不支持的配置文件: {fileName}");
+
+                var filePath = Path.Combine(Config.DataPath, fileName);
+                if (!File.Exists(filePath))
+                    return (false, "", $"配置文件不存在: {fileName}");
+                var content = File.ReadAllText(filePath);
                 return (true, content, "读取成功");
             }
             catch (Exception ex)
@@ -415,33 +728,387 @@ namespace RtCli.Modules.Unit
         }
 
         /// <summary>
-        /// 保存 config.yml 文件内容并热重载。
+        /// 保存指定配置文件内容并热重载所有配置。
         /// </summary>
-        public static (bool Success, string Message) SaveConfigContent(string content)
+        public static (bool Success, string Message) SaveConfigFileContent(string fileName, string content)
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(fileName) || !_editableConfigFiles.Any(f => f.FileName == fileName))
+                    return (false, $"不支持的配置文件: {fileName}");
                 if (string.IsNullOrEmpty(content))
                     return (false, "配置内容不能为空");
 
-                var configPath = Path.Combine(Config.DataPath, "config.yml");
+                var filePath = Path.Combine(Config.DataPath, fileName);
 
                 // 备份当前配置
-                if (File.Exists(configPath))
+                if (File.Exists(filePath))
                 {
-                    var backupPath = configPath + ".bak";
-                    File.Copy(configPath, backupPath, true);
+                    var backupPath = filePath + ".bak";
+                    File.Copy(filePath, backupPath, true);
                 }
 
-                File.WriteAllText(configPath, content);
-                Output.Log("配置文件已由面板保存，正在热重载...", 1, "Backend");
+                File.WriteAllText(filePath, content);
+                Output.Log($"配置文件 [{Markup.Escape(fileName)}] 已由面板保存，正在热重载...", 1, "Backend");
 
                 Config.ReloadAll();
-                return (true, "配置文件已保存并热重载");
+                return (true, $"{fileName} 已保存并热重载");
             }
             catch (Exception ex)
             {
                 Output.Log($"保存配置失败: [red]{Markup.Escape(ex.Message)}[/]", 3, "Backend");
+                return (false, $"保存失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 采集系统状态：主机 CPU/内存 + 各 MC 服务端 TPS、玩家数、进程 CPU/内存。
+        /// TPS 与玩家数通过向 MC 服务端发送 tps/list 命令获取(带 10 秒缓存节流)。
+        /// </summary>
+        public static (bool Success, string Message, double CpuUsage, double MemUsedMb, double MemTotalMb,
+                       List<(string Key, string Name, bool Running, double Tps, string TpsStatus, int Pid, double McMemMb,
+                             double Tps1m, double Tps5m, double Tps15m, double McCpuUsage, int PlayerCount, int PlayerMax)> Servers)
+            GetSystemStats()
+        {
+            try
+            {
+                double cpu = Intelligence.AiTools.GetCpuUsage();
+                var (usedMb, totalMb) = Intelligence.AiTools.GetMemoryUsage();
+
+                var servers = new List<(string, string, bool, double, string, int, double, double, double, double, double, int, int)>();
+                var currentKey = Config.App.CurrentServer;
+
+                foreach (var kvp in Config.App.ServerList)
+                {
+                    var key = kvp.Key;
+                    var entry = kvp.Value;
+                    var name = string.IsNullOrEmpty(entry.ServerName) ? key : entry.ServerName;
+                    bool isCurrent = key == currentKey;
+                    bool running = isCurrent && (Analyzer.IsRunModeActive || Analyzer.IsAttached);
+                    double tps = -1;
+                    string tpsStatus = "未运行";
+                    int pid = 0;
+                    double mcMemMb = 0;
+                    double tps1m = -1, tps5m = -1, tps15m = -1;
+                    double mcCpu = -1;
+                    int playerCount = -1, playerMax = -1;
+
+                    if (running)
+                    {
+                        tpsStatus = "运行中";
+
+                        // TPS：发送 tps 命令解析(带缓存节流)
+                        try
+                        {
+                            var (t1, t5, t15) = Analyzer.QueryTps(3000);
+                            tps1m = t1; tps5m = t5; tps15m = t15;
+                            tps = t1; // 兼容字段
+                            if (t1 >= 0)
+                                tpsStatus = $"{t1:0.0}" + (t5 >= 0 ? $" / {t5:0.0} / {t15:0.0}" : "");
+                            else
+                                tpsStatus = "运行中(TPS未获取,需Spark等插件)";
+                        }
+                        catch { }
+
+                        // 玩家数：发送 list 命令解析(带缓存节流)
+                        try
+                        {
+                            var (count, max) = Analyzer.QueryPlayerCount(3000);
+                            playerCount = count;
+                            playerMax = max;
+                        }
+                        catch { }
+
+                        // MC 进程 CPU 与内存
+                        try
+                        {
+                            var proc = Analyzer.GetServerProcess();
+                            if (proc != null && !proc.HasExited)
+                            {
+                                pid = proc.Id;
+                                mcMemMb = proc.WorkingSet64 / (1024.0 * 1024.0);
+                            }
+                            mcCpu = Analyzer.GetMcCpuUsage();
+                        }
+                        catch { }
+                    }
+
+                    servers.Add((key, name, running, tps, tpsStatus, pid, mcMemMb,
+                                 tps1m, tps5m, tps15m, mcCpu, playerCount, playerMax));
+                }
+
+                return (true, "OK", cpu, usedMb, totalMb, servers);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"采集失败: {ex.Message}", -1, -1, -1,
+                    new List<(string, string, bool, double, string, int, double, double, double, double, double, int, int)>());
+            }
+        }
+
+        // MC 服务端已知配置文件白名单(文件名, 显示名, 描述, 分类, 是否可写)
+        private static readonly (string FileName, string DisplayName, string Description, string Category, bool Editable)[] _knownServerFiles =
+        {
+            ("server.properties", "服务端属性", "MC 服务端核心配置：端口、模式、世界、白名单等", "properties", true),
+            ("ops.json", "管理员列表", "OP 玩家列表及权限等级", "json", true),
+            ("whitelist.json", "白名单", "白名单玩家列表(需 white-list=true 才生效)", "whitelist", true),
+            ("banned-players.json", "封禁玩家", "被封禁的玩家列表", "ban", true),
+            ("banned-ips.json", "封禁IP", "被封禁的 IP 地址列表", "ban", true),
+            ("eula.txt", "EULA协议", "Mojang EULA 同意标志(eula=true 才能启动)", "text", true),
+            ("commands.yml", "命令配置", "Bukkit/Spigot 命令相关配置", "yaml", true),
+            ("bukkit.yml", "Bukkit配置", "Bukkit 服务端配置", "yaml", true),
+            ("spigot.yml", "Spigot配置", "Spigot/Paper 服务端配置", "yaml", true),
+            ("paper-global.yml", "Paper全局配置", "Paper 全局配置(1.19+，旧版在根目录)", "yaml", true),
+            ("paper-world-defaults.yml", "Paper世界默认", "Paper 世界默认配置(1.19+，旧版在根目录)", "yaml", true),
+            ("purpur.yml", "Purpur配置", "Purpur 服务端配置", "yaml", true),
+            ("pufferfish.yml", "Pufferfish配置", "Pufferfish 服务端配置", "yaml", true),
+            ("usercache.json", "用户缓存", "玩家用户名缓存(可清理,运行时自动重建)", "json", true),
+            ("server-icon.png", "服务器图标", "服务器图标 PNG(64x64,二进制)", "binary", false),
+            // config/ 目录下的配置文件(1.20+ Paper 系服务端)
+            ("config/paper-global.yml", "Paper全局配置", "Paper 全局配置(config 目录)", "yaml", true),
+            ("config/paper-world-defaults.yml", "Paper世界默认", "Paper 世界默认配置(config 目录)", "yaml", true),
+            ("config/gale-global.yml", "Gale全局配置", "Gale 服务端全局配置", "yaml", true),
+            ("config/gale-world-defaults.yml", "Gale世界默认", "Gale 服务端世界默认配置", "yaml", true),
+            ("config/leaf-global.yml", "Leaf全局配置", "Leaf 服务端全局配置", "yaml", true),
+            ("config/leaf-world-defaults.yml", "Leaf世界默认", "Leaf 服务端世界默认配置", "yaml", true),
+        };
+
+        /// <summary>允许编辑的文本配置文件扩展名</summary>
+        private static readonly string[] _editableExtensions = { ".yml", ".yaml", ".json", ".properties", ".txt", ".toml", ".log" };
+
+        /// <summary>扫描时应跳过的目录名(世界数据、缓存等)</summary>
+        private static readonly string[] _skipDirs = { "world", "world_nether", "world_the_end", "region", "playerdata", "stats", "data", "entities", "poi", "cache", ".cache", "session.lock", "backups", "logs", ".mixin", "libraries", "versions", "assets", "downloads" };
+
+        /// <summary>判断文件名是否允许编辑(已知白名单 或服务端目录内的文本配置文件)。</summary>
+        private static bool IsAllowedServerFile(string fileName, out string category, out bool editable, out string displayName, out string description)
+        {
+            // 检查白名单
+            var meta = _knownServerFiles.FirstOrDefault(f => f.FileName == fileName);
+            if (meta != default)
+            {
+                category = meta.Category;
+                editable = meta.Editable;
+                displayName = meta.DisplayName;
+                description = meta.Description;
+                return true;
+            }
+            // 允许任意文本配置文件
+            var ext = Path.GetExtension(fileName).ToLowerInvariant();
+            if (_editableExtensions.Contains(ext))
+            {
+                category = ext == ".json" ? "json" : (ext == ".properties" ? "properties" : (ext == ".toml" ? "toml" : (ext == ".log" ? "log" : "yaml")));
+                editable = true;
+                displayName = Path.GetFileName(fileName);
+                description = "";
+                return true;
+            }
+            category = "";
+            editable = false;
+            displayName = "";
+            description = "";
+            return false;
+        }
+
+        /// <summary>递归扫描目录下的文本配置文件并添加到列表。</summary>
+        /// <param name="workPath">服务端工作目录</param>
+        /// <param name="subDir">子目录名(相对路径)</param>
+        /// <param name="files">文件列表</param>
+        /// <param name="seen">已见文件集合(防重复)</param>
+        /// <param name="maxDepth">最大递归深度</param>
+        private static void ScanDirectory(string workPath, string subDir,
+            List<(string FileName, string DisplayName, string Description, string Category, bool Editable, long SizeBytes)> files,
+            HashSet<string> seen, int maxDepth)
+        {
+            var fullDir = Path.Combine(workPath, subDir);
+            if (!Directory.Exists(fullDir)) return;
+
+            void Scan(string dirPath, string relPrefix, int depth)
+            {
+                if (depth > maxDepth) return;
+                try
+                {
+                    foreach (var file in Directory.GetFiles(dirPath, "*", SearchOption.TopDirectoryOnly))
+                    {
+                        var relPath = relPrefix + Path.GetFileName(file);
+                        if (seen.Contains(relPath)) continue;
+                        var ext = Path.GetExtension(file).ToLowerInvariant();
+                        if (!_editableExtensions.Contains(ext)) continue;
+                        var info = new FileInfo(file);
+                        var cat = ext == ".json" ? "json" : (ext == ".properties" ? "properties" : (ext == ".toml" ? "toml" : (ext == ".log" ? "log" : "yaml")));
+                        files.Add((relPath, relPath, "", cat, true, info.Length));
+                        seen.Add(relPath);
+                    }
+                }
+                catch { }
+
+                if (depth < maxDepth)
+                {
+                    try
+                    {
+                        foreach (var sub in Directory.GetDirectories(dirPath, "*", SearchOption.TopDirectoryOnly))
+                        {
+                            var subName = Path.GetFileName(sub);
+                            if (_skipDirs.Contains(subName, StringComparer.OrdinalIgnoreCase)) continue;
+                            Scan(sub, relPrefix + subName + "/", depth + 1);
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            Scan(fullDir, subDir + "/", 1);
+        }
+
+        /// <summary>尝试获取指定 serverKey 的 WorkPath，失败返回 null。</summary>
+        private static string? ResolveWorkPath(string serverKey)
+        {
+            var entry = string.IsNullOrEmpty(serverKey)
+                ? Config.CurrentServer
+                : (Config.App.ServerList.TryGetValue(serverKey, out var e) ? e : null);
+            if (entry == null || string.IsNullOrWhiteSpace(entry.WorkPath)) return null;
+            if (!Directory.Exists(entry.WorkPath)) return null;
+            return Path.GetFullPath(entry.WorkPath);
+        }
+
+        /// <summary>
+        /// 列出指定 MC 服务端工作目录下已知的配置文件(只列出实际存在的)。
+        /// </summary>
+        public static (bool Success, string Message, string ServerKey, string ServerName, string WorkPath,
+                       List<(string FileName, string DisplayName, string Description, string Category, bool Editable, long SizeBytes)> Files)
+            ListServerFiles(string serverKey)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null)
+                {
+                    var name = string.IsNullOrEmpty(serverKey) ? Config.CurrentServer.ServerName : serverKey;
+                    return (false, $"服务端 {name} 的工作目录未配置或不存在", serverKey ?? "", name, "", new List<(string, string, string, string, bool, long)>());
+                }
+
+                var key = string.IsNullOrEmpty(serverKey) ? Config.App.CurrentServer : serverKey;
+                var entry = Config.App.ServerList.TryGetValue(key, out var e) ? e : Config.CurrentServer;
+                var displayName = string.IsNullOrEmpty(entry.ServerName) ? key : entry.ServerName;
+
+                var files = new List<(string, string, string, string, bool, long)>();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                // 1. 扫描已知白名单文件(根目录 + config/ 目录)
+                foreach (var (fileName, fileDisplay, desc, category, editable) in _knownServerFiles)
+                {
+                    var fullPath = Path.Combine(workPath, fileName);
+                    if (File.Exists(fullPath))
+                    {
+                        var info = new FileInfo(fullPath);
+                        files.Add((fileName, fileDisplay, desc, category, editable, info.Length));
+                        seen.Add(fileName);
+                    }
+                }
+
+                // 2. 动态扫描 config/ 目录下额外的配置文件
+                ScanDirectory(workPath, "config", files, seen, 1);
+
+                // 3. 扫描 plugins/ 目录(递归，插件配置)
+                ScanDirectory(workPath, "plugins", files, seen, 3);
+
+                // 4. 扫描 mods/ 目录下的配置文件(非 .jar)
+                ScanDirectory(workPath, "mods", files, seen, 1);
+
+                // 5. 扫描根目录下剩余的文本配置文件
+                foreach (var file in Directory.GetFiles(workPath, "*", SearchOption.TopDirectoryOnly))
+                {
+                    var relPath = Path.GetFileName(file);
+                    if (seen.Contains(relPath)) continue;
+                    var ext = Path.GetExtension(file).ToLowerInvariant();
+                    if (!_editableExtensions.Contains(ext)) continue;
+                    var info = new FileInfo(file);
+                    var cat = ext == ".json" ? "json" : (ext == ".properties" ? "properties" : (ext == ".toml" ? "toml" : (ext == ".log" ? "log" : "yaml")));
+                    files.Add((relPath, relPath, "", cat, true, info.Length));
+                    seen.Add(relPath);
+                }
+
+                // 6. 扫描其他子目录(排除世界数据等)
+                foreach (var dir in Directory.GetDirectories(workPath, "*", SearchOption.TopDirectoryOnly))
+                {
+                    var dirName = Path.GetFileName(dir);
+                    if (_skipDirs.Contains(dirName, StringComparer.OrdinalIgnoreCase)) continue;
+                    if (dirName.Equals("config", StringComparison.OrdinalIgnoreCase) ||
+                        dirName.Equals("plugins", StringComparison.OrdinalIgnoreCase) ||
+                        dirName.Equals("mods", StringComparison.OrdinalIgnoreCase)) continue;
+                    ScanDirectory(workPath, dirName, files, seen, 2);
+                }
+
+                return (true, "OK", key, displayName, workPath, files);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"列文件失败: {ex.Message}", "", "", "", new List<(string, string, string, string, bool, long)>());
+            }
+        }
+
+        /// <summary>
+        /// 读取 MC 服务端的配置文件内容。
+        /// </summary>
+        public static (bool Success, string Message, string Content, string Category) GetServerFile(string serverKey, string fileName)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null) return (false, "服务端工作目录未配置或不存在", "", "");
+
+                if (string.IsNullOrWhiteSpace(fileName) || !IsAllowedServerFile(fileName, out var category, out var editable, out _, out _))
+                    return (false, $"不支持的文件: {fileName}", "", "");
+                if (category == "binary")
+                    return (false, $"{fileName} 是二进制文件，无法在面板编辑", "", category);
+
+                var fullPath = Path.GetFullPath(Path.Combine(workPath, fileName));
+                if (!fullPath.StartsWith(workPath, StringComparison.OrdinalIgnoreCase))
+                    return (false, "非法路径", "", category);
+                if (!File.Exists(fullPath))
+                    return (false, $"文件不存在: {fileName}", "", category);
+
+                var content = File.ReadAllText(fullPath);
+                return (true, "OK", content, category);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"读取失败: {ex.Message}", "", "");
+            }
+        }
+
+        /// <summary>
+        /// 保存 MC 服务端的配置文件内容(自动备份原文件)。不热重载 - MC 配置通常需要服务端重启。
+        /// </summary>
+        public static (bool Success, string Message) SaveServerFile(string serverKey, string fileName, string content)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null) return (false, "服务端工作目录未配置或不存在");
+
+                if (string.IsNullOrWhiteSpace(fileName) || !IsAllowedServerFile(fileName, out var category, out var editable, out _, out _))
+                    return (false, $"不支持的文件: {fileName}");
+                if (!editable || category == "binary")
+                    return (false, $"{fileName} 不可编辑");
+
+                var fullPath = Path.GetFullPath(Path.Combine(workPath, fileName));
+                if (!fullPath.StartsWith(workPath, StringComparison.OrdinalIgnoreCase))
+                    return (false, "非法路径");
+
+                // 备份
+                if (File.Exists(fullPath))
+                {
+                    var backupPath = fullPath + ".bak";
+                    File.Copy(fullPath, backupPath, true);
+                }
+
+                File.WriteAllText(fullPath, content);
+                Output.Log($"MC 配置文件 [{Markup.Escape(fileName)}] 已由面板保存", 1, "Backend");
+                return (true, $"{fileName} 已保存(部分配置需服务端重启生效)");
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"保存 MC 配置失败: [red]{Markup.Escape(ex.Message)}[/]", 3, "Backend");
                 return (false, $"保存失败: {ex.Message}");
             }
         }
@@ -461,5 +1128,238 @@ namespace RtCli.Modules.Unit
 
             return list.ToArray();
         }
+
+        // ===== 实例管理 API =====
+
+        /// <summary>获取所有实例和群组(合并 config.yml 与 server_data.json 数据)</summary>
+        public static (bool Success, string Message, List<InstanceListItem> Instances, List<GroupListItem> Groups)
+            GetInstanceList()
+        {
+            try
+            {
+                ServerDataManager.Load();
+                var data = ServerDataManager.Data;
+
+                var instances = new List<InstanceListItem>();
+                foreach (var inst in data.Instances)
+                {
+                    if (!Config.App.ServerList.TryGetValue(inst.Id, out var entry))
+                        continue;
+
+                    var groupName = "";
+                    if (!string.IsNullOrEmpty(inst.GroupId))
+                    {
+                        var g = data.Groups.FirstOrDefault(x => x.Id == inst.GroupId);
+                        groupName = g?.Name ?? "";
+                    }
+
+                    instances.Add(new InstanceListItem
+                    {
+                        Id = inst.Id,
+                        Identifier = inst.Id,
+                        Name = entry.ServerName,
+                        GroupId = inst.GroupId,
+                        GroupName = groupName,
+                        IsRunning = inst.Id == Config.App.CurrentServer && (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached),
+                        Hidden = Config.App.HideConsoleServers.Contains(inst.Id),
+                        AutoRestart = entry.AutoRestart,
+                        WorkPath = entry.WorkPath,
+                        JavaPath = entry.JavaPath,
+                        RunFlags = entry.RunServerFlags,
+                        AnalyzerMode = entry.AnalyzerMode,
+                        CreatedAt = inst.CreatedAt,
+                        LastStartedAt = inst.LastStartedAt
+                    });
+                }
+
+                var groups = data.Groups.Select(g => new GroupListItem
+                {
+                    Id = g.Id,
+                    Name = g.Name,
+                    MemberIds = g.MemberIds.ToList(),
+                    CreatedAt = g.CreatedAt
+                }).ToList();
+
+                return (true, "OK", instances, groups);
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message, new List<InstanceListItem>(), new List<GroupListItem>());
+            }
+        }
+
+        /// <summary>批量操作实例(start/stop/restart), 直接调用 Analyzer</summary>
+        public static (bool Success, string Message) InstanceAction(string action, List<string> ids)
+        {
+            if (ids == null || ids.Count == 0)
+                return (false, "未选择任何实例");
+
+            var results = new List<string>();
+            var originalServer = Config.App.CurrentServer;
+
+            foreach (var id in ids)
+            {
+                if (!Config.App.ServerList.ContainsKey(id))
+                {
+                    results.Add($"[{id}] 不存在");
+                    continue;
+                }
+
+                try
+                {
+                    Config.SwitchServer(id);
+
+                    switch (action?.ToLowerInvariant())
+                    {
+                        case "start":
+                            if (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached)
+                            {
+                                results.Add($"[{id}] 已在运行中, 跳过");
+                            }
+                            else
+                            {
+                                Function.Analyzer.StartServer();
+                                // 更新最后启动时间
+                                var inst = ServerDataManager.Data.Instances.FirstOrDefault(i => i.Id == id);
+                                if (inst != null)
+                                {
+                                    inst.LastStartedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                                    ServerDataManager.Save();
+                                }
+                                results.Add($"[{id}] 启动指令已发送");
+                            }
+                            break;
+
+                        case "stop":
+                            if (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached)
+                            {
+                                Function.Analyzer.StopServer();
+                                results.Add($"[{id}] 已停止");
+                            }
+                            else
+                            {
+                                results.Add($"[{id}] 未运行, 跳过");
+                            }
+                            break;
+
+                        case "restart":
+                            if (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached)
+                            {
+                                Function.Analyzer.StopServer();
+                                System.Threading.Thread.Sleep(2000);
+                            }
+                            Function.Analyzer.StartServer();
+                            results.Add($"[{id}] 重启指令已发送");
+                            break;
+
+                        default:
+                            results.Add($"[{id}] 未知操作: {action}");
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    results.Add($"[{id}] 操作失败: {ex.Message}");
+                }
+            }
+
+            // 恢复原 current_server 选择
+            Config.SwitchServer(originalServer);
+
+            return (true, string.Join("\n", results));
+        }
+
+        /// <summary>群组批量操作</summary>
+        public static (bool Success, string Message) GroupAction(string action, string groupId)
+        {
+            var data = ServerDataManager.Data;
+            var group = data.Groups.FirstOrDefault(g => g.Id == groupId);
+            if (group == null)
+                return (false, $"群组 '{groupId}' 不存在");
+
+            return InstanceAction(action, group.MemberIds.ToList());
+        }
+
+        /// <summary>获取实例详情(含备份列表)</summary>
+        public static (bool Success, string Message, InstanceListItem? Instance, List<BackupItem> Backups)
+            GetInstanceDetail(string id)
+        {
+            try
+            {
+                if (!Config.App.ServerList.TryGetValue(id, out var entry))
+                    return (false, $"实例 '{id}' 不存在", null, new List<BackupItem>());
+
+                var data = ServerDataManager.Data;
+                var inst = data.Instances.FirstOrDefault(i => i.Id == id);
+                var groupName = "";
+                if (inst != null && !string.IsNullOrEmpty(inst.GroupId))
+                {
+                    var g = data.Groups.FirstOrDefault(x => x.Id == inst.GroupId);
+                    groupName = g?.Name ?? "";
+                }
+
+                var instance = new InstanceListItem
+                {
+                    Id = id,
+                    Identifier = id,
+                    Name = entry.ServerName,
+                    GroupId = inst?.GroupId ?? "",
+                    GroupName = groupName,
+                    IsRunning = id == Config.App.CurrentServer && (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached),
+                    Hidden = Config.App.HideConsoleServers.Contains(id),
+                    AutoRestart = entry.AutoRestart,
+                    WorkPath = entry.WorkPath,
+                    JavaPath = entry.JavaPath,
+                    RunFlags = entry.RunServerFlags,
+                    AnalyzerMode = entry.AnalyzerMode,
+                    CreatedAt = inst?.CreatedAt ?? "",
+                    LastStartedAt = inst?.LastStartedAt ?? ""
+                };
+
+                var backups = ServerDataManager.ListBackups(id)
+                    .Select(b => new BackupItem { FileName = b.FileName, CreatedAt = b.CreatedAt, SizeBytes = b.SizeBytes })
+                    .ToList();
+
+                return (true, "OK", instance, backups);
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message, null, new List<BackupItem>());
+            }
+        }
+    }
+
+    // ===== 实例管理数据传输类(供 Backend 与 Connector 共用) =====
+    public class InstanceListItem
+    {
+        public string Id { get; set; } = "";
+        public string Identifier { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string GroupId { get; set; } = "";
+        public string GroupName { get; set; } = "";
+        public bool IsRunning { get; set; }
+        public bool Hidden { get; set; }
+        public bool AutoRestart { get; set; }
+        public string WorkPath { get; set; } = "";
+        public string JavaPath { get; set; } = "";
+        public string RunFlags { get; set; } = "";
+        public string AnalyzerMode { get; set; } = "";
+        public string CreatedAt { get; set; } = "";
+        public string LastStartedAt { get; set; } = "";
+    }
+
+    public class GroupListItem
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public List<string> MemberIds { get; set; } = new List<string>();
+        public string CreatedAt { get; set; } = "";
+    }
+
+    public class BackupItem
+    {
+        public string FileName { get; set; } = "";
+        public string CreatedAt { get; set; } = "";
+        public long SizeBytes { get; set; }
     }
 }

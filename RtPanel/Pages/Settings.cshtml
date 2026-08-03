@@ -1,0 +1,285 @@
+@page
+@model RtPanel.Pages.SettingsModel
+@{
+    ViewData["Title"] = "设置";
+}
+
+<div class="card mt-4">
+    <div class="card-header">
+        <span class="text-sky fw-bold">面板设置</span>
+    </div>
+    <div class="card-body">
+        <!-- 外观设置 -->
+        <h6 class="text-info mb-3">外观</h6>
+        <div class="row g-3 mb-4">
+            <div class="col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>主题模式</strong>
+                                <small class="text-muted d-block">切换亮色/暗色主题</small>
+                            </div>
+                            <button class="btn btn-sm btn-outline-info" onclick="toggleTheme()" id="settingsThemeBtn">切换</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>主页图表</strong>
+                                <small class="text-muted d-block">CPU/内存实时折线图默认收起</small>
+                            </div>
+                            <select class="form-select form-select-sm" id="chartDefaultSetting" style="width:auto;" onchange="saveChartSetting()">
+                                <option value="collapsed">默认收起</option>
+                                <option value="expanded">默认展开</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 连接设置 -->
+        <h6 class="text-info mb-3">连接</h6>
+        <div class="row g-3 mb-4">
+            <div class="col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <strong>gRPC 连接状态</strong>
+                        <div class="mt-2">
+                            <span id="grpcStatus" class="badge bg-secondary">检测中...</span>
+                            <small class="text-muted ms-2" id="grpcInfo"></small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>自动重连</strong>
+                                <small class="text-muted d-block">断线后自动尝试重新连接</small>
+                            </div>
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="autoReconnect" checked onchange="saveConnSetting()" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 数据设置 -->
+        <h6 class="text-info mb-3">数据</h6>
+        <div class="row g-3 mb-4">
+            <div class="col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>刷新间隔</strong>
+                                <small class="text-muted d-block">主页数据采集频率</small>
+                            </div>
+                            <select class="form-select form-select-sm" id="refreshInterval" style="width:auto;" onchange="saveRefreshSetting()">
+                                <option value="3000">3 秒</option>
+                                <option value="5000" selected>5 秒</option>
+                                <option value="10000">10 秒</option>
+                                <option value="30000">30 秒</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>历史数据保留</strong>
+                                <small class="text-muted d-block">主页时间序列数据保留时长</small>
+                            </div>
+                            <select class="form-select form-select-sm" id="historyLimit" style="width:auto;" onchange="saveHistorySetting()">
+                                <option value="1">1 小时</option>
+                                <option value="2" selected>2 小时</option>
+                                <option value="3">3 小时</option>
+                                <option value="6">6 小时</option>
+                                <option value="12">12 小时</option>
+                                <option value="24">24 小时</option>
+                                <option value="48">48 小时</option>
+                                <option value="72">72 小时</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 关于 -->
+        <h6 class="text-info mb-3">关于</h6>
+        <div class="card stat-card">
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <strong class="text-sky">RtPanel</strong>
+                        <small class="text-muted d-block">管理面板</small>
+                    </div>
+                    <div class="col-md-3">
+                        <strong class="text-info">RtCli</strong>
+                        <small class="text-muted d-block">命令行工具</small>
+                    </div>
+                    <div class="col-md-3">
+                        <strong class="text-warning">RutCitrus</strong>
+                        <small class="text-muted d-block">项目名称</small>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-sm btn-outline-info" onclick="loadRtVersion()">检查版本</button>
+                        <small class="text-muted d-block mt-1" id="versionInfo"></small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    // 面板设置数据(从 panel_data.json 加载)
+    let panelData = {};
+
+    // 主题切换(同步到 localStorage + panel_data.json)
+    function toggleTheme() {
+        const current = document.documentElement.getAttribute('data-theme') || 'dark';
+        const next = current === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.theme = next;
+        panelData.theme = next;
+        updateThemeButton();
+        savePanelData();
+    }
+
+    function updateThemeButton() {
+        const current = document.documentElement.getAttribute('data-theme') || 'dark';
+        document.getElementById('settingsThemeBtn').textContent = current === 'light' ? '暗色' : '亮色';
+    }
+
+    // 从服务器加载 panel_data.json
+    async function loadPanelData() {
+        try {
+            const resp = await fetch('/api/system/paneldata').then(r => r.json());
+            if (resp.success && resp.jsonData) {
+                panelData = JSON.parse(resp.jsonData);
+            }
+        } catch { }
+        applySettings();
+    }
+
+    // 应用设置到 UI
+    function applySettings() {
+        // 主题
+        if (panelData.theme) {
+            document.documentElement.setAttribute('data-theme', panelData.theme);
+            localStorage.theme = panelData.theme;
+        }
+        updateThemeButton();
+
+        // 图表默认
+        document.getElementById('chartDefaultSetting').value = panelData.chartDefault || 'collapsed';
+
+        // 自动重连
+        document.getElementById('autoReconnect').checked = panelData.autoReconnect !== false;
+
+        // 刷新间隔
+        document.getElementById('refreshInterval').value = String(panelData.refreshInterval || 5000);
+
+        // 历史数据保留(小时)
+        document.getElementById('historyLimit').value = String(panelData.historyRetention || 2);
+    }
+
+    // 保存到 panel_data.json
+    async function savePanelData() {
+        try {
+            await fetch('/api/system/paneldata', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonData: JSON.stringify(panelData) })
+            });
+        } catch { }
+    }
+
+    function saveChartSetting() {
+        panelData.chartDefault = document.getElementById('chartDefaultSetting').value;
+        savePanelData();
+        showToast('已保存');
+    }
+    function saveConnSetting() {
+        panelData.autoReconnect = document.getElementById('autoReconnect').checked;
+        savePanelData();
+        showToast('已保存');
+    }
+    function saveRefreshSetting() {
+        panelData.refreshInterval = parseInt(document.getElementById('refreshInterval').value);
+        savePanelData();
+        showToast('已保存, 刷新页面后生效');
+    }
+    function saveHistorySetting() {
+        panelData.historyRetention = parseInt(document.getElementById('historyLimit').value);
+        savePanelData();
+        showToast('已保存, 刷新页面后生效');
+    }
+
+    function showToast(msg) {
+        if (window.RtPanel && RtPanel.showToast) { RtPanel.showToast(msg, 'success'); return; }
+        alert(msg);
+    }
+
+    // 检查连接状态
+    async function checkConn() {
+        try {
+            const res = await fetch('/api/auth/status');
+            if (res.ok) {
+                const data = await res.json();
+                const badge = document.getElementById('grpcStatus');
+                if (data.isRunning) {
+                    badge.className = 'badge bg-success';
+                    badge.textContent = '已连接';
+                } else {
+                    badge.className = 'badge bg-warning text-dark';
+                    badge.textContent = '未运行';
+                }
+                document.getElementById('grpcInfo').textContent = `${data.serverName || '-'} · ${data.extensionCount || 0} 扩展`;
+            } else {
+                document.getElementById('grpcStatus').className = 'badge bg-danger';
+                document.getElementById('grpcStatus').textContent = '未连接';
+            }
+        } catch {
+            document.getElementById('grpcStatus').className = 'badge bg-danger';
+            document.getElementById('grpcStatus').textContent = '未连接';
+        }
+    }
+
+    // 检查版本(通过 rt status API 获取)
+    async function loadRtVersion() {
+        document.getElementById('versionInfo').textContent = '获取中...';
+        try {
+            const resp = await fetch('/api/system/rtstatus').then(r => r.json());
+            if (resp.success) {
+                document.getElementById('versionInfo').textContent = `${resp.currentServerName || '-'} · ${resp.mcMode || '-'}`;
+            } else {
+                document.getElementById('versionInfo').textContent = '获取失败';
+            }
+        } catch {
+            document.getElementById('versionInfo').textContent = '请求失败';
+        }
+    }
+
+    // 初始化: 先用 localStorage 主题(避免闪烁), 再从 panel_data.json 同步
+    applySettings();
+    loadPanelData();
+    checkConn();
+</script>
+}

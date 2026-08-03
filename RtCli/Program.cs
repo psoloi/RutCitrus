@@ -17,14 +17,15 @@ namespace RtCli
 {
     internal class Program
     {
-        // 目前修改方向：MC控制台日志分析器完善，MC服务端信息获取
-        // AI扩展更多功能
+        // AI无人化优化
 
-        // 优化文字和命令整理及I18n
+        // 优化文字和整理及I18n
 
-        // BlueMap和Litebans支持、配置文件翻译、玩家监控、自动监控服务器性能并提供优化建议
+        // BlueMap和Litebans支持、容器、玩家监控与封禁等管理、群组服务器支持
+        // 日志分享上传 https://api.mclo.gs/ 需要加上小于10mb限制
 
-        // .ai
+        // 服务端信息获取（其他方式Rcon、Mangent、Motd）"四架构理功能"、玩家监控、插件管理、容器化部署、日志分析（对接RtCli的功能）
+        // 添加ban封禁面板IP
 
         // readme.md参考 github-readme-stats-master 并且中英文分开
 
@@ -1189,12 +1190,63 @@ namespace RtCli
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server status":
-                                if (Analyzer.NeedsRunServer)
-                                    Output.Log(Analyzer.IsRunModeActive ? "服务端运行中。" : "服务端未运行。", 1, ThisProgramName);
-                                else
-                                    Output.Log(Analyzer.IsAttached ? "已连接到 Minecraft 服务端。" : "未连接到 Minecraft 服务端。", 1, ThisProgramName);
-                                handled = true;
-                                break;
+                                {
+                                    var table = new Table();
+                                    table.Border(TableBorder.Rounded);
+                                    table.Title = new TableTitle("[cyan]MC服务端状态[/]");
+                                    table.AddColumn("");
+                                    table.AddColumn("标识");
+                                    table.AddColumn("名称");
+                                    table.AddColumn("模式");
+                                    table.AddColumn("运行状态");
+                                    table.AddColumn("自动重启");
+                                    table.AddColumn("自动备份");
+                                    table.AddColumn("工作目录");
+
+                                    string currentKey = Config.App.CurrentServer;
+                                    foreach (var kvp in Config.App.ServerList)
+                                    {
+                                        bool isCurrent = kvp.Key == currentKey;
+                                        string mark = isCurrent ? "[green]*[/]" : "";
+
+                                        string mode = Markup.Escape(kvp.Value.AnalyzerMode);
+
+                                        // 仅当前服务器显示实际运行状态
+                                        string runStatus;
+                                        if (isCurrent)
+                                        {
+                                            if (Analyzer.NeedsRunServer)
+                                                runStatus = Analyzer.IsRunModeActive ? "[green]运行中[/]" : "[red]未运行[/]";
+                                            else
+                                                runStatus = Analyzer.IsAttached ? "[green]已连接[/]" : "[red]未连接[/]";
+                                        }
+                                        else
+                                        {
+                                            runStatus = "[grey]-[/]";
+                                        }
+
+                                        string autoRestart = kvp.Value.AutoRestart
+                                            ? $"[green]是[/] ({kvp.Value.AutoRestartMaxRetries}次)"
+                                            : "[grey]否[/]";
+
+                                        bool inBackupList = Config.App.AutoBackupEnabled &&
+                                                            Config.App.AutoBackupServers.Contains(kvp.Key);
+                                        string autoBackup = Config.App.AutoBackupEnabled
+                                            ? (inBackupList ? "[green]已加入[/]" : "[grey]未加入[/]")
+                                            : "[grey]全局关闭[/]";
+
+                                        string workPath = string.IsNullOrWhiteSpace(kvp.Value.WorkPath)
+                                            ? "[yellow]未配置[/]"
+                                            : Markup.Escape(kvp.Value.WorkPath);
+
+                                        table.AddRow(mark, Markup.Escape(kvp.Key), Markup.Escape(kvp.Value.ServerName),
+                                                      mode, runStatus, autoRestart, autoBackup, workPath);
+                                    }
+
+                                    AnsiConsole.Write(table);
+                                    handled = true;
+                                    break;
+                                }
                             case var cmd when cmd == "ct":
                                 Output.Log("[cyan]ct[/] - 内嵌资源管理", 1, ThisProgramName);
                                 Output.Log("  [green]ct list[/] - 列出所有内嵌资源", 1, ThisProgramName);

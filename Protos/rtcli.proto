@@ -16,6 +16,36 @@ service RtCliService {
   rpc GetConfig (Empty) returns (ConfigResponse);
   rpc SaveConfig (SaveConfigRequest) returns (SaveConfigResponse);
   rpc GetCommandList (Empty) returns (CommandListResponse);
+  // 多配置文件支持：按文件名读写RtCli管理的YAML配置文件
+  rpc ListConfigFiles (Empty) returns (ConfigFileListResponse);
+  rpc GetConfigFile (ConfigFileRequest) returns (ConfigResponse);
+  rpc SaveConfigFile (SaveConfigFileRequest) returns (SaveConfigResponse);
+  // 系统状态：主机CPU/内存 + 各MC服务端TPS
+  rpc GetSystemStats (Empty) returns (SystemStatsResponse);
+  // MC 服务端配置文件管理(server.properties, ops.json 等)
+  rpc ListServerFiles (Empty) returns (ServerFileListResponse);
+  rpc GetServerFile (ServerFileRequest) returns (ServerFileResponse);
+  rpc SaveServerFile (SaveServerFileRequest) returns (SaveConfigResponse);
+  // 实例管理(实例 = server_list 扩展, server_data.json 存储元数据)
+  rpc GetInstanceList (Empty) returns (InstanceListResponse);
+  rpc CreateInstance (CreateInstanceRequest) returns (InstanceActionResponse);
+  rpc DeleteInstance (DeleteInstanceRequest) returns (InstanceActionResponse);
+  rpc UpdateInstance (UpdateInstanceRequest) returns (InstanceActionResponse);
+  rpc InstanceAction (InstanceActionRequest) returns (InstanceActionResponse);
+  rpc CreateGroup (CreateGroupRequest) returns (InstanceActionResponse);
+  rpc DeleteGroup (DeleteGroupRequest) returns (InstanceActionResponse);
+  rpc UpdateGroup (UpdateGroupRequest) returns (InstanceActionResponse);
+  rpc GroupAction (GroupActionRequest) returns (InstanceActionResponse);
+  rpc GetInstanceDetail (InstanceDetailRequest) returns (InstanceDetailResponse);
+  rpc CreateBackup (CreateBackupRequest) returns (InstanceActionResponse);
+  rpc RestoreBackup (RestoreBackupRequest) returns (InstanceActionResponse);
+  rpc DeleteBackup (DeleteBackupRequest) returns (InstanceActionResponse);
+  rpc GetTaskList (GetTaskListRequest) returns (TaskListResponse);
+  rpc GetRtStatus (Empty) returns (RtStatusResponse);
+  rpc GetPanelData (Empty) returns (PanelDataResponse);
+  rpc SavePanelData (PanelDataRequest) returns (PanelDataResponse);
+  // 配置文件项注释：按文件名获取键路径→中文说明字典(由 RtCli Repository 管理)
+  rpc GetConfigDocs (ConfigFileRequest) returns (ConfigDocsResponse);
 }
 
 message Empty {}
@@ -112,4 +142,271 @@ message CommandInfo {
 
 message CommandListResponse {
   repeated CommandInfo commands = 1;
+}
+
+// 多配置文件支持
+message ConfigFileRequest {
+  string file_name = 1;
+}
+
+message SaveConfigFileRequest {
+  string file_name = 1;
+  string content = 2;
+}
+
+message ConfigFileInfo {
+  string file_name = 1;
+  string display_name = 2;
+  string description = 3;
+}
+
+message ConfigFileListResponse {
+  repeated ConfigFileInfo files = 1;
+}
+
+// 系统状态
+message ServerTpsInfo {
+  string server_key = 1;       // ServerList 中的键
+  string server_name = 2;      // 显示名
+  bool is_running = 3;
+  double tps = 4;              // -1 表示未获取/不支持(兼容字段，等同 tps_1m)
+  string tps_status = 5;       // 文本描述(如 "20.0"、"未运行"、"需要Spark插件")
+  int32 mc_pid = 6;
+  double mc_memory_mb = 7;     // MC 进程内存(MB)
+  double tps_1m = 8;           // 最近 1 分钟 TPS(-1 表示未获取)
+  double tps_5m = 9;           // 最近 5 分钟 TPS
+  double tps_15m = 10;         // 最近 15 分钟 TPS
+  double mc_cpu_usage = 11;    // MC 进程 CPU 占用率(%)，-1 表示未获取
+  int32 player_count = 12;     // 在线玩家数(-1 表示未获取)
+  int32 player_max = 13;       // 最大玩家数(-1 表示未获取)
+}
+
+message SystemStatsResponse {
+  bool success = 1;
+  string message = 2;
+  double cpu_usage = 3;            // 主机CPU使用率(%)，-1 表示不支持
+  double memory_used_mb = 4;
+  double memory_total_mb = 5;
+  repeated ServerTpsInfo servers = 6;
+  string current_server_key = 7;   // 当前选择的服务器标识
+  bool ai_running = 8;             // AI自动化是否运行中
+  bool scheduler_running = 9;      // 计划任务调度器是否运行中
+}
+
+// 任务列表
+message GetTaskListRequest {
+  string task_type = 1;            // "ai" 或 "auto"
+}
+
+message TaskItem {
+  string key = 1;
+  string name = 2;
+  bool enabled = 3;
+  string trigger = 4;
+  string interval = 5;
+  string execute = 6;
+  int32 run_count = 7;
+  string last_run = 8;
+  string status = 9;               // 启用/禁用/不适用/已过期/已完成
+}
+
+message TaskListResponse {
+  bool success = 1;
+  string message = 2;
+  bool is_running = 3;             // 运行器是否运行中
+  repeated TaskItem tasks = 4;
+}
+
+// RtCli 运行状态
+message RtStatusResponse {
+  bool success = 1;
+  string message = 2;
+  bool management_port_running = 3;   // 管理端口运行中
+  int32 connected_clients = 4;        // 已连接面板数
+  string current_server_key = 5;      // 当前服务器标识
+  string current_server_name = 6;     // 当前服务器名称
+  string mc_mode = 7;                 // MC 模式
+  bool mc_running = 8;                // MC 服务端运行中
+  bool mc_connected = 9;             // MC 已连接(Attach 模式)
+  bool auto_tips_running = 10;        // 自动提示运行中
+  bool ai_running = 11;               // AI 自动化运行中
+  bool scheduler_running = 12;        // 调度器运行中
+}
+
+// 面板设置 (panel_data.json)
+message PanelDataResponse {
+  bool success = 1;
+  string message = 2;
+  string json_data = 3;               // JSON 格式的设置数据
+}
+
+message PanelDataRequest {
+  string json_data = 1;               // JSON 格式的设置数据
+}
+
+// MC 服务端配置文件
+message ServerFileInfo {
+  string file_name = 1;           // 文件名(相对 WorkPath)
+  string display_name = 2;        // 显示名
+  string description = 3;         // 描述
+  string category = 4;            // 分类: properties/json/whitelist/ban/etc
+  bool editable = 5;              // 是否可写(ops.json 等运行时文件可能只读)
+  int64 size_bytes = 6;           // 文件大小
+}
+
+message ServerFileListResponse {
+  bool success = 1;
+  string message = 2;
+  string server_key = 3;          // 对应的 ServerList 键
+  string server_name = 4;
+  string work_path = 5;           // MC 服务端工作目录
+  repeated ServerFileInfo files = 6;
+}
+
+message ServerFileRequest {
+  string server_key = 1;          // ServerList 中的键，留空则用 current_server
+  string file_name = 2;           // 文件名
+}
+
+message ServerFileResponse {
+  bool success = 1;
+  string message = 2;
+  string content = 3;
+  string file_name = 4;
+  string category = 5;
+}
+
+message SaveServerFileRequest {
+  string server_key = 1;
+  string file_name = 2;
+  string content = 3;
+}
+
+// ===== 实例管理 =====
+message InstanceInfo {
+  string id = 1;              // 内部 ID(= ServerList key = identifier)
+  string identifier = 2;      // 用户可见标识
+  string name = 3;            // 显示名
+  string group_id = 4;        // 所属群组 ID(空 = 独立实例)
+  string group_name = 5;      // 所属群组名(便于前端显示)
+  bool is_running = 6;        // 运行状态
+  bool hidden = 7;            // 是否隐藏控制台消息
+  bool auto_restart = 8;      // 自动重启
+  string work_path = 9;
+  string java_path = 10;
+  string run_flags = 11;
+  string analyzer_mode = 12;  // Run/Rcon/OnlyRcon/Management
+  string created_at = 13;
+  string last_started_at = 14;
+}
+
+message GroupInfo {
+  string id = 1;
+  string name = 2;
+  repeated string member_ids = 3;
+  string created_at = 4;
+}
+
+message InstanceListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated InstanceInfo instances = 3;
+  repeated GroupInfo groups = 4;
+}
+
+message CreateInstanceRequest {
+  string identifier = 1;
+  string name = 2;
+  string work_path = 3;
+  string java_path = 4;
+  string run_flags = 5;
+  string analyzer_mode = 6;
+  string group_id = 7;        // 可选: 创建时直接加入群组
+}
+
+message DeleteInstanceRequest {
+  string id = 1;
+  bool delete_files = 2;      // 是否删除服务器文件( WorkPath)
+}
+
+message UpdateInstanceRequest {
+  string id = 1;
+  string name = 2;
+  string group_id = 3;        // 空 = 移出群组
+  bool hidden = 4;            // 同步到 config.yml hide_console_servers
+  bool auto_restart = 5;
+  string work_path = 6;
+  string java_path = 7;
+  string run_flags = 8;
+  string analyzer_mode = 9;
+}
+
+message InstanceActionRequest {
+  string action = 1;          // start | stop | restart
+  repeated string ids = 2;    // 批量操作的目标实例 ID 列表
+}
+
+message GroupActionRequest {
+  string action = 1;          // start_all | stop_all | restart_all
+  string group_id = 2;
+}
+
+message CreateGroupRequest {
+  string name = 1;
+  repeated string member_ids = 2;
+}
+
+message DeleteGroupRequest {
+  string group_id = 1;
+}
+
+message UpdateGroupRequest {
+  string operation = 1;       // add | remove | rename
+  string group_id = 2;
+  string name = 3;            // rename 时使用
+  repeated string member_ids = 4;  // add/remove 时使用
+}
+
+message InstanceActionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message InstanceDetailRequest {
+  string id = 1;
+}
+
+message BackupEntry {
+  string file_name = 1;
+  string created_at = 2;
+  int64 size_bytes = 3;
+}
+
+message InstanceDetailResponse {
+  bool success = 1;
+  string message = 2;
+  InstanceInfo instance = 3;
+  repeated BackupEntry backups = 4;
+}
+
+message CreateBackupRequest {
+  string id = 1;
+}
+
+message RestoreBackupRequest {
+  string id = 1;
+  string file_name = 2;
+}
+
+message DeleteBackupRequest {
+  string id = 1;
+  string file_name = 2;
+}
+
+// 配置文件项注释响应
+message ConfigDocsResponse {
+  bool success = 1;
+  string message = 2;
+  string file_name = 3;
+  map<string, string> docs = 4;     // 键路径 → 中文说明
 }

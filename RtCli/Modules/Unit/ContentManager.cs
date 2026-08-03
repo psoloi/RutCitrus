@@ -395,19 +395,7 @@ namespace RtCli.Modules.Unit
                 return;
             }
 
-            try
-            {
-                var yaml = File.ReadAllText(filePath);
-                var deserializer = new DeserializerBuilder()
-                    .WithNamingConvention(UnderscoredNamingConvention.Instance)
-                    .Build();
-                Regex = deserializer.Deserialize<RegexSettings>(yaml) ?? new RegexSettings();
-            }
-            catch
-            {
-                Output.Log("正则配置文件解析失败，使用默认配置", 2, "ContentManager");
-                Regex = new RegexSettings();
-            }
+            Regex = Config.LoadYamlConfig<RegexSettings>(filePath, new RegexSettings(), "regex_settings.yml");
         }
 
         private static void SaveRegexSettings(string filePath)
@@ -531,19 +519,7 @@ namespace RtCli.Modules.Unit
                 return;
             }
 
-            try
-            {
-                var yaml = File.ReadAllText(filePath);
-                var deserializer = new DeserializerBuilder()
-                    .WithNamingConvention(UnderscoredNamingConvention.Instance)
-                    .Build();
-                Ai = deserializer.Deserialize<AiSetting>(yaml) ?? new AiSetting();
-            }
-            catch (Exception ex)
-            {
-                Output.Log($"AI配置文件解析失败: {ex.Message}，使用默认配置", 2, "ContentManager");
-                Ai = new AiSetting();
-            }
+            Ai = Config.LoadYamlConfig<AiSetting>(filePath, new AiSetting(), "ai_settings.yml");
         }
 
         private static void SaveAiSettings(string filePath)
@@ -661,7 +637,7 @@ namespace RtCli.Modules.Unit
                     else if (trimmed.StartsWith("model:"))
                     {
                         sb.AppendLine();
-                        sb.AppendLine("# AI模型名称(如 qwen2.5:7b、gpt-4o-mini、deepseek-chat 等)");
+                        sb.AppendLine("# AI模型名称(如 qwen2.5:7b、gpt-4o-mini、deepseek-chat、openrouter/free 等)");
                     }
                     else if (trimmed.StartsWith("temperature:"))
                     {
@@ -756,7 +732,7 @@ namespace RtCli.Modules.Unit
                     }
                     else if (trimmed.StartsWith("enabled:"))
                     {
-                        sb.AppendLine("# 是否启用工具调用功能");
+                        sb.AppendLine("# 是否启用该功能");
                     }
                     else if (trimmed.StartsWith("allow:"))
                     {
@@ -954,19 +930,7 @@ namespace RtCli.Modules.Unit
                 return new ScriptsSettings();
             }
 
-            try
-            {
-                var yaml = File.ReadAllText(filePath);
-                var deserializer = new DeserializerBuilder()
-                    .WithNamingConvention(UnderscoredNamingConvention.Instance)
-                    .Build();
-                return deserializer.Deserialize<ScriptsSettings>(yaml) ?? new ScriptsSettings();
-            }
-            catch (Exception ex)
-            {
-                Output.Log($"脚本配置文件解析失败: {ex.Message}，使用默认配置", 2, "ContentManager");
-                return new ScriptsSettings();
-            }
+            return Config.LoadYamlConfig<ScriptsSettings>(filePath, new ScriptsSettings(), "scripts_settings.yml");
         }
 
         /// <summary>
@@ -1108,19 +1072,7 @@ namespace RtCli.Modules.Unit
                 return new SchedulerSettings();
             }
 
-            try
-            {
-                var yaml = File.ReadAllText(filePath);
-                var deserializer = new DeserializerBuilder()
-                    .WithNamingConvention(UnderscoredNamingConvention.Instance)
-                    .Build();
-                return deserializer.Deserialize<SchedulerSettings>(yaml) ?? new SchedulerSettings();
-            }
-            catch (Exception ex)
-            {
-                Output.Log($"调度器配置文件解析失败: {ex.Message}，使用默认配置", 2, "ContentManager");
-                return new SchedulerSettings();
-            }
+            return Config.LoadYamlConfig<SchedulerSettings>(filePath, new SchedulerSettings(), "scheduler_settings.yml");
         }
 
         /// <summary>
@@ -1176,7 +1128,7 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#                      server_stop       - 关闭服务端");
             sb.AppendLine("#                      server_restart    - 关闭并重启服务端");
             sb.AppendLine("#                      server_restart:5  - 关闭服务端5分钟后重启");
-            sb.AppendLine("#                      send_command:list - 向MC服务端发送指令");
+            sb.AppendLine("#                      send_command:list - 向MC服务端发送指令(给玩家发消息用tellraw)");
             sb.AppendLine("#                      command:rt        - 发送控制台命令");
             sb.AppendLine("#    pass_parameters - 是否开启参数传递(将条件产生的参数传递给脚本)");
             sb.AppendLine("#");
@@ -1659,7 +1611,7 @@ namespace RtCli.Modules.Unit
             // 1. TPS 异常监测(每小时检查一次，TPS 低于 18 时触发)
             ["tps_monitor"] = new AiTask
             {
-                Enabled = false,
+                Enabled = true,
                 Name = "服务器TPS监测",
                 Trigger = "tps < 18",
                 Input = new List<string> { "server_logs", "server_tps" },
@@ -1672,7 +1624,7 @@ namespace RtCli.Modules.Unit
             // 2. 服务器崩溃检测(每分钟检查日志中是否出现崩溃关键字)
             ["crash_detect"] = new AiTask
             {
-                Enabled = false,
+                Enabled = true,
                 Name = "服务器崩溃检测",
                 Trigger = "crash_detected",
                 Input = new List<string> { "crash_report", "server_logs", "server_status" },

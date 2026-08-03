@@ -299,6 +299,90 @@ namespace RtPanel.Services
             catch { MarkDisconnected(); return null; }
         }
 
+        public async Task<ConfigFileListResponse?> ListConfigFilesAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.ListConfigFilesAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<ConfigResponse?> GetConfigFileAsync(string fileName)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.GetConfigFileAsync(new ConfigFileRequest { FileName = fileName },
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SaveConfigResponse?> SaveConfigFileAsync(string fileName, string content)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.SaveConfigFileAsync(new SaveConfigFileRequest { FileName = fileName, Content = content },
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SystemStatsResponse?> GetSystemStatsAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.GetSystemStatsAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<ServerFileListResponse?> ListServerFilesAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.ListServerFilesAsync(new Empty(),
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<ServerFileResponse?> GetServerFileAsync(string serverKey, string fileName)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.GetServerFileAsync(new ServerFileRequest { ServerKey = serverKey ?? "", FileName = fileName },
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(5));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SaveConfigResponse?> SaveServerFileAsync(string serverKey, string fileName, string content)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.SaveServerFileAsync(new SaveServerFileRequest { ServerKey = serverKey ?? "", FileName = fileName, Content = content },
+                    headers: GetAuthHeaders(),
+                    deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
         public async Task<CommandListResponse?> GetCommandListAsync()
         {
             if (_client == null || !IsConnected) return null;
@@ -308,6 +392,149 @@ namespace RtPanel.Services
                     headers: GetAuthHeaders(),
                     deadline: DateTime.UtcNow.AddSeconds(5));
             }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== 实例管理 =====
+
+        public async Task<InstanceListResponse?> GetInstanceListAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetInstanceListAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> CreateInstanceAsync(CreateInstanceRequest req)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.CreateInstanceAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> DeleteInstanceAsync(string id, bool deleteFiles)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.DeleteInstanceAsync(new DeleteInstanceRequest { Id = id, DeleteFiles = deleteFiles }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> UpdateInstanceAsync(UpdateInstanceRequest req)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.UpdateInstanceAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> InstanceActionAsync(string action, List<string> ids)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new InstanceActionRequest { Action = action };
+                req.Ids.AddRange(ids);
+                return await _client.InstanceActionAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> CreateGroupAsync(string name, List<string> memberIds)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new CreateGroupRequest { Name = name };
+                req.MemberIds.AddRange(memberIds);
+                return await _client.CreateGroupAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> DeleteGroupAsync(string groupId)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.DeleteGroupAsync(new DeleteGroupRequest { GroupId = groupId }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> UpdateGroupAsync(string operation, string groupId, string name, List<string> memberIds)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new UpdateGroupRequest { Operation = operation, GroupId = groupId, Name = name ?? "" };
+                req.MemberIds.AddRange(memberIds);
+                return await _client.UpdateGroupAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> GroupActionAsync(string action, string groupId)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GroupActionAsync(new GroupActionRequest { Action = action, GroupId = groupId }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceDetailResponse?> GetInstanceDetailAsync(string id)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetInstanceDetailAsync(new InstanceDetailRequest { Id = id }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> CreateBackupAsync(string id)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.CreateBackupAsync(new CreateBackupRequest { Id = id }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(120)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> RestoreBackupAsync(string id, string fileName)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.RestoreBackupAsync(new RestoreBackupRequest { Id = id, FileName = fileName }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(120)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceActionResponse?> DeleteBackupAsync(string id, string fileName)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.DeleteBackupAsync(new DeleteBackupRequest { Id = id, FileName = fileName }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<TaskListResponse?> GetTaskListAsync(string taskType)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetTaskListAsync(new GetTaskListRequest { TaskType = taskType }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<RtStatusResponse?> GetRtStatusAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetRtStatusAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<PanelDataResponse?> GetPanelDataAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetPanelDataAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<PanelDataResponse?> SavePanelDataAsync(string jsonData)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.SavePanelDataAsync(new PanelDataRequest { JsonData = jsonData }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<ConfigDocsResponse?> GetConfigDocsAsync(string fileName)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetConfigDocsAsync(new ConfigFileRequest { FileName = fileName ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(5)); }
             catch { MarkDisconnected(); return null; }
         }
 

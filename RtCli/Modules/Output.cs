@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Serilog;
@@ -22,6 +23,11 @@ namespace RtCli.Modules
         private static ConsoleInterceptor? _interceptor;
         private static bool _isLoggingInitialized = false;
         private static readonly object _logLock = new object();
+
+        // 控制台显示过滤正则缓存(配置变化时自动重编译)
+        private static List<Regex> _stripRegexes = new List<Regex>();
+        private static int _stripPatternsHash = 0;
+        private static readonly object _stripCacheLock = new object();
 
         /// <summary>
         /// 日志广播钩子：参数依次为 timestamp, level, source, message。
@@ -142,6 +148,8 @@ namespace RtCli.Modules
         {
             string time = DateTime.Now.ToString("HH:mm:ss");
             string plainMsg = StripMarkup(msg);
+            // 仅用于控制台显示的过滤(如移除MC日志行首时间戳)，不影响日志记录和gRPC广播
+            string displayMsg = StripForConsole(msg);
             string name = string.IsNullOrEmpty(names) ? "Null" : names;
             string threadName = Thread.CurrentThread.Name ?? "Null";
 
@@ -157,23 +165,23 @@ namespace RtCli.Modules
                 switch (msg_type)
                 {
                     case 0:
-                        AnsiConsole.Markup(prefix + Markup.Escape(msg) + "\n");
+                        AnsiConsole.Markup(prefix + Markup.Escape(displayMsg) + "\n");
                         _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                     case 1:
-                        AnsiConsole.Markup(prefix + msg + "\n");
+                        AnsiConsole.Markup(prefix + displayMsg + "\n");
                         _logger?.Information("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                     case 2:
-                        AnsiConsole.Markup(prefix + msg + "\n");
+                        AnsiConsole.Markup(prefix + displayMsg + "\n");
                         _logger?.Warning("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                     case 3:
-                        AnsiConsole.Markup(prefix + msg + "\n");
+                        AnsiConsole.Markup(prefix + displayMsg + "\n");
                         _logger?.Error("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                     default:
-                        AnsiConsole.Markup($"[white][[{time}]][/] " + "[white]|[/][yellow]调试[/][white]| [/]" + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + Markup.Escape(msg) + "\n");
+                        AnsiConsole.Markup($"[white][[{time}]][/] " + "[white]|[/][yellow]调试[/][white]| [/]" + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + Markup.Escape(displayMsg) + "\n");
                         _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                 }
@@ -181,7 +189,7 @@ namespace RtCli.Modules
             catch (InvalidOperationException ex) when (ex.Message.Contains("Could not find color or style"))
             {
                 // 消息包含无效的Spectre标记，回退到安全转义输出
-                string safeMsg = Markup.Escape(plainMsg);
+                string safeMsg = Markup.Escape(StripMarkup(displayMsg));
                 try
                 {
                     switch (msg_type)
@@ -197,7 +205,7 @@ namespace RtCli.Modules
                 _logger?.Warning("[{Thread}-{ThreadId}] ({Name}) 输出消息包含无效Spectre标记，已回退转义: {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
             }
 
-            // 广播日志到已连接的 gRPC 面板
+            // 广播日志到已连接的 gRPC 面板(使用原始plainMsg，不受控制台过滤影响)
             if (OnLogBroadcast != null)
             {
                 try { OnLogBroadcast(time, msg_type, name, plainMsg); }
@@ -245,6 +253,66 @@ namespace RtCli.Modules
             }
             
             return result.ToString();
+        }
+
+        /// <summary>
+        /// 获取控制台显示过滤正则缓存(配置变化时自动重编译)
+        /// </summary>
+        private static List<Regex> GetStripRegexes()
+        {
+            var patterns = Unit.Config.App?.ConsoleStripPatterns;
+            if (patterns == null || patterns.Count == 0)
+                return _stripRegexes.Count == 0 ? _stripRegexes : new List<Regex>();
+
+            // 用模式字符串的哈希作为缓存键，配置变化时重新编译
+            int hash = 0;
+            for (int i = 0; i < patterns.Count; i++)
+            {
+                if (!string.IsNullOrEmpty(patterns[i]))
+                    hash ^= patterns[i].GetHashCode(StringComparison.Ordinal);
+            }
+
+            lock (_stripCacheLock)
+            {
+                if (hash == _stripPatternsHash && _stripRegexes.Count > 0)
+                    return _stripRegexes;
+
+                var compiled = new List<Regex>(patterns.Count);
+                foreach (var p in patterns)
+                {
+                    if (string.IsNullOrWhiteSpace(p)) continue;
+                    try
+                    {
+                        compiled.Add(new Regex(p, RegexOptions.Compiled, TimeSpan.FromMilliseconds(200)));
+                    }
+                    catch
+                    {
+                        // 忽略无效正则
+                    }
+                }
+
+                _stripRegexes = compiled;
+                _stripPatternsHash = hash;
+                return compiled;
+            }
+        }
+
+        /// <summary>
+        /// 仅用于控制台显示的消息过滤(移除MC服务器日志行首时间戳等)。
+        /// 不影响日志文件记录、gRPC广播以及Analyzer中的消息流处理。
+        /// </summary>
+        private static string StripForConsole(string msg)
+        {
+            if (string.IsNullOrEmpty(msg)) return msg;
+            var regexes = GetStripRegexes();
+            if (regexes.Count == 0) return msg;
+
+            string result = msg;
+            for (int i = 0; i < regexes.Count; i++)
+            {
+                result = regexes[i].Replace(result, "");
+            }
+            return result;
         }
 
         private static bool _crashAssistantRunning = false;

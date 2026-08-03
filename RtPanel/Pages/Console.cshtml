@@ -31,20 +31,58 @@
                 </div>
             </div>
         </div>
+
+        <div class="card bg-dark text-light border-secondary mb-3">
+            <div class="card-header">快捷命令</div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('rt status')">rt status - 运行状态</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="showTaskInfo('ai','AI任务列表')">AI任务列表</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="showTaskInfo('auto','计划任务列表')">计划任务列表</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('.fx list')">.fx list - 错误分析结果</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('.fx get')">.fx get - 分析错误日志</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('.fx filter plugin')">.fx filter plugin - 插件列表</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('.server list')">.server list - 服务端列表</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('rt extensions')">rt extensions - 扩展列表</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('rt clients')">rt clients - 已连接面板</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-warning btn-sm w-100 text-start" onclick="quickCmd('.cfg reload')">.cfg reload - 热重载配置</button></div>
+                    <div class="col-md-6"><button class="btn btn-outline-info btn-sm w-100 text-start" onclick="quickCmd('rt help')">rt help - 命令帮助</button></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="col-lg-4">
         <div class="card bg-dark text-light border-secondary mb-3">
-            <div class="card-header">快捷命令</div>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>自动化操作</span>
+                <small class="text-muted">一键控制</small>
+            </div>
             <div class="card-body">
+                <div class="mb-2"><small class="text-info fw-bold">AI自动化管理</small></div>
+                <div class="d-grid gap-2 mb-3">
+                    <button class="btn btn-success btn-sm" onclick="actionCmd('.ai start', '启动AI自动化管理？将自动启动MC服务端并开始无人管理。')">启动AI自动化</button>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn btn-outline-danger" onclick="confirmCmd('.ai stop', '确定停止AI自动化管理？')">停止</button>
+                        <button class="btn btn-outline-info" onclick="showTaskInfo('ai','AI任务列表')">任务列表</button>
+                        <button class="btn btn-outline-warning" onclick="quickCmd('.ai reload')">重载</button>
+                    </div>
+                </div>
+                <div class="mb-2"><small class="text-info fw-bold">计划任务调度器</small></div>
+                <div class="d-grid gap-2 mb-3">
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn btn-success" onclick="quickCmd('.auto start')">启动</button>
+                        <button class="btn btn-outline-danger" onclick="confirmCmd('.auto stop', '确定停止调度器？')">停止</button>
+                        <button class="btn btn-outline-info" onclick="showTaskInfo('auto','计划任务列表')">任务列表</button>
+                    </div>
+                </div>
+                <div class="mb-2"><small class="text-info fw-bold">MC服务端</small></div>
                 <div class="d-grid gap-2">
-                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('rt status')">rt status - 运行状态</button>
-                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('rt clients')">rt clients - 已连接面板</button>
-                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('rt extensions')">rt extensions - 扩展列表</button>
-                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('.server list')">.server list - 服务端列表</button>
-                    <button class="btn btn-outline-primary btn-sm text-start" onclick="quickCmd('.server status')">.server status - MC状态</button>
-                    <button class="btn btn-outline-warning btn-sm text-start" onclick="quickCmd('.cfg reload')">.cfg reload - 热重载配置</button>
-                    <button class="btn btn-outline-info btn-sm text-start" onclick="quickCmd('rt help')">rt help - 命令帮助</button>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn btn-success" onclick="confirmCmd('.server start', '确定启动MC服务端？')">启动</button>
+                        <button class="btn btn-outline-danger" onclick="confirmCmd('.server stop', '确定停止MC服务端？')">停止</button>
+                        <button class="btn btn-outline-warning" onclick="confirmCmd('.server restart', '确定重启MC服务端？')">重启</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -55,6 +93,23 @@
                 <div class="text-muted">加载中...</div>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- 任务信息弹窗 -->
+<div class="modal-overlay" id="taskInfoModal" style="display:none;">
+    <div class="modal-box" style="max-width:85vw;width:auto;">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="d-flex align-items-center gap-3">
+                <h5 id="taskInfoTitle" class="mb-0">任务信息</h5>
+                <span id="taskInfoStatus" class="badge bg-secondary"></span>
+            </div>
+            <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-info" onclick="refreshTaskInfo()" id="taskInfoRefreshBtn">刷新</button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('taskInfoModal').style.display='none'">关闭</button>
+            </div>
+        </div>
+        <div id="taskInfoContent" class="border rounded p-3" style="background:var(--bg-input,#0d1b2e);"></div>
     </div>
 </div>
 
@@ -151,6 +206,85 @@
         executeCommand();
     }
 
+    // 当前任务弹窗状态
+    let currentTaskType = '';
+
+    // 通过 API 获取任务列表并显示在弹窗中
+    async function showTaskInfo(taskType, title) {
+        currentTaskType = taskType;
+        const modal = document.getElementById('taskInfoModal');
+        const titleEl = document.getElementById('taskInfoTitle');
+        const statusEl = document.getElementById('taskInfoStatus');
+        const contentEl = document.getElementById('taskInfoContent');
+        titleEl.textContent = title || taskType;
+        statusEl.className = 'badge bg-secondary';
+        statusEl.textContent = '加载中...';
+        contentEl.innerHTML = '<span class="text-muted">正在获取任务列表...</span>';
+        modal.style.display = 'flex';
+        await refreshTaskInfo();
+    }
+
+    async function refreshTaskInfo() {
+        if (!currentTaskType) return;
+        const statusEl = document.getElementById('taskInfoStatus');
+        const contentEl = document.getElementById('taskInfoContent');
+        try {
+            const resp = await fetch(`/api/system/tasks/${currentTaskType}`).then(r => r.json());
+            if (resp.success) {
+                statusEl.className = resp.isRunning ? 'badge bg-success' : 'badge bg-secondary';
+                statusEl.textContent = resp.isRunning ? '运行中' : '已停止';
+                contentEl.innerHTML = renderTaskTable(resp.tasks || [], currentTaskType);
+            } else {
+                statusEl.className = 'badge bg-danger';
+                statusEl.textContent = '失败';
+                contentEl.innerHTML = '<span class="text-danger">' + escapeHtmlSimple(resp.message || '获取失败') + '</span>';
+            }
+        } catch (e) {
+            contentEl.innerHTML = '<span class="text-danger">请求失败: ' + escapeHtmlSimple(e.message) + '</span>';
+        }
+    }
+
+    function renderTaskTable(tasks, type) {
+        if (tasks.length === 0) return '<div class="text-muted text-center py-3">无任务</div>';
+        let html = '<table class="table table-sm table-hover align-middle mb-0" style="font-size:13px;">';
+        if (type === 'ai') {
+            html += '<thead><tr><th>#</th><th>标识</th><th>名称</th><th>状态</th><th>触发条件</th><th>间隔Cron</th><th>动作</th><th>已执行</th><th>最后运行</th></tr></thead><tbody>';
+            tasks.forEach((t, i) => {
+                const cls = t.status === '启用' ? 'bg-success' : 'bg-secondary';
+                html += `<tr><td>${i+1}</td><td><strong>${escapeHtmlSimple(t.key)}</strong></td><td>${escapeHtmlSimple(t.name)}</td><td><span class="badge ${cls}">${escapeHtmlSimple(t.status)}</span></td><td class="text-muted">${escapeHtmlSimple(t.trigger)}</td><td class="text-muted">${escapeHtmlSimple(t.interval)}</td><td class="text-muted">${escapeHtmlSimple(t.execute)}</td><td>${t.runCount}</td><td class="text-muted">${escapeHtmlSimple(t.lastRun)}</td></tr>`;
+            });
+        } else {
+            html += '<thead><tr><th>#</th><th>标识</th><th>状态</th><th>触发条件</th><th>前置条件</th><th>执行内容</th><th>已执行</th></tr></thead><tbody>';
+            tasks.forEach((t, i) => {
+                let cls = 'bg-secondary';
+                if (t.status === '启用') cls = 'bg-success';
+                else if (t.status === '不适用') cls = 'bg-warning text-dark';
+                else if (t.status === '已过期' || t.status === '已完成') cls = 'bg-danger';
+                html += `<tr><td>${i+1}</td><td><strong>${escapeHtmlSimple(t.key)}</strong></td><td><span class="badge ${cls}">${escapeHtmlSimple(t.status)}</span></td><td class="text-muted">${escapeHtmlSimple(t.trigger)}</td><td class="text-muted">${escapeHtmlSimple(t.interval)}</td><td class="text-muted">${escapeHtmlSimple(t.execute)}</td><td>${t.runCount}</td></tr>`;
+            });
+        }
+        html += '</tbody></table>';
+        return html;
+    }
+
+    function escapeHtmlSimple(s) {
+        return (s ?? '').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // 带确认的操作按钮(用于停止/启动等不可逆操作)
+    async function confirmCmd(cmd, msg) {
+        if (msg && !await RtPanel.showConfirm('操作确认', msg)) return;
+        document.getElementById('cmdInput').value = cmd;
+        executeCommand();
+    }
+
+    // 重要操作按钮(默认带确认)
+    async function actionCmd(cmd, msg) {
+        if (msg && !await RtPanel.showConfirm('操作确认', msg)) return;
+        document.getElementById('cmdInput').value = cmd;
+        executeCommand();
+    }
+
     // 命令历史导航
     document.getElementById('cmdInput').addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {
@@ -194,26 +328,57 @@
         } catch (e) { }
     }
 
-    // 加载连接信息
+    // 加载连接信息(表格形式)
     async function loadConnInfo() {
         try {
-            const res = await fetch('/api/auth/status');
-            if (res.ok) {
-                const data = await res.json();
-                const el = document.getElementById('connInfo');
-                if (data.connected) {
-                    el.innerHTML = `
-                        <div class="mb-1"><span class="text-muted">服务器:</span> <span class="text-info">${data.serverName || '-'}</span></div>
-                        <div class="mb-1"><span class="text-muted">版本:</span> ${data.version || '-'}</div>
-                        <div class="mb-1"><span class="text-muted">地址:</span> ${data.host}:${data.port}</div>
-                        <div class="mb-1"><span class="text-muted">运行:</span> ${data.isRunning ? '<span class="text-success">是</span>' : '<span class="text-danger">否</span>'}</div>
-                        <div class="mb-1"><span class="text-muted">面板数:</span> ${data.connectedClientCount}</div>
-                        <div class="mb-1"><span class="text-muted">扩展数:</span> ${data.extensionCount}</div>
-                    `;
-                } else {
-                    el.innerHTML = '<div class="text-danger">未连接</div>';
-                }
+            const [authRes, statsRes] = await Promise.all([
+                fetch('/api/auth/status').then(r => r.ok ? r.json() : null).catch(() => null),
+                fetch('/api/system/stats').then(r => r.ok ? r.json() : null).catch(() => null)
+            ]);
+            const el = document.getElementById('connInfo');
+            if (!authRes || !authRes.connected) {
+                el.innerHTML = '<div class="text-danger text-center py-2">未连接</div>';
+                return;
             }
+
+            const stats = statsRes || {};
+            const currentKey = stats.currentServerKey || '-';
+            const servers = stats.servers || [];
+            const aiRunning = stats.aiRunning;
+            const schedRunning = stats.schedulerRunning;
+
+            let html = '<table class="table table-sm table-borderless mb-0" style="font-size:13px;">';
+            // 基本信息
+            html += `<tr><td class="text-muted" style="width:100px;">服务器标识</td><td><strong class="text-info">${escapeHtmlSimple(currentKey)}</strong></td></tr>`;
+            html += `<tr><td class="text-muted">服务器名称</td><td><strong>${escapeHtmlSimple(authRes.serverName || '-')}</strong></td></tr>`;
+            html += `<tr><td class="text-muted">RtCli 版本</td><td>${escapeHtmlSimple(authRes.version || '-')}</td></tr>`;
+            html += `<tr><td class="text-muted">连接地址</td><td>${escapeHtmlSimple(authRes.host || '-')}:${authRes.port || '-'}</td></tr>`;
+            html += `<tr><td class="text-muted">面板连接数</td><td>${authRes.connectedClientCount ?? 0}</td></tr>`;
+            html += `<tr><td class="text-muted">扩展数量</td><td>${authRes.extensionCount ?? 0}</td></tr>`;
+            html += `<tr><td class="text-muted">AI 自动化</td><td>${aiRunning ? '<span class="badge bg-success">运行中</span>' : '<span class="badge bg-secondary">已停止</span>'}</td></tr>`;
+            html += `<tr><td class="text-muted">调度器</td><td>${schedRunning ? '<span class="badge bg-success">运行中</span>' : '<span class="badge bg-secondary">已停止</span>'}</td></tr>`;
+            html += '</table>';
+
+            // 所有服务器运行状态
+            if (servers.length > 0) {
+                html += '<div class="mt-2 mb-1 small text-info fw-bold">所有服务器运行状态</div>';
+                html += '<table class="table table-sm table-hover align-middle mb-0" style="font-size:12px;">';
+                html += '<thead><tr><th>标识</th><th>名称</th><th>状态</th><th class="text-center">玩家</th><th class="text-center">TPS</th></tr></thead><tbody>';
+                for (const s of servers) {
+                    const isCurrent = s.serverKey === currentKey;
+                    const statusBadge = s.isRunning
+                        ? '<span class="badge bg-success">运行</span>'
+                        : '<span class="badge bg-secondary">停止</span>';
+                    const playerCell = s.isRunning && s.playerCount >= 0
+                        ? `${s.playerCount}/${s.playerMax >= 0 ? s.playerMax : '?'}`
+                        : '-';
+                    const tpsCell = s.isRunning && s.tps1m >= 0 ? s.tps1m.toFixed(1) : '-';
+                    html += `<tr${isCurrent ? ' class="table-active"' : ''}><td><strong>${escapeHtmlSimple(s.serverKey)}</strong>${isCurrent ? ' <span class="text-info">●</span>' : ''}</td><td>${escapeHtmlSimple(s.serverName)}</td><td>${statusBadge}</td><td class="text-center">${playerCell}</td><td class="text-center">${tpsCell}</td></tr>`;
+                }
+                html += '</tbody></table>';
+            }
+
+            el.innerHTML = html;
         } catch (e) { }
     }
 

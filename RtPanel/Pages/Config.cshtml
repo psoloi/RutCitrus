@@ -4,70 +4,923 @@
     ViewData["Title"] = "配置编辑";
 }
 
-<div class="card bg-dark text-light border-secondary">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <span>配置文件编辑 (config.yml)</span>
-        <div>
-            <button class="btn btn-sm btn-outline-info" onclick="loadConfig()" id="reloadBtn">重新加载</button>
-            <button class="btn btn-sm btn-outline-warning" onclick="hotReload()">热重载(不保存)</button>
-            <button class="btn btn-sm btn-primary" onclick="saveConfig()" id="saveBtn">保存并重载</button>
+<div class="config-explorer">
+    <!-- 左侧：搜索栏 + 文件树 -->
+    <aside class="config-sidebar">
+        <div class="sidebar-search">
+            <div class="search-mode-tabs">
+                <button type="button" class="search-mode-btn active" data-mode="files" title="搜索文件名">文件</button>
+                <button type="button" class="search-mode-btn" data-mode="items" title="搜索配置项">项</button>
+            </div>
+            <div class="search-input-wrap">
+                <span class="search-icon">⌕</span>
+                <input type="text" id="searchInput" class="form-control form-control-sm" placeholder="搜索文件名或配置项…" autocomplete="off" />
+                <button type="button" id="searchClearBtn" class="search-clear" title="清除">×</button>
+            </div>
+            <div id="searchResultInfo" class="search-result-info" style="display:none;"></div>
         </div>
+
+        <div class="sidebar-tree" id="fileTree">
+            <div class="tree-placeholder text-muted small">加载中…</div>
+        </div>
+    </aside>
+
+    <!-- 右侧：编辑器主区 -->
+    <section class="config-main">
+        <header class="config-header">
+            <div class="header-title">
+                <span id="currentFileTitle" class="text-sky">未选择文件</span>
+                <small id="currentFileDesc" class="text-muted ms-2"></small>
+            </div>
+            <div class="header-actions">
+                <span id="versionSelectorWrap" class="me-2" style="display:none;">
+                    <label class="small text-muted me-1">MC 版本:</label>
+                    <select id="versionSelector" class="form-select form-select-sm d-inline-block" style="width:auto;">
+                        <option value="1.21">1.21</option>
+                    </select>
+                </span>
+                <button class="btn btn-sm btn-outline-info" onclick="reloadCurrent()" id="reloadBtn" title="从服务器重新加载(丢弃本地未保存修改)">刷新</button>
+                <button class="btn btn-sm btn-primary" onclick="saveCurrent()" id="saveBtn" title="保存到服务器(不重载)">保存</button>
+                <button class="btn btn-sm btn-outline-warning" onclick="hotReload()" title="向服务端发送热重载命令(不保存)">热重载</button>
+            </div>
+        </header>
+
+        <div id="statusMsg" class="alert mb-2 mx-3 mt-2" style="display:none;"></div>
+
+        <div class="config-tabs-wrap mx-3 mt-2">
+            <ul class="nav nav-tabs" id="configTabs">
+                <li class="nav-item">
+                    <button class="nav-link active" data-tab="ui">界面编辑</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-tab="text">文本编辑</button>
+                </li>
+            </ul>
+        </div>
+
+        <div class="config-editor-area">
+            <div id="uiEditor" class="px-3 pb-3">
+                <div id="configItems">
+                    <div class="text-muted">请从左侧选择一个配置文件</div>
+                </div>
+            </div>
+
+            <div id="textEditor" style="display:none;" class="px-3 pb-3">
+                <div class="code-editor-wrap">
+                    <pre id="codeHighlight" class="code-highlight" aria-hidden="true"></pre>
+                    <textarea id="configEditor" class="form-control config-textarea"
+                              placeholder="加载中…" spellcheck="false"></textarea>
+                </div>
+            </div>
+        </div>
+
+        <footer class="config-footer">
+            <span id="fileMetaInfo" class="text-muted">「刷新」从服务器重新加载当前文件 ·「保存」仅写入磁盘 ·「热重载」向服务端发送 .cfg reload</span>
+        </footer>
+    </section>
+</div>
+
+<!-- 配置项搜索结果浮层(类似 VSCode 快速跳转) -->
+<div id="itemSearchPanel" class="item-search-panel" style="display:none;">
+    <div class="item-search-header">
+        <span class="small text-muted">配置项搜索结果</span>
+        <button type="button" class="btn-close btn-close-white btn-sm" onclick="closeItemSearch()"></button>
     </div>
-    <div class="card-body p-0">
-        <div id="statusMsg" class="p-2" style="display:none;"></div>
-        <textarea id="configEditor" class="form-control bg-dark text-light border-0"
-                  style="height: 600px; font-family: 'Consolas','Courier New',monospace; font-size: 13px; border-radius: 0;"
-                  placeholder="加载中..." spellcheck="false"></textarea>
-    </div>
-    <div class="card-footer text-muted small">
-        <span>修改后点击「保存并重载」将自动备份原配置并热重载。也可使用「热重载(不保存)」直接从磁盘重新加载配置文件。</span>
-    </div>
+    <div id="itemSearchResults" class="item-search-results"></div>
 </div>
 
 @section Scripts {
 <script>
+    // === 全局状态 ===
+    let currentTab = 'ui';
     let originalContent = '';
+    let originalNodes = [];
+    let currentFileName = '';
+    let currentFileSource = 'rtcli'; // rtcli | server
+    let currentCategory = '';
+    let knownRtcliFiles = [];
+    let knownServerFiles = [];
+    let currentServerKey = '';
+    let propertiesSchema = null;
+    let currentVersion = '26.2';
+    let searchMode = 'files';
+    let itemSearchIndex = []; // [{file, source, path, key, value, type, comment}]
 
-    async function loadConfig() {
+    // === 工具函数 ===
+    function escapeHtml(s) {
+        return (s ?? '').toString()
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function commentToHtml(comment) {
+        if (!comment) return '';
+        const lines = comment.split('\n').map(l => escapeHtml(l.replace(/^#\s?/, ''))).filter(l => l.length > 0);
+        if (lines.length === 0) return '';
+        return `<div class="config-comment text-muted small mt-1 ps-2 border-start border-secondary">${lines.join('<br>')}</div>`;
+    }
+
+    function showStatus(msg, type) {
+        const el = document.getElementById('statusMsg');
+        el.className = `alert alert-${type} mb-2 mx-3 mt-2`;
+        el.textContent = msg;
+        el.style.display = 'block';
+        setTimeout(() => { el.style.display = 'none'; }, 4000);
+    }
+
+    function isModified() {
+        if (currentTab === 'text') {
+            return document.getElementById('configEditor').value !== originalContent;
+        }
+        return false;
+    }
+
+    // === 标签切换 ===
+    function switchTab(tab) {
+        if (tab === currentTab) return;
+        document.querySelectorAll('#configTabs .nav-link').forEach(b => {
+            b.classList.toggle('active', b.dataset.tab === tab);
+        });
+        if (tab === 'ui') {
+            document.getElementById('uiEditor').style.display = '';
+            document.getElementById('textEditor').style.display = 'none';
+            if (originalContent) loadSchema();
+        } else {
+            document.getElementById('uiEditor').style.display = 'none';
+            document.getElementById('textEditor').style.display = '';
+            if (originalNodes.length > 0 || originalContent) loadText();
+        }
+        currentTab = tab;
+    }
+
+    document.querySelectorAll('#configTabs .nav-link').forEach(btn => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // === 搜索模式切换 ===
+    document.querySelectorAll('.search-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.search-mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            searchMode = btn.dataset.mode;
+            onSearchInput();
+            const input = document.getElementById('searchInput');
+            input.placeholder = searchMode === 'files' ? '搜索文件名…' : '搜索配置项(在已加载文件中查找)…';
+        });
+    });
+
+    // === 文件树渲染 ===
+    async function loadFileList() {
+        const tree = document.getElementById('fileTree');
+        tree.innerHTML = '<div class="tree-placeholder text-muted small">加载中…</div>';
+
+        const tasks = [
+            fetch('/api/config/files').then(r => r.json()).catch(() => ({ success: false, files: [] })),
+            fetch('/api/serverfile/list').then(r => r.json()).catch(() => ({ success: false, files: [] }))
+        ];
+        const [rtcliRes, serverRes] = await Promise.all(tasks);
+
+        knownRtcliFiles = (rtcliRes.success && rtcliRes.files) ? rtcliRes.files : [];
+        knownServerFiles = (serverRes.success && serverRes.files) ? serverRes.files : [];
+        currentServerKey = serverRes.serverKey || '';
+
+        renderFileTree();
+        // 自动选择第一个文件
+        if (!currentFileName && knownRtcliFiles.length > 0) {
+            selectFile(knownRtcliFiles[0].fileName, 'rtcli', knownRtcliFiles[0].displayName);
+        } else if (!currentFileName && knownServerFiles.length > 0) {
+            selectFile(knownServerFiles[0].fileName, 'server', knownServerFiles[0].displayName);
+        }
+    }
+
+    function renderFileTree() {
+        const tree = document.getElementById('fileTree');
+        const filter = (document.getElementById('searchInput').value || '').toLowerCase().trim();
+        const showAll = searchMode !== 'files' || !filter;
+
+        let html = '';
+
+        // === RtCli 配置文件组 ===
+        const rtcliFiltered = knownRtcliFiles.filter(f =>
+            showAll || f.fileName.toLowerCase().includes(filter) ||
+            (f.displayName || '').toLowerCase().includes(filter)
+        );
+        if (knownRtcliFiles.length > 0) {
+            html += renderTreeGroup('rtcli', 'RtCli 配置文件', rtcliFiltered, knownRtcliFiles.length);
+        }
+
+        // === MC 服务端配置文件组(按子分类分组) ===
+        const serverFiltered = knownServerFiles.filter(f =>
+            showAll || f.fileName.toLowerCase().includes(filter) ||
+            (f.displayName || '').toLowerCase().includes(filter)
+        );
+        if (knownServerFiles.length > 0) {
+            const notConnected = currentServerKey ? null : '<span class="text-warning small">未连接服务端</span>';
+            // 按 path 分组
+            const coreFiles = serverFiltered.filter(f => !f.fileName.includes('/'));
+            const configFiles = serverFiltered.filter(f => f.fileName.startsWith('config/'));
+            const pluginFiles = serverFiltered.filter(f => f.fileName.startsWith('plugins/'));
+            const modFiles = serverFiltered.filter(f => f.fileName.startsWith('mods/'));
+            const otherFiles = serverFiltered.filter(f =>
+                f.fileName.includes('/') &&
+                !f.fileName.startsWith('config/') &&
+                !f.fileName.startsWith('plugins/') &&
+                !f.fileName.startsWith('mods/')
+            );
+
+            html += `<div class="tree-group">`;
+            html += `<div class="tree-group-header">
+                <span class="tree-arrow">▶</span> MC 服务端配置
+                <span class="tree-count">${serverFiltered.length}</span>${notConnected || ''}</div>`;
+            html += `<div class="tree-group-body">`;
+            if (coreFiles.length) html += renderTreeGroup('server', '核心配置', coreFiles, coreFiles.length);
+            if (configFiles.length) html += renderTreeGroup('server', 'config 目录', configFiles, configFiles.length);
+            if (pluginFiles.length) html += renderTreeGroup('server', '插件配置', pluginFiles, pluginFiles.length);
+            if (modFiles.length) html += renderTreeGroup('server', '模组配置', modFiles, modFiles.length);
+            if (otherFiles.length) html += renderTreeGroup('server', '其他配置', otherFiles, otherFiles.length);
+            html += `</div></div>`;
+        }
+
+        if (!html) {
+            tree.innerHTML = '<div class="tree-placeholder text-muted small">无匹配文件</div>';
+        } else {
+            tree.innerHTML = html;
+            // 绑定折叠(阻止冒泡以支持嵌套)
+            tree.querySelectorAll('.tree-group-header').forEach(h => {
+                h.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    h.parentElement.classList.toggle('collapsed');
+                });
+            });
+            // 绑定文件点击
+            tree.querySelectorAll('.tree-file').forEach(f => {
+                f.addEventListener('click', () => {
+                    const name = f.dataset.fileName;
+                    const source = f.dataset.source;
+                    const display = f.dataset.displayName || name;
+                    selectFile(name, source, display);
+                });
+            });
+            // 高亮当前文件
+            if (currentFileName) {
+                const cur = tree.querySelector(`.tree-file[data-file-name="${CSS.escape(currentFileName)}"][data-source="${currentFileSource}"]`);
+                if (cur) cur.classList.add('active');
+            }
+        }
+
+        // 文件名搜索结果计数
+        const info = document.getElementById('searchResultInfo');
+        if (searchMode === 'files' && filter) {
+            const total = rtcliFiltered.length + serverFiltered.length;
+            info.textContent = `${total} 个文件匹配`;
+            info.style.display = 'block';
+        } else {
+            info.style.display = 'none';
+        }
+    }
+
+    function renderTreeGroup(source, title, files, totalCount, extra) {
+        if (files.length === 0 && totalCount === 0) return '';
+        const items = files.map(f => {
+            const isActive = (f.fileName === currentFileName && source === currentFileSource);
+            const icon = getFileIcon(f.fileName, f.category);
+            const hint = f.description ? ` title="${escapeHtml(f.description)}"` : '';
+            return `<div class="tree-file${isActive ? ' active' : ''}" data-file-name="${escapeHtml(f.fileName)}" data-source="${source}" data-display-name="${escapeHtml(f.displayName || '')}"${hint}>
+                <span class="tree-icon">${icon}</span>
+                <span class="tree-name">${escapeHtml(f.fileName)}</span>
+                ${f.displayName && f.displayName !== f.fileName ? `<span class="tree-display text-muted">${escapeHtml(f.displayName)}</span>` : ''}
+            </div>`;
+        }).join('');
+        const collapsed = files.length === 0 ? ' collapsed' : '';
+        return `<div class="tree-group${collapsed}">
+            <div class="tree-group-header">
+                <span class="tree-twisty">▾</span>
+                <span class="tree-icon">📁</span>
+                <span class="tree-name">${escapeHtml(title)}</span>
+                <span class="tree-count">${files.length}${files.length !== totalCount ? '/' + totalCount : ''}</span>
+                ${extra || ''}
+            </div>
+            <div class="tree-group-body">${items || '<div class="tree-placeholder text-muted small">无匹配</div>'}</div>
+        </div>`;
+    }
+
+    function getFileIcon(fileName, category) {
+        const ext = fileName.split('.').pop().toLowerCase();
+        if (ext === 'yml' || ext === 'yaml') return '⚙';
+        if (ext === 'json') return '{}';
+        if (ext === 'properties') return '🔧';
+        if (ext === 'txt') return '📄';
+        if (ext === 'png') return '🖼';
+        if (category === 'binary') return '🖼';
+        return '📄';
+    }
+
+    // === 选择文件 ===
+    function selectFile(fileName, source, displayName) {
+        if (fileName === currentFileName && source === currentFileSource) return;
+        if (isModified()) {
+            if (!confirm('当前文件有未保存的修改，切换文件将丢弃这些修改。是否继续？')) return;
+        }
+        currentFileName = fileName;
+        currentFileSource = source;
+        currentCategory = source === 'server'
+            ? (knownServerFiles.find(f => f.fileName === fileName)?.category || '')
+            : '';
+
+        document.getElementById('currentFileTitle').textContent = fileName;
+        const desc = source === 'rtcli'
+            ? (knownRtcliFiles.find(f => f.fileName === fileName)?.description || '')
+            : (knownServerFiles.find(f => f.fileName === fileName)?.description || '');
+        document.getElementById('currentFileDesc').textContent = desc ? '— ' + desc : '';
+
+        // 显示版本选择器(仅 server.properties)
+        const isProps = (fileName.toLowerCase() === 'server.properties');
+        document.getElementById('versionSelectorWrap').style.display = isProps ? '' : 'none';
+        if (isProps) loadPropertiesVersions();
+
+        // 对不支持界面编辑的文件类型(json/toml/log/text/binary)自动切换到文本编辑
+        const schemaSupported = source === 'rtcli' ||
+            currentCategory === 'yaml' ||
+            currentCategory === 'properties';
+        if (!schemaSupported && currentTab === 'ui') {
+            switchTab('text');
+        } else if (schemaSupported && currentTab === 'text' && !isModified()) {
+            // 从文本编辑切回界面编辑(如果支持)
+            switchTab('ui');
+        }
+
+        originalContent = '';
+        originalNodes = [];
+        renderFileTree();
+        reloadCurrent();
+    }
+
+    async function loadPropertiesVersions() {
+        if (propertiesSchema) {
+            fillVersionSelector(propertiesSchema.versions);
+            return;
+        }
+        try {
+            const res = await fetch('/api/serverfile/propertiesSchema');
+            const data = await res.json();
+            if (data.success) {
+                propertiesSchema = data;
+                fillVersionSelector(data.versions);
+            }
+        } catch (e) { }
+    }
+
+    function fillVersionSelector(versions) {
+        const sel = document.getElementById('versionSelector');
+        sel.innerHTML = '';
+        versions.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v;
+            sel.appendChild(opt);
+        });
+        // 确保当前版本在列表中，否则选最新的
+        if (versions.includes(currentVersion)) {
+            sel.value = currentVersion;
+        } else {
+            currentVersion = versions[versions.length - 1];
+            sel.value = currentVersion;
+        }
+        sel.onchange = () => {
+            currentVersion = sel.value;
+            if (currentFileName.toLowerCase() === 'server.properties' && currentTab === 'ui') {
+                reloadCurrent();
+            }
+        };
+    }
+
+    // === 加载配置(界面模式) ===
+    async function loadSchema() {
+        const container = document.getElementById('configItems');
+        container.innerHTML = '<div class="text-muted">加载中…</div>';
+
+        try {
+            let data;
+            if (currentFileSource === 'server') {
+                const url = `/api/serverfile?file=${encodeURIComponent(currentFileName)}&serverKey=${encodeURIComponent(currentServerKey)}&version=${encodeURIComponent(currentVersion)}`;
+                const res = await fetch(url);
+                data = await res.json();
+            } else {
+                const res = await fetch(`/api/config/schema?file=${encodeURIComponent(currentFileName)}`);
+                data = await res.json();
+            }
+
+            if (data.success) {
+                originalNodes = data.nodes || [];
+                originalContent = data.content || '';
+                buildItemSearchIndex();
+                renderConfig(originalNodes);
+                showStatus(`${currentFileName} 已加载`, 'success');
+            } else {
+                container.innerHTML = `<div class="text-danger">${escapeHtml(data.message || '加载失败')}</div>`;
+                showStatus(data.message || '加载失败', 'danger');
+            }
+        } catch (e) {
+            container.innerHTML = `<div class="text-danger">网络错误: ${escapeHtml(e.message)}</div>`;
+            showStatus('网络错误: ' + e.message, 'danger');
+        }
+    }
+
+    // === 加载配置(文本模式) ===
+    async function loadText() {
         const editor = document.getElementById('configEditor');
         const btn = document.getElementById('reloadBtn');
         btn.disabled = true;
-        editor.value = '加载中...';
+        editor.value = '加载中…';
+        highlightCode();
 
         try {
-            const res = await fetch('/api/config');
-            const data = await res.json();
+            let data;
+            if (currentFileSource === 'server') {
+                const res = await fetch(`/api/serverfile?file=${encodeURIComponent(currentFileName)}&serverKey=${encodeURIComponent(currentServerKey)}`);
+                data = await res.json();
+            } else {
+                const res = await fetch(`/api/config?file=${encodeURIComponent(currentFileName)}`);
+                data = await res.json();
+            }
             if (data.success) {
                 editor.value = data.content;
                 originalContent = data.content;
-                showStatus('配置已加载', 'success');
+                highlightCode();
+                showStatus(`${currentFileName} 已加载`, 'success');
             } else {
                 editor.value = '';
+                highlightCode();
                 showStatus(data.message || '加载失败', 'danger');
             }
         } catch (e) {
             editor.value = '';
+            highlightCode();
             showStatus('网络错误: ' + e.message, 'danger');
         } finally {
             btn.disabled = false;
         }
     }
 
-    async function saveConfig() {
+    // === 语法高亮 ===
+    function escapeHtmlForHighlight(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function highlightCode() {
+        const editor = document.getElementById('configEditor');
+        const pre = document.getElementById('codeHighlight');
+        if (!editor || !pre) return;
+
+        const text = editor.value || '';
+        const fileName = (currentFileName || '').toLowerCase();
+
+        let html;
+        if (fileName.endsWith('.properties') || fileName === 'server.properties') {
+            html = highlightProperties(text);
+        } else if (fileName.endsWith('.json')) {
+            html = highlightJson(text);
+        } else {
+            // YAML 和其他文本都走 YAML 高亮
+            html = highlightYaml(text);
+        }
+
+        // 末尾补一个空格确保空行高度正确
+        pre.innerHTML = html + '\n';
+    }
+
+    function highlightYaml(text) {
+        const lines = text.split('\n');
+        return lines.map(line => {
+            // 全行注释
+            let trimmed = line.trimStart();
+            let indent = line.length - trimmed.length;
+
+            // 空行
+            if (trimmed === '') return '';
+
+            // 全行注释 #...
+            if (trimmed.startsWith('#')) {
+                return ' '.repeat(indent) + `<span class="syn-comment">${escapeHtmlForHighlight(trimmed)}</span>`;
+            }
+
+            // 列表项 - key: value  或  - value
+            let listPrefix = '';
+            let rest = trimmed;
+            if (rest.startsWith('- ')) {
+                listPrefix = '<span class="syn-punct">-</span> ';
+                rest = rest.substring(2);
+                indent += 2;
+            } else if (rest === '-') {
+                return ' '.repeat(indent) + '<span class="syn-punct">-</span>';
+            }
+
+            // key: value  或  key:
+            const colonIdx = rest.indexOf(':');
+            if (colonIdx >= 0) {
+                const key = rest.substring(0, colonIdx);
+                const after = rest.substring(colonIdx);
+                let keyHtml = '';
+                let valueHtml = '';
+
+                // key 可能带引号
+                if (key.startsWith('"') && key.endsWith('"')) {
+                    keyHtml = `<span class="syn-string">${escapeHtmlForHighlight(key)}</span>`;
+                } else {
+                    keyHtml = `<span class="syn-key">${escapeHtmlForHighlight(key)}</span>`;
+                }
+
+                // 值部分
+                if (after.length > 1) {
+                    let val = after.substring(1).trim();
+                    valueHtml = `<span class="syn-punct">:</span> ` + highlightValue(val);
+                } else {
+                    valueHtml = `<span class="syn-punct">:</span>`;
+                }
+
+                return ' '.repeat(indent) + listPrefix + keyHtml + valueHtml;
+            }
+
+            // 纯值行(列表项值等)
+            return ' '.repeat(indent) + listPrefix + highlightValue(rest);
+        }).join('\n');
+    }
+
+    function highlightProperties(text) {
+        const lines = text.split('\n');
+        return lines.map(line => {
+            const trimmed = line.trimStart();
+            const indent = line.length - trimmed.length;
+            if (trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith('!')) {
+                return trimmed ? ' '.repeat(indent) + `<span class="syn-comment">${escapeHtmlForHighlight(trimmed)}</span>` : '';
+            }
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx >= 0) {
+                const key = trimmed.substring(0, eqIdx);
+                const val = trimmed.substring(eqIdx + 1);
+                return ' '.repeat(indent) + `<span class="syn-key">${escapeHtmlForHighlight(key)}</span><span class="syn-punct">=</span><span class="syn-value">${escapeHtmlForHighlight(val)}</span>`;
+            }
+            return ' '.repeat(indent) + escapeHtmlForHighlight(trimmed);
+        }).join('\n');
+    }
+
+    function highlightJson(text) {
+        // 简单 JSON 高亮
+        let escaped = escapeHtmlForHighlight(text);
+        // 字符串值 "..."
+        escaped = escaped.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"(\s*:)?/g, (match, str, colon) => {
+            if (colon) {
+                return `<span class="syn-key">"${str}"</span>${colon}`;
+            }
+            return `<span class="syn-string">"${str}"</span>`;
+        });
+        // 布尔和 null
+        escaped = escaped.replace(/\b(true|false|null)\b/g, '<span class="syn-bool">$1</span>');
+        // 数字
+        escaped = escaped.replace(/\b(-?\d+\.?\d*(?:[eE][+-]?\d+)?)\b/g, '<span class="syn-number">$1</span>');
+        // 标点
+        escaped = escaped.replace(/([{}\[\],])/g, '<span class="syn-punct">$1</span>');
+        return escaped;
+    }
+
+    function highlightValue(val) {
+        if (val === '') return '';
+        // 布尔
+        if (val === 'true' || val === 'false') return `<span class="syn-bool">${val}</span>`;
+        // null
+        if (val === 'null' || val === '~') return `<span class="syn-bool">${val}</span>`;
+        // 引号字符串
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            return `<span class="syn-string">${escapeHtmlForHighlight(val)}</span>`;
+        }
+        // 数字
+        if (/^-?\d+\.?\d*$/.test(val)) return `<span class="syn-number">${val}</span>`;
+        // 列表 [a, b, c]
+        if (val.startsWith('[') && val.endsWith(']')) {
+            return `<span class="syn-punct">[</span><span class="syn-value">${escapeHtmlForHighlight(val.slice(1, -1))}</span><span class="syn-punct">]</span>`;
+        }
+        // 注释行内 #...
+        const hashIdx = val.indexOf('#');
+        if (hashIdx >= 0) {
+            const v = val.substring(0, hashIdx);
+            const c = val.substring(hashIdx);
+            return `<span class="syn-value">${escapeHtmlForHighlight(v)}</span><span class="syn-comment">${escapeHtmlForHighlight(c)}</span>`;
+        }
+        return `<span class="syn-value">${escapeHtmlForHighlight(val)}</span>`;
+    }
+
+    // 同步滚动
+    document.addEventListener('DOMContentLoaded', () => {
+        const editor = document.getElementById('configEditor');
+        const pre = document.getElementById('codeHighlight');
+        if (editor && pre) {
+            editor.addEventListener('input', highlightCode);
+            editor.addEventListener('scroll', () => {
+                pre.scrollTop = editor.scrollTop;
+                pre.scrollLeft = editor.scrollLeft;
+            });
+        }
+    });
+
+    function reloadCurrent() {
+        if (!currentFileName) return;
+        if (currentTab === 'ui') loadSchema();
+        else loadText();
+    }
+
+    // === 渲染界面编辑 ===
+    function renderScalarItem(node) {
+        const path = escapeHtml(node.path);
+        const key = escapeHtml(node.key);
+        const type = node.valueType;
+        const value = node.value ?? '';
+        let control = '';
+
+        if (type === 'bool') {
+            const checked = (value === 'true' || value === true) ? 'checked' : '';
+            control = `
+                <div class="form-check form-switch m-0">
+                    <input class="form-check-input config-bool" type="checkbox" id="sw_${path}" data-path="${path}" data-type="bool" ${checked} />
+                    <label class="form-check-label small text-muted" for="sw_${path}">${value === 'true' || value === true ? '已启用' : '已禁用'}</label>
+                </div>`;
+        } else if (type === 'int') {
+            control = `<input type="number" class="form-control form-control-sm config-scalar" data-path="${path}" data-type="int" value="${escapeHtml(value)}" />`;
+        } else if (type === 'longstring') {
+            control = `<textarea class="form-control form-control-sm config-scalar" rows="3" data-path="${path}" data-type="longstring" spellcheck="false">${escapeHtml(value)}</textarea>`;
+        } else if (type === 'list') {
+            const items = (node.listValue || []).join('\n');
+            control = `<textarea class="form-control form-control-sm config-list" rows="4" data-path="${path}" data-type="list" placeholder="每行一项" spellcheck="false">${escapeHtml(items)}</textarea>`;
+        } else {
+            control = `<input type="text" class="form-control form-control-sm config-scalar" data-path="${path}" data-type="string" value="${escapeHtml(value)}" spellcheck="false" />`;
+        }
+
+        return `
+            <div class="config-item mb-3">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <label class="form-label mb-0 small fw-bold text-info">${key}</label>
+                    <small class="text-muted" style="font-size:0.7em;">${type}</small>
+                </div>
+                ${control}
+                ${commentToHtml(node.comment)}
+            </div>`;
+    }
+
+    function renderUnknownItem(node) {
+        const path = escapeHtml(node.path);
+        const key = escapeHtml(node.key);
+        const value = node.value ?? '';
+        const type = node.valueType;
+
+        let valueDisplay = '';
+        if ((type === 'object' || type === 'list') && (node.children && node.children.length > 0)) {
+            valueDisplay = `{${node.children.length} 个子项}`;
+        } else if (type === 'list') {
+            valueDisplay = `[${(node.listValue || []).length} 项]`;
+        } else if (value) {
+            const v = value.length > 80 ? value.substring(0, 80) + '...' : value;
+            valueDisplay = `<code class="text-warning">${escapeHtml(v)}</code>`;
+        } else {
+            valueDisplay = '<span class="text-muted">(空)</span>';
+        }
+
+        return `
+            <div class="config-item mb-2 p-2 border border-warning rounded bg-black">
+                <div class="d-flex justify-content-between align-items-center">
+                    <span class="small"><span class="text-warning">⚠</span> <strong>${key}</strong> <span class="text-muted" style="font-size:0.75em;">(${path})</span></span>
+                </div>
+                <div class="small text-muted mb-2 mt-1">${valueDisplay}</div>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-info" onclick="copyUnknownPath('${path}')">复制路径</button>
+                    <button class="btn btn-outline-warning" onclick="editUnknownAsText()">文本编辑</button>
+                </div>
+            </div>`;
+    }
+
+    function renderGroup(node, depth = 0) {
+        const title = escapeHtml(node.key);
+        let body = '';
+        let nestedGroups = '';
+
+        for (const child of (node.children || [])) {
+            if (child.isUnknown) continue;
+            if (child.children && child.children.length > 0) {
+                nestedGroups += renderGroup(child, depth + 1);
+            } else {
+                body += renderScalarItem(child);
+            }
+        }
+
+        const headerColor = depth === 0 ? 'bg-secondary' : 'bg-info text-dark';
+        const borderClass = depth === 0 ? 'border-secondary' : 'border-info';
+
+        return `
+            <div class="card ${borderClass} bg-dark text-light mb-3">
+                <div class="card-header py-2 ${headerColor}">
+                    <strong>${title}</strong>
+                </div>
+                <div class="card-body py-2">
+                    ${commentToHtml(node.comment) ? `<div class="mb-2">${commentToHtml(node.comment)}</div>` : ''}
+                    ${body}
+                    ${nestedGroups}
+                </div>
+            </div>`;
+    }
+
+    // server.properties 渲染：按 category 分组
+    function renderPropertiesConfig(nodes) {
+        const container = document.getElementById('configItems');
+        const knownNodes = nodes.filter(n => !n.isUnknown);
+        const unknowns = nodes.filter(n => n.isUnknown);
+
+        // 按 category 分组(从 schema 拿)
+        const categoryMap = propertiesSchema?.fields?.reduce((m, f) => { m[f.key] = f.category; return m; }, {}) || {};
+        const categoryNameMap = propertiesSchema?.categories || {};
+        const groups = {};
+        const order = ['basic', 'gameplay', 'players', 'network', 'remote', 'performance', 'deprecated'];
+
+        knownNodes.forEach(n => {
+            const cat = categoryMap[n.path] || 'other';
+            if (!groups[cat]) groups[cat] = [];
+            groups[cat].push(n);
+        });
+
+        let html = '';
+        order.forEach(cat => {
+            if (!groups[cat]) return;
+            const name = categoryNameMap[cat] || cat;
+            const body = groups[cat].map(renderScalarItem).join('');
+            html += `
+                <div class="card border-secondary bg-dark text-light mb-3">
+                    <div class="card-header py-2 bg-secondary"><strong>${escapeHtml(name)}</strong></div>
+                    <div class="card-body py-2">${body}</div>
+                </div>`;
+        });
+
+        // 其它已知项(无 category)
+        if (groups['other']) {
+            html += `
+                <div class="card border-secondary bg-dark text-light mb-3">
+                    <div class="card-header py-2 bg-secondary"><strong>其它</strong></div>
+                    <div class="card-body py-2">${groups['other'].map(renderScalarItem).join('')}</div>
+                </div>`;
+        }
+
+        // 未知项
+        if (unknowns.length > 0) {
+            html += `
+                <div class="card border-warning bg-dark text-light mb-3">
+                    <div class="card-header py-2 bg-warning text-dark">
+                        <strong>未识别字段 (${unknowns.length})</strong>
+                        <small class="ms-2">这些字段不在当前版本(${escapeHtml(currentVersion)})的 schema 中，可能是其它版本/插件添加</small>
+                    </div>
+                    <div class="card-body py-2">${unknowns.map(renderUnknownItem).join('')}</div>
+                </div>`;
+        }
+
+        container.innerHTML = html || '<div class="text-muted">无配置项</div>';
+    }
+
+    function collectUnknowns(nodes, out) {
+        for (const n of nodes) {
+            if (n.isUnknown) out.push(n);
+            if (n.children && n.children.length > 0) collectUnknowns(n.children, out);
+        }
+    }
+
+    function renderConfig(nodes) {
+        // server.properties 走分类渲染
+        if (currentFileName.toLowerCase() === 'server.properties') {
+            renderPropertiesConfig(nodes);
+            return;
+        }
+
+        const container = document.getElementById('configItems');
+        let html = '';
+        const unknowns = [];
+        collectUnknowns(nodes, unknowns);
+
+        for (const node of nodes) {
+            if (node.isUnknown) continue;
+            if (node.children && node.children.length > 0) {
+                html += renderGroup(node, 0);
+            } else {
+                html += `
+                    <div class="card border-secondary bg-dark text-light mb-3">
+                        <div class="card-body py-2">${renderScalarItem(node)}</div>
+                    </div>`;
+            }
+        }
+
+        if (unknowns.length > 0) {
+            html += `
+                <div class="card border-warning bg-dark text-light mb-3">
+                    <div class="card-header py-2 bg-warning text-dark">
+                        <strong>未识别配置项 (${unknowns.length})</strong>
+                        <small class="ms-2">这些项不在已知配置模型中，建议在文本编辑模式下检查或删除</small>
+                    </div>
+                    <div class="card-body py-2">${unknowns.map(renderUnknownItem).join('')}</div>
+                </div>`;
+        }
+
+        container.innerHTML = html || '<div class="text-muted">无配置项</div>';
+    }
+
+    // === 保存 ===
+    function saveCurrent() {
+        if (!currentFileName) return;
+        if (currentTab === 'ui') return saveSchema();
+        return saveText();
+    }
+
+    async function saveText() {
         const content = document.getElementById('configEditor').value;
         const btn = document.getElementById('saveBtn');
         btn.disabled = true;
 
         try {
-            const res = await fetch('/api/config/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content })
-            });
+            let res;
+            if (currentFileSource === 'server') {
+                res = await fetch('/api/serverfile/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        serverKey: currentServerKey,
+                        fileName: currentFileName,
+                        content: content,
+                        applySchema: false
+                    })
+                });
+            } else {
+                res = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileName: currentFileName, content })
+                });
+            }
             const data = await res.json();
             if (data.success) {
                 originalContent = content;
-                showStatus(data.message || '保存成功', 'success');
+                showStatus(data.message || '保存成功(未热重载)', 'success');
+            } else {
+                showStatus(data.message || '保存失败', 'danger');
+            }
+        } catch (e) {
+            showStatus('网络错误: ' + e.message, 'danger');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function saveSchema() {
+        const btn = document.getElementById('saveBtn');
+        btn.disabled = true;
+
+        const changes = [];
+        document.querySelectorAll('.config-bool').forEach(el => {
+            changes.push({ path: el.dataset.path, valueType: 'bool', value: el.checked ? 'true' : 'false' });
+        });
+        document.querySelectorAll('.config-scalar').forEach(el => {
+            changes.push({ path: el.dataset.path, valueType: el.dataset.type, value: el.value });
+        });
+        document.querySelectorAll('.config-list').forEach(el => {
+            const items = el.value.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+            changes.push({ path: el.dataset.path, valueType: 'list', listValue: items });
+        });
+
+        if (changes.length === 0) {
+            showStatus('没有可保存的项', 'warning');
+            btn.disabled = false;
+            return;
+        }
+
+        try {
+            let res;
+            if (currentFileSource === 'server') {
+                res = await fetch('/api/serverfile/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        serverKey: currentServerKey,
+                        fileName: currentFileName,
+                        applySchema: true,
+                        version: currentVersion,
+                        changes: changes
+                    })
+                });
+            } else {
+                res = await fetch('/api/config/saveSchema', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fileName: currentFileName, changes: changes })
+                });
+            }
+            const data = await res.json();
+            if (data.success) {
+                originalContent = data.content || originalContent;
+                showStatus(data.message || '保存成功(未热重载)', 'success');
+                setTimeout(loadSchema, 500);
             } else {
                 showStatus(data.message || '保存失败', 'danger');
             }
@@ -87,8 +940,7 @@
             });
             const data = await res.json();
             if (data.success) {
-                showStatus('热重载命令已发送', 'success');
-                setTimeout(loadConfig, 1500);
+                showStatus('热重载命令已发送(未保存)', 'success');
             } else {
                 showStatus(data.message || '热重载失败', 'danger');
             }
@@ -97,22 +949,134 @@
         }
     }
 
-    function showStatus(msg, type) {
-        const el = document.getElementById('statusMsg');
-        el.className = `p-2 alert alert-${type} mb-0`;
-        el.textContent = msg;
-        el.style.display = 'block';
-        setTimeout(() => { el.style.display = 'none'; }, 4000);
+    async function copyUnknownPath(path) {
+        try {
+            await navigator.clipboard.writeText(path);
+            RtPanel.showToast(`已复制路径: ${path}`, 'success', 2000);
+        } catch {
+            RtPanel.showToast('复制失败，请手动选择并复制', 'warning', 2000);
+        }
     }
 
-    // 离开前提示未保存
-    window.addEventListener('beforeunload', function(e) {
-        if (document.getElementById('configEditor').value !== originalContent) {
+    function editUnknownAsText() {
+        switchTab('text');
+        RtPanel.showToast('已切换到文本编辑模式，请手动定位并编辑未知项', 'info', 3000);
+    }
+
+    // === 搜索 ===
+    function onSearchInput() {
+        if (searchMode === 'files') {
+            renderFileTree();
+            closeItemSearch();
+        } else {
+            handleItemSearch();
+        }
+    }
+
+    document.getElementById('searchInput').addEventListener('input', onSearchInput);
+    document.getElementById('searchClearBtn').addEventListener('click', () => {
+        document.getElementById('searchInput').value = '';
+        onSearchInput();
+    });
+
+    // 构建当前文件配置项的搜索索引
+    function buildItemSearchIndex() {
+        itemSearchIndex = [];
+        const walk = (nodes, parentPath = '') => {
+            for (const n of nodes) {
+                itemSearchIndex.push({
+                    path: n.path,
+                    key: n.key,
+                    value: n.value ?? '',
+                    type: n.valueType,
+                    comment: n.comment || '',
+                    isUnknown: n.isUnknown
+                });
+                if (n.children && n.children.length > 0) walk(n.children, n.path);
+            }
+        };
+        walk(originalNodes);
+    }
+
+    function handleItemSearch() {
+        const q = (document.getElementById('searchInput').value || '').toLowerCase().trim();
+        const panel = document.getElementById('itemSearchPanel');
+        const results = document.getElementById('itemSearchResults');
+        const info = document.getElementById('searchResultInfo');
+
+        if (!q) {
+            closeItemSearch();
+            info.style.display = 'none';
+            return;
+        }
+        if (itemSearchIndex.length === 0) {
+            info.textContent = '请先加载一个配置文件';
+            info.style.display = 'block';
+            closeItemSearch();
+            return;
+        }
+
+        const matches = itemSearchIndex.filter(item =>
+            (item.key || '').toLowerCase().includes(q) ||
+            (item.path || '').toLowerCase().includes(q) ||
+            (item.value || '').toString().toLowerCase().includes(q) ||
+            (item.comment || '').toLowerCase().includes(q)
+        );
+
+        info.textContent = `${matches.length} 个配置项匹配`;
+        info.style.display = 'block';
+
+        if (matches.length === 0) {
+            results.innerHTML = '<div class="text-muted small p-2">无匹配项</div>';
+        } else {
+            results.innerHTML = matches.slice(0, 200).map(m => {
+                const hl = (s) => {
+                    const idx = (s || '').toLowerCase().indexOf(q);
+                    if (idx < 0) return escapeHtml(s);
+                    return escapeHtml(s.substring(0, idx)) +
+                        '<mark>' + escapeHtml(s.substring(idx, idx + q.length)) + '</mark>' +
+                        escapeHtml(s.substring(idx + q.length));
+                };
+                const v = (m.value || '').toString();
+                const valueDisplay = v.length > 60 ? v.substring(0, 60) + '…' : v;
+                return `<div class="item-search-row" onclick="jumpToItem('${escapeHtml(m.path)}')">
+                    <div class="item-search-key">${hl(m.key)} <span class="text-muted small">${hl(m.path)}</span></div>
+                    <div class="item-search-val text-muted small">${hl(valueDisplay)}</div>
+                </div>`;
+            }).join('') + (matches.length > 200 ? `<div class="text-muted small p-2">…还有 ${matches.length - 200} 项未显示</div>` : '');
+        }
+        panel.style.display = '';
+    }
+
+    function closeItemSearch() {
+        document.getElementById('itemSearchPanel').style.display = 'none';
+    }
+
+    function jumpToItem(path) {
+        // 滚动到对应输入控件
+        const el = document.querySelector(`[data-path="${CSS.escape(path)}"]`);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.focus && el.focus();
+            const item = el.closest('.config-item');
+            if (item) {
+                item.style.transition = 'background-color 0.3s';
+                item.style.backgroundColor = 'rgba(56, 189, 248, 0.18)';
+                setTimeout(() => { item.style.backgroundColor = ''; }, 1500);
+            }
+        }
+        closeItemSearch();
+    }
+
+    // === 离开提醒 ===
+    window.addEventListener('beforeunload', function (e) {
+        if (isModified()) {
             e.preventDefault();
             e.returnValue = '';
         }
     });
 
-    loadConfig();
+    // === 初始化 ===
+    loadFileList();
 </script>
 }

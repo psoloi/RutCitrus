@@ -5,23 +5,27 @@
 }
 
 <div class="text-center mt-4">
-    <h1 class="display-4 text-info">RtPanel</h1>
+    <h1 class="display-4 text-sky">RtPanel</h1>
     <p class="text-muted">RutCitrus 管理面板</p>
 </div>
 
-<div id="dashboardInfo" class="card bg-dark text-light border-secondary mt-4">
+<div id="dashboardInfo" class="card mt-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="text-sky fw-bold">系统概览</span>
+        <small class="text-muted">自动刷新</small>
+    </div>
     <div class="card-body">
-        <div class="row text-center">
+        <div class="row text-center g-3">
             <div class="col-md-3">
-                <div class="card bg-dark border-secondary">
+                <div class="card stat-card h-100">
                     <div class="card-body">
-                        <h5 id="statServer" class="text-info">-</h5>
-                        <small class="text-muted">服务器</small>
+                        <h5 id="statServer" class="text-sky">-</h5>
+                        <small class="text-muted">当前服务器</small>
                     </div>
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card bg-dark border-secondary">
+                <div class="card stat-card h-100">
                     <div class="card-body">
                         <h5 id="statStatus" class="text-warning">-</h5>
                         <small class="text-muted">运行状态</small>
@@ -29,7 +33,7 @@
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card bg-dark border-secondary">
+                <div class="card stat-card h-100">
                     <div class="card-body">
                         <h5 id="statClients" class="text-success">-</h5>
                         <small class="text-muted">已连接面板</small>
@@ -37,36 +41,108 @@
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card bg-dark border-secondary">
+                <div class="card stat-card h-100">
                     <div class="card-body">
-                        <h5 id="statExts" class="text-primary">-</h5>
+                        <h5 id="statExts" class="text-info">-</h5>
                         <small class="text-muted">扩展数量</small>
                     </div>
                 </div>
             </div>
         </div>
+        <div id="rtStatusContainer" class="mt-3">
+            <div class="border rounded p-3" style="background:var(--bg-input,#0d1b2e);font-family:Consolas,monospace;font-size:13px;line-height:1.6;" id="rtStatusContent">
+                <span class="text-muted">正在获取 rt status...</span>
+            </div>
+        </div>
     </div>
 </div>
 
-<div class="row mt-4">
+<div class="row mt-4 g-3">
+    <div class="col-md-6">
+        <div class="card stat-card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span class="text-sky fw-bold">主机 CPU</span>
+                <div class="d-flex align-items-center gap-2">
+                    <small class="text-muted" id="cpuCount">-</small>
+                    <button class="btn btn-sm btn-outline-secondary py-0 px-2 chart-toggle-btn" onclick="toggleChart('cpu')" title="切换折线图" id="cpuChartToggle">图表</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="d-flex align-items-baseline gap-2 mb-2">
+                    <span id="cpuUsage" class="display-6 text-sky fw-bold mb-0">--</span>
+                    <span class="text-muted">%</span>
+                </div>
+                <div class="progress cpu-progress">
+                    <div id="cpuBar" class="progress-bar bg-sky" role="progressbar" style="width: 0%;"></div>
+                </div>
+                <div id="cpuChartWrap" style="display:none;" class="mt-2">
+                    <canvas id="cpuChart" height="100"></canvas>
+                </div>
+                <small class="text-muted mt-2 d-block">主机处理器实时占用率</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card stat-card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span class="text-sky fw-bold">主机内存</span>
+                <div class="d-flex align-items-center gap-2">
+                    <small class="text-muted" id="memPercent">--</small>
+                    <button class="btn btn-sm btn-outline-secondary py-0 px-2 chart-toggle-btn" onclick="toggleChart('mem')" title="切换折线图" id="memChartToggle">图表</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="d-flex align-items-baseline gap-2 mb-2">
+                    <span id="memUsed" class="display-6 text-sky fw-bold mb-0">--</span>
+                    <span class="text-muted">/</span>
+                    <span id="memTotal" class="text-muted">-- GB</span>
+                </div>
+                <div class="progress mem-progress">
+                    <div id="memBar" class="progress-bar bg-sky" role="progressbar" style="width: 0%;"></div>
+                </div>
+                <div id="memChartWrap" style="display:none;" class="mt-2">
+                    <canvas id="memChart" height="100"></canvas>
+                </div>
+                <small class="text-muted mt-2 d-block">主机物理内存使用情况</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="text-sky fw-bold">服务端状态</span>
+        <div class="d-flex align-items-center gap-2">
+            <small class="text-muted">TPS/玩家/CPU 每 5 秒刷新</small>
+            <button class="btn btn-sm btn-outline-warning py-0 px-2" onclick="showHistoryModal()" title="查看历史数据">📜 历史</button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div id="serverTpsList" class="table-responsive">
+            <div class="text-muted text-center py-3">加载中...</div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4 g-3">
     <div class="col-md-4 mb-3">
-        <a href="/Console" class="card bg-dark text-light border-secondary text-decoration-none">
+        <a href="/Console" class="card stat-card text-decoration-none h-100">
             <div class="card-body text-center">
-                <h5 class="text-primary">控制台</h5>
+                <h5 class="text-info">控制台</h5>
                 <p class="text-muted small mb-0">执行命令、查看实时日志</p>
             </div>
         </a>
     </div>
     <div class="col-md-4 mb-3">
-        <a href="/Config" class="card bg-dark text-light border-secondary text-decoration-none">
+        <a href="/Config" class="card stat-card text-decoration-none h-100">
             <div class="card-body text-center">
                 <h5 class="text-warning">配置编辑</h5>
-                <p class="text-muted small mb-0">编辑 config.yml 并热重载</p>
+                <p class="text-muted small mb-0">编辑 YAML 配置并热重载</p>
             </div>
         </a>
     </div>
     <div class="col-md-4 mb-3">
-        <a href="/Extensions" class="card bg-dark text-light border-secondary text-decoration-none">
+        <a href="/Extensions" class="card stat-card text-decoration-none h-100">
             <div class="card-body text-center">
                 <h5 class="text-info">扩展管理</h5>
                 <p class="text-muted small mb-0">加载/卸载扩展插件</p>
@@ -75,8 +151,495 @@
     </div>
 </div>
 
+<!-- 历史数据弹窗 -->
+<div class="modal-overlay" id="historyModal" style="display:none;">
+    <div class="modal-box" style="max-width:960px;">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-2">
+                <h5 class="mb-0">历史数据</h5>
+                <select class="form-select form-select-sm" id="historyRange" onchange="updateHistoryChart()" style="width:auto;">
+                    <option value="10m">最近 10 分钟</option>
+                    <option value="15m">最近 15 分钟</option>
+                    <option value="30m">最近 30 分钟</option>
+                    <option value="45m">最近 45 分钟</option>
+                    <option value="1h">最近 1 小时</option>
+                    <option value="2h">最近 2 小时</option>
+                    <option value="3h">最近 3 小时</option>
+                    <option value="6h">最近 6 小时</option>
+                    <option value="12h">最近 12 小时</option>
+                    <option value="24h">最近 24 小时</option>
+                    <option value="48h">最近 48 小时</option>
+                    <option value="72h">最近 72 小时</option>
+                    <option value="all">全部</option>
+                </select>
+                <select class="form-select form-select-sm" id="historyServer" onchange="updateHistoryChart()" style="width:auto;">
+                    <option value="">所有服务端</option>
+                </select>
+            </div>
+            <div class="d-flex align-items-center gap-3 flex-wrap" id="historyLegend">
+                <div class="form-check form-check-inline m-0"><input type="checkbox" class="form-check-input legend-toggle" data-key="players" checked onchange="updateHistoryChart()"/><label class="form-check-label small"><span style="color:#3b82f6;">●</span> 玩家</label></div>
+                <div class="form-check form-check-inline m-0"><input type="checkbox" class="form-check-input legend-toggle" data-key="tps" checked onchange="updateHistoryChart()"/><label class="form-check-label small"><span style="color:#10b981;">●</span> TPS</label></div>
+                <div class="form-check form-check-inline m-0"><input type="checkbox" class="form-check-input legend-toggle" data-key="mcCpu" checked onchange="updateHistoryChart()"/><label class="form-check-label small"><span style="color:#f59e0b;">●</span> 服务器CPU</label></div>
+                <div class="form-check form-check-inline m-0"><input type="checkbox" class="form-check-input legend-toggle" data-key="mcMem" checked onchange="updateHistoryChart()"/><label class="form-check-label small"><span style="color:#ef4444;">●</span> 服务器内存</label></div>
+                <div class="form-check form-check-inline m-0"><input type="checkbox" class="form-check-input legend-toggle" data-key="hostCpu" checked onchange="updateHistoryChart()"/><label class="form-check-label small"><span style="color:#8b5cf6;">●</span> 主机CPU</label></div>
+                <div class="form-check form-check-inline m-0"><input type="checkbox" class="form-check-input legend-toggle" data-key="hostMem" checked onchange="updateHistoryChart()"/><label class="form-check-label small"><span style="color:#06b6d4;">●</span> 主机内存</label></div>
+            </div>
+        </div>
+        <div style="position:relative;height:400px;">
+            <canvas id="historyChart"></canvas>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mt-2">
+            <small class="text-muted" id="historyTimeRange">-</small>
+            <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('historyModal').style.display='none'">关闭</button>
+        </div>
+    </div>
+</div>
+
 @section Scripts {
 <script>
+    function fmt(n, d = 1) {
+        if (n == null || n < 0 || !isFinite(n)) return '--';
+        return Number(n).toFixed(d);
+    }
+
+    function tpsColor(tps) {
+        if (tps < 0) return 'text-muted';
+        if (tps >= 19) return 'text-success';
+        if (tps >= 15) return 'text-warning';
+        return 'text-danger';
+    }
+
+    function tpsBadge(tps) {
+        if (tps < 0) return '<span class="badge bg-secondary">N/A</span>';
+        const cls = tps >= 19 ? 'bg-success' : (tps >= 15 ? 'bg-warning' : 'bg-danger');
+        return `<span class="badge ${cls}">${tps.toFixed(1)}</span>`;
+    }
+
+    function escapeHtml(s) {
+        return (s ?? '').toString()
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function renderServerTps(servers) {
+        const container = document.getElementById('serverTpsList');
+        if (!servers || servers.length === 0) {
+            container.innerHTML = '<div class="text-muted text-center py-3">未配置服务端</div>';
+            return;
+        }
+
+        let html = `<table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>服务端</th>
+                    <th>状态</th>
+                    <th class="text-center">玩家</th>
+                    <th class="text-center">TPS (1m/5m/15m)</th>
+                    <th class="text-end">MC CPU</th>
+                    <th class="text-end">MC 内存</th>
+                    <th class="text-end">PID</th>
+                </tr>
+            </thead>
+            <tbody>`;
+        for (const s of servers) {
+            const statusBadge = s.isRunning
+                ? '<span class="badge bg-success">运行中</span>'
+                : '<span class="badge bg-secondary">未运行</span>';
+
+            const playerCell = s.isRunning && s.playerCount >= 0
+                ? `<span class="text-info fw-bold">${s.playerCount}</span><span class="text-muted"> / ${s.playerMax >= 0 ? s.playerMax : '?'}</span>`
+                : '<span class="text-muted">-</span>';
+
+            let tpsCell;
+            if (s.isRunning) {
+                if (s.tps1m >= 0) {
+                    tpsCell = `${tpsBadge(s.tps1m)}`;
+                    if (s.tps5m >= 0 || s.tps15m >= 0) {
+                        tpsCell += ` <small class="text-muted">${fmt(s.tps5m, 1)} / ${fmt(s.tps15m, 1)}</small>`;
+                    }
+                } else {
+                    tpsCell = `<small class="text-muted">${escapeHtml(s.tpsStatus || '未获取')}</small>`;
+                }
+            } else {
+                tpsCell = '<span class="text-muted">-</span>';
+            }
+
+            const cpuCell = s.isRunning && s.mcCpuUsage >= 0
+                ? `<span class="${s.mcCpuUsage >= 80 ? 'text-danger' : (s.mcCpuUsage >= 50 ? 'text-warning' : 'text-success')}">${fmt(s.mcCpuUsage, 1)}%</span>`
+                : '<span class="text-muted">-</span>';
+
+            const memCell = s.isRunning && s.mcMemoryMb > 0
+                ? `<span class="text-info">${fmt(s.mcMemoryMb, 0)} MB</span>`
+                : '<span class="text-muted">-</span>';
+            const pidCell = s.isRunning && s.mcPid > 0
+                ? `<span class="text-muted">${s.mcPid}</span>`
+                : '<span class="text-muted">-</span>';
+            html += `<tr>
+                <td><strong>${escapeHtml(s.serverName)}</strong><br><small class="text-muted">${escapeHtml(s.serverKey)}</small></td>
+                <td>${statusBadge}</td>
+                <td class="text-center">${playerCell}</td>
+                <td class="text-center">${tpsCell}</td>
+                <td class="text-end">${cpuCell}</td>
+                <td class="text-end">${memCell}</td>
+                <td class="text-end">${pidCell}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+
+        // 更新历史弹窗的服务端下拉
+        const sel = document.getElementById('historyServer');
+        const curVal = sel.value;
+        sel.innerHTML = '<option value="">所有服务端</option>';
+        servers.forEach(s => {
+            sel.innerHTML += `<option value="${escapeHtml(s.serverKey)}">${escapeHtml(s.serverName)}</option>`;
+        });
+        sel.value = curVal;
+    }
+
+    // === 时间序列数据收集 (持久化到 localStorage, 跨页面不丢失) ===
+    const STORAGE_KEY = 'statsHistory';
+    let RETENTION_HOURS = 2;        // 保留时长(小时), 从 panel_data.json 同步
+    let STORAGE_INTERVAL_MS = 5000; // 存储间隔(毫秒)
+    let statsHistory = [];          // [{t, hostCpu, hostMemUsed, hostMemTotal, servers:[...]}]
+    let lastSaveTime = 0;
+
+    // 从 localStorage 恢复历史数据
+    function loadStatsHistory() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const arr = JSON.parse(raw);
+                if (Array.isArray(arr)) {
+                    // 恢复 Date 对象
+                    statsHistory = arr.map(p => ({ ...p, t: new Date(p.t) }));
+                    // 清理过期数据
+                    trimHistory();
+                }
+            }
+        } catch (e) { }
+    }
+
+    // 计算存储间隔(根据保留时长自动降采样)
+    function calcStorageInterval() {
+        if (RETENTION_HOURS <= 2) return 5000;    // 5s
+        if (RETENTION_HOURS <= 6) return 15000;   // 15s
+        if (RETENTION_HOURS <= 12) return 30000;  // 30s
+        if (RETENTION_HOURS <= 24) return 60000;  // 1min
+        return 120000;                             // 2min (48-72h)
+    }
+
+    // 清理过期数据
+    function trimHistory() {
+        const maxMs = RETENTION_HOURS * 3600 * 1000;
+        const cutoff = Date.now() - maxMs;
+        statsHistory = statsHistory.filter(p => p.t.getTime() >= cutoff);
+    }
+
+    // 保存到 localStorage (节流)
+    function saveStatsHistory() {
+        const now = Date.now();
+        if (now - lastSaveTime < 30000) return; // 最多每 30s 写一次
+        lastSaveTime = now;
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(statsHistory));
+        } catch (e) {
+            // 存储空间不足, 删除一半旧数据后重试
+            if (statsHistory.length > 100) {
+                statsHistory = statsHistory.slice(Math.floor(statsHistory.length / 2));
+                try { localStorage.setItem(STORAGE_KEY, JSON.stringify(statsHistory)); } catch { }
+            }
+        }
+    }
+
+    // 从 panel_data.json 同步保留时长设置
+    async function syncRetentionSetting() {
+        try {
+            const resp = await fetch('/api/system/paneldata').then(r => r.json());
+            if (resp.success && resp.jsonData) {
+                const data = JSON.parse(resp.jsonData);
+                if (data.historyRetention) {
+                    RETENTION_HOURS = data.historyRetention;
+                    STORAGE_INTERVAL_MS = calcStorageInterval();
+                    trimHistory();
+                }
+            }
+        } catch { }
+    }
+
+    function recordStats(data) {
+        const now = Date.now();
+        // 按存储间隔采集(避免高频存储)
+        if (statsHistory.length > 0) {
+            const last = statsHistory[statsHistory.length - 1];
+            if (now - last.t.getTime() < STORAGE_INTERVAL_MS) return;
+        }
+
+        const point = {
+            t: new Date(now),
+            hostCpu: data.cpuUsage,
+            hostMemUsed: data.memoryUsedMb,
+            hostMemTotal: data.memoryTotalMb,
+            servers: (data.servers || []).map(s => ({
+                key: s.serverKey, name: s.serverName, isRunning: s.isRunning,
+                players: s.isRunning ? s.playerCount : -1,
+                tps1m: s.isRunning ? s.tps1m : -1,
+                mcCpu: s.isRunning ? s.mcCpuUsage : -1,
+                mcMem: s.isRunning ? s.mcMemoryMb : -1
+            }))
+        };
+        statsHistory.push(point);
+        trimHistory();
+        saveStatsHistory();
+    }
+
+    // === CPU/内存实时折线图 ===
+    let cpuChart = null, memChart = null;
+    const REALTIME_POINTS = 60; // 实时图显示最近 60 个点(5 分钟)
+
+    function initRealtimeCharts() {
+        const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        const gridColor = isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.08)';
+        const textColor = isLight ? '#475569' : '#8b9bb4';
+
+        const commonOpts = {
+            responsive: true, animation: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { display: false },
+                y: { beginAtZero: true, ticks: { color: textColor, font: { size: 10 } }, grid: { color: gridColor } }
+            },
+            elements: { point: { radius: 0 }, line: { borderWidth: 2, tension: 0.3 } }
+        };
+
+        cpuChart = new Chart(document.getElementById('cpuChart'), {
+            type: 'line',
+            data: { labels: [], datasets: [{ data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true }] },
+            options: { ...commonOpts, scales: { ...commonOpts.scales, y: { ...commonOpts.scales.y, max: 100 } } }
+        });
+
+        memChart = new Chart(document.getElementById('memChart'), {
+            type: 'line',
+            data: { labels: [], datasets: [{ data: [], borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.1)', fill: true }] },
+            options: { ...commonOpts, scales: { ...commonOpts.scales, y: { ...commonOpts.scales.y, ticks: { ...commonOpts.scales.y.ticks, callback: function(v) { return v + ' GB'; } } } } }
+        });
+    }
+
+    function updateRealtimeCharts() {
+        if (!cpuChart || !memChart) return;
+        const recent = statsHistory.slice(-REALTIME_POINTS);
+        const labels = recent.map(p => p.t.toLocaleTimeString('zh-CN', { hour12: false }));
+        cpuChart.data.labels = labels;
+        cpuChart.data.datasets[0].data = recent.map(p => p.hostCpu);
+        cpuChart.update('none');
+        memChart.data.labels = labels;
+        memChart.data.datasets[0].data = recent.map(p => p.hostMemTotal > 0 ? +(p.hostMemUsed / 1024).toFixed(2) : 0);
+        memChart.update('none');
+    }
+
+    function toggleChart(type) {
+        if (type === 'cpu') {
+            const wrap = document.getElementById('cpuChartWrap');
+            const visible = wrap.style.display !== 'none';
+            wrap.style.display = visible ? 'none' : '';
+            if (!visible && !cpuChart) initRealtimeCharts();
+            if (!visible) updateRealtimeCharts();
+        } else {
+            const wrap = document.getElementById('memChartWrap');
+            const visible = wrap.style.display !== 'none';
+            wrap.style.display = visible ? 'none' : '';
+            if (!visible && !memChart) initRealtimeCharts();
+            if (!visible) updateRealtimeCharts();
+        }
+    }
+
+    // === rt status (通过底层方法获取, 非命令执行) ===
+    async function loadRtStatus() {
+        const content = document.getElementById('rtStatusContent');
+        try {
+            const resp = await fetch('/api/system/rtstatus').then(r => r.json());
+            if (resp.success) {
+                const items = [
+                    ['管理端口', resp.managementPortRunning],
+                    ['已连接面板', resp.connectedClients + ' 个'],
+                    ['当前服务端', resp.currentServerKey + ' (' + resp.currentServerName + ')'],
+                    ['MC 模式', resp.mcMode],
+                    ['MC 服务端', resp.mcRunning ? '运行中' : (resp.mcConnected ? '已连接' : '未运行')],
+                    ['自动提示', resp.autoTipsRunning],
+                    ['AI 自动化', resp.aiRunning],
+                    ['调度器', resp.schedulerRunning]
+                ];
+                let html = '<div class="status-list">';
+                for (const [key, val] of items) {
+                    let valStr = String(val);
+                    let valHtml = escapeHtml(valStr);
+                    if (val === true || valStr === '运行中' || valStr === '已连接') valHtml = `<span class="badge bg-success">${escapeHtml(valStr)}</span>`;
+                    else if (val === false || valStr === '未运行' || valStr === '已停止') valHtml = `<span class="badge bg-danger">${escapeHtml(valStr)}</span>`;
+                    html += `<div class="d-flex justify-content-between border-bottom py-1 px-2"><span class="text-muted">${escapeHtml(key)}</span><span>${valHtml}</span></div>`;
+                }
+                html += '</div>';
+                content.innerHTML = html;
+            } else {
+                content.innerHTML = '<span class="text-danger">获取失败</span>';
+            }
+        } catch (e) {
+            content.innerHTML = '<span class="text-danger">请求失败</span>';
+        }
+    }
+
+    // === 历史弹窗 ===
+    let historyChart = null;
+
+    function showHistoryModal() {
+        document.getElementById('historyModal').style.display = 'flex';
+        if (!historyChart) {
+            const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+            const gridColor = isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.08)';
+            const textColor = isLight ? '#475569' : '#8b9bb4';
+            historyChart = new Chart(document.getElementById('historyChart'), {
+                type: 'line',
+                data: { labels: [], datasets: [] },
+                options: {
+                    responsive: true, animation: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { color: textColor, font: { size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 }, grid: { color: gridColor } },
+                        y: { beginAtZero: true, ticks: { color: textColor, font: { size: 10 } }, grid: { color: gridColor } }
+                    },
+                    elements: { point: { radius: 0 }, line: { borderWidth: 1.5, tension: 0.3 } }
+                }
+            });
+        }
+        updateHistoryChart();
+    }
+
+    function getHistoryRangeMs(range) {
+        const map = {
+            '10m': 10*60*1000, '15m': 15*60*1000, '30m': 30*60*1000, '45m': 45*60*1000,
+            '1h': 60*60*1000, '2h': 2*60*60*1000, '3h': 3*60*60*1000,
+            '6h': 6*60*60*1000, '12h': 12*60*60*1000, '24h': 24*60*60*1000,
+            '48h': 48*60*60*1000, '72h': 72*60*60*1000
+        };
+        return map[range] || 0;
+    }
+
+    function updateHistoryChart() {
+        if (!historyChart) return;
+        const range = document.getElementById('historyRange').value;
+        const serverFilter = document.getElementById('historyServer').value;
+        const showKeys = {};
+        document.querySelectorAll('.legend-toggle').forEach(cb => { showKeys[cb.dataset.key] = cb.checked; });
+
+        // 筛选时间范围
+        let data = statsHistory;
+        const rangeMs = getHistoryRangeMs(range);
+        if (rangeMs > 0) {
+            const cutoff = new Date(Date.now() - rangeMs);
+            data = data.filter(p => p.t >= cutoff);
+        }
+
+        if (data.length === 0) {
+            historyChart.data.labels = [];
+            historyChart.data.datasets = [];
+            historyChart.update('none');
+            document.getElementById('historyTimeRange').textContent = '无数据';
+            return;
+        }
+
+        const labels = data.map(p => p.t.toLocaleTimeString('zh-CN', { hour12: false }));
+        const datasets = [];
+
+        // 主机 CPU
+        if (showKeys.hostCpu) {
+            datasets.push({ label: '主机CPU(%)', data: data.map(p => p.hostCpu), borderColor: '#8b5cf6', backgroundColor: 'transparent', yAxisID: 'y' });
+        }
+        // 主机内存 (GB)
+        if (showKeys.hostMem) {
+            datasets.push({ label: '主机内存(GB)', data: data.map(p => p.hostMemTotal > 0 ? +(p.hostMemUsed / 1024).toFixed(2) : null), borderColor: '#06b6d4', backgroundColor: 'transparent', yAxisID: 'y' });
+        }
+
+        // 按服务端筛选
+        const targetServers = serverFilter
+            ? data[0].servers.filter(s => s.key === serverFilter)
+            : data[data.length - 1].servers;
+
+        targetServers.forEach((srv, idx) => {
+            const srvKey = srv.key;
+            const srvName = srv.name || srvKey;
+            // 玩家
+            if (showKeys.players) {
+                datasets.push({ label: `${srvName}-玩家`, data: data.map(p => { const s = p.servers.find(x => x.key === srvKey); return s ? s.players : null; }), borderColor: '#3b82f6', backgroundColor: 'transparent', yAxisID: 'y' });
+            }
+            // TPS
+            if (showKeys.tps) {
+                datasets.push({ label: `${srvName}-TPS`, data: data.map(p => { const s = p.servers.find(x => x.key === srvKey); return s ? s.tps1m : null; }), borderColor: '#10b981', backgroundColor: 'transparent', yAxisID: 'y' });
+            }
+            // 服务器 CPU
+            if (showKeys.mcCpu) {
+                datasets.push({ label: `${srvName}-CPU(%)`, data: data.map(p => { const s = p.servers.find(x => x.key === srvKey); return s ? s.mcCpu : null; }), borderColor: '#f59e0b', backgroundColor: 'transparent', yAxisID: 'y' });
+            }
+            // 服务器内存 (MB → GB)
+            if (showKeys.mcMem) {
+                datasets.push({ label: `${srvName}-内存(GB)`, data: data.map(p => { const s = p.servers.find(x => x.key === srvKey); return s && s.mcMem > 0 ? +(s.mcMem / 1024).toFixed(2) : null; }), borderColor: '#ef4444', backgroundColor: 'transparent', yAxisID: 'y' });
+            }
+        });
+
+        historyChart.data.labels = labels;
+        historyChart.data.datasets = datasets;
+        historyChart.update('none');
+
+        const first = data[0].t.toLocaleString('zh-CN', { hour12: false });
+        const last = data[data.length - 1].t.toLocaleString('zh-CN', { hour12: false });
+        document.getElementById('historyTimeRange').textContent = `${first} → ${last} (${data.length} 个数据点)`;
+    }
+
+    // === 数据加载 ===
+    async function loadSystemStats() {
+        try {
+            const res = await fetch('/api/system/stats');
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data.success) return;
+
+            recordStats(data);
+
+            const cpu = data.cpuUsage;
+            document.getElementById('cpuUsage').textContent = cpu >= 0 ? fmt(cpu, 1) : '--';
+            const cpuBar = document.getElementById('cpuBar');
+            cpuBar.style.width = (cpu > 0 ? Math.min(100, cpu) : 0) + '%';
+            if (cpu >= 80) cpuBar.className = 'progress-bar bg-danger';
+            else if (cpu >= 60) cpuBar.className = 'progress-bar bg-warning';
+            else cpuBar.className = 'progress-bar bg-sky';
+
+            const used = data.memoryUsedMb;
+            const total = data.memoryTotalMb;
+            if (used >= 0 && total > 0) {
+                document.getElementById('memUsed').innerHTML = fmt(used / 1024, 2) + ' <small class="text-muted">GB</small>';
+                document.getElementById('memTotal').textContent = fmt(total / 1024, 2) + ' GB';
+                const pct = (used / total) * 100;
+                document.getElementById('memPercent').textContent = fmt(pct, 0) + '%';
+                const memBar = document.getElementById('memBar');
+                memBar.style.width = Math.min(100, pct) + '%';
+                if (pct >= 90) memBar.className = 'progress-bar bg-danger';
+                else if (pct >= 70) memBar.className = 'progress-bar bg-warning';
+                else memBar.className = 'progress-bar bg-sky';
+            } else {
+                document.getElementById('memUsed').textContent = '--';
+                document.getElementById('memTotal').textContent = '不支持';
+                document.getElementById('memPercent').textContent = '--';
+            }
+
+            renderServerTps(data.servers);
+
+            // 更新实时图表
+            if (cpuChart || memChart) updateRealtimeCharts();
+
+            // 如果历史弹窗打开, 同步更新
+            if (document.getElementById('historyModal').style.display === 'flex') updateHistoryChart();
+        } catch (e) { }
+    }
+
     async function loadDashboard() {
         try {
             const res = await fetch('/api/auth/status');
@@ -90,7 +653,19 @@
             }
         } catch (e) { }
     }
+
+    loadStatsHistory();
+    syncRetentionSetting();
     loadDashboard();
+    loadSystemStats();
+    loadRtStatus();
     setInterval(loadDashboard, 5000);
+    setInterval(loadSystemStats, 5000);
+    setInterval(loadRtStatus, 30000);
+
+    // 页面卸载前保存历史数据
+    window.addEventListener('beforeunload', () => {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(statsHistory)); } catch { }
+    });
 </script>
 }

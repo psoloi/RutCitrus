@@ -84,14 +84,15 @@ namespace RtCli.Modules.Function
             // 多服务器选择
             if (Config.App.ServerList.Count > 1)
             {
+                const string addNewMarker = "+ 添加新服务端";
                 var serverChoices = Config.App.ServerList.Keys.ToList();
-                serverChoices.Add("[添加新服务端]");
+                serverChoices.Add(addNewMarker);
                 var selected = AnsiConsole.Prompt(
                     new SelectionPrompt<string>()
                         .Title("检测到多个服务端配置，请选择要配置的服务端：")
                         .AddChoices(serverChoices));
 
-                if (selected == "[添加新服务端]")
+                if (selected == addNewMarker)
                 {
                     string newKey = AnsiConsole.Ask<string>("请输入新服务端标识（英文）：");
                     if (!string.IsNullOrWhiteSpace(newKey) && !Config.App.ServerList.ContainsKey(newKey))
@@ -122,7 +123,7 @@ namespace RtCli.Modules.Function
             string javaResult = Checker.CheckJava();
             if (javaResult.StartsWith(I18n.Get("checker_nojava")))
             {
-                Output.Log("未检测到 Java 环境，请先安装 JDK 17 或更高版本。", 3, ThisProgramName);
+                Output.Log("未检测到 Java 环境，请先安装 JDK 17 或更高版本。如果非安装则请设置Java环境变量", 3, ThisProgramName);
 
                 var table = new Table()
                     .Border(TableBorder.Rounded)
@@ -320,11 +321,43 @@ namespace RtCli.Modules.Function
             string ThisProgramName = "Guide";
             try
             {
+                // PaperMC Fill v3 API 要求设置 User-Agent
+                if (!_httpClient.DefaultRequestHeaders.Contains("User-Agent"))
+                {
+                    _httpClient.DefaultRequestHeaders.Add("User-Agent",
+                        $"RtCli/{Program.RtCliVersion} (https://github.com/RutCitrus/RtCli)");
+                }
+
+                const string apiBase = "https://fill.papermc.io/v3";
+
+                // 1. 获取版本列表 (v3: versions 是字典，键=主版本号，值=子版本数组)
                 Output.Log($"正在获取 {projectId} 版本列表...", 1, ThisProgramName);
 
-                string projectJson = await _httpClient.GetStringAsync($"https://api.papermc.io/v2/projects/{projectId}");
+                string projectJson = await _httpClient.GetStringAsync($"{apiBase}/projects/{projectId}");
                 var project = JObject.Parse(projectJson);
-                var allVersions = project["versions"]!.Select(v => v.ToString()).ToList();
+                var versionsObj = project["versions"] as JObject;
+
+                if (versionsObj == null)
+                {
+                    Output.Log($"未找到 {projectId} 的版本列表。", 2, ThisProgramName);
+                    return null;
+                }
+
+                var allVersions = new List<string>();
+                foreach (var prop in versionsObj.Properties())
+                {
+                    if (prop.Value is JArray arr)
+                    {
+                        foreach (var v in arr)
+                            allVersions.Add(v.ToString());
+                    }
+                }
+
+                if (!allVersions.Any())
+                {
+                    Output.Log($"未找到 {projectId} 的可用版本。", 2, ThisProgramName);
+                    return null;
+                }
 
                 var availablePopular = allVersions.Where(v => GetPopularVersions().Contains(v)).ToList();
                 if (!availablePopular.Any())
@@ -333,7 +366,7 @@ namespace RtCli.Modules.Function
                 }
 
                 var versionChoices = new List<string>();
-                versionChoices.Add($"[[最新版]] {allVersions.Last()}");
+                versionChoices.Add($"[[最新版]] {allVersions[0]}");
                 foreach (var v in availablePopular)
                 {
                     versionChoices.Add(v);
@@ -347,35 +380,58 @@ namespace RtCli.Modules.Function
                 string version;
                 if (selectedVersion.StartsWith("[[最新版]] "))
                 {
-                    version = allVersions.Last();
+                    version = allVersions[0];
                 }
                 else
                 {
                     version = selectedVersion;
                 }
 
-                string buildsJson = await _httpClient.GetStringAsync($"https://api.papermc.io/v2/projects/{projectId}/versions/{version}");
-                var buildsData = JObject.Parse(buildsJson);
-                var builds = buildsData["builds"]!.Select(b => b.ToString()).ToList();
+                // 2. 获取构建列表 (v3: 直接返回数组，含 channel 和 downloads)
+                Output.Log($"正在获取 {projectId} {version} 构建列表...", 1, ThisProgramName);
+                string buildsJson = await _httpClient.GetStringAsync($"{apiBase}/projects/{projectId}/versions/{version}/builds");
+                var buildsArray = JArray.Parse(buildsJson);
 
-                if (!builds.Any())
+                if (buildsArray.Count == 0)
                 {
                     Output.Log($"版本 {version} 没有可用的构建。", 2, ThisProgramName);
                     return null;
                 }
 
-                string latestBuild = builds.Last();
+                // 优先选择 STABLE 渠道构建 (Velocity 使用 RECOMMENDED)
+                var stableBuilds = buildsArray
+                    .Where(b => b["channel"]?.ToString() == "STABLE")
+                    .ToList();
+                var recommendedBuilds = buildsArray
+                    .Where(b => b["channel"]?.ToString() == "RECOMMENDED")
+                    .ToList();
 
-                string buildDetailJson = await _httpClient.GetStringAsync($"https://api.papermc.io/v2/projects/{projectId}/versions/{version}/builds/{latestBuild}");
-                var buildDetail = JObject.Parse(buildDetailJson);
-                string? fileName = buildDetail["downloads"]?["application"]?["name"]?.ToString();
+                JToken? selectedBuild;
+                if (stableBuilds.Any())
+                    selectedBuild = stableBuilds.Last();
+                else if (recommendedBuilds.Any())
+                    selectedBuild = recommendedBuilds.Last();
+                else
+                    selectedBuild = buildsArray.Last();
+
+                int buildId = selectedBuild["id"]?.ToObject<int>() ?? 0;
+                string channel = selectedBuild["channel"]?.ToString() ?? "UNKNOWN";
+
+                // v3: 下载链接直接在构建信息中，无需手动构造
+                string? downloadUrl = selectedBuild["downloads"]?["server:default"]?["url"]?.ToString();
+                string? fileName = selectedBuild["downloads"]?["server:default"]?["name"]?.ToString();
+
+                if (string.IsNullOrEmpty(downloadUrl))
+                {
+                    Output.Log($"构建 {buildId} 没有可用的下载链接。", 2, ThisProgramName);
+                    return null;
+                }
 
                 if (string.IsNullOrEmpty(fileName))
                 {
-                    fileName = $"{projectId}-{version}-{latestBuild}.jar";
+                    fileName = $"{projectId}-{version}-{buildId}.jar";
                 }
 
-                string downloadUrl = $"https://api.papermc.io/v2/projects/{projectId}/versions/{version}/builds/{latestBuild}/downloads/{fileName}";
                 string jarName = $"{projectId}-{version}.jar";
                 string jarPath = Path.Combine(workPath, jarName);
 
@@ -385,12 +441,13 @@ namespace RtCli.Modules.Function
                     return jarName;
                 }
 
-                bool downloaded = await DownloadServerJar(downloadUrl, jarPath, $"{projectId} {version} (build {latestBuild})");
+                Output.Log($"选择构建: {buildId} (渠道: {channel})", 1, ThisProgramName);
+                bool downloaded = await DownloadServerJar(downloadUrl, jarPath, $"{projectId} {version} (build {buildId})");
                 return downloaded ? jarName : null;
             }
             catch (Exception ex)
             {
-                Output.Log($"获取 {projectId} 版本列表失败: {ex.Message}", 3, ThisProgramName);
+                Output.Log($"获取 {projectId} 下载信息失败: {ex.Message}", 3, ThisProgramName);
                 return null;
             }
         }
@@ -740,19 +797,16 @@ namespace RtCli.Modules.Function
                     {
                         if (Config.App.AutoAgreeEula)
                         {
+                            // auto_agree_eula=true: 自动同意并自动重启
                             eulaContent = eulaContent.Replace("eula=false", "eula=true");
                             File.WriteAllText(eulaPath, eulaContent);
-                            Output.Log("已自动同意 EULA（配置: auto_agree_eula = true）。", 1, ThisProgramName);
-
-                            bool restart = AnsiConsole.Confirm("是否重新启动服务端？", true);
-                            if (restart)
-                            {
-                                Analyzer.StartServer();
-                                Output.Log("服务端已重新启动。", 1, ThisProgramName);
-                            }
+                            Output.Log("已自动同意 EULA（配置: auto_agree_eula = true），正在重启服务端...", 1, ThisProgramName);
+                            Analyzer.StartServer();
+                            Output.Log("服务端已重新启动。", 1, ThisProgramName);
                         }
                         else
                         {
+                            // auto_agree_eula=false: 提示用户阅读并确认
                             Output.Log("服务端因 EULA 未同意而自动关闭。", 2, ThisProgramName);
                             Output.Log("Minecraft EULA 说明: https://www.minecraft.net/eula", 1, ThisProgramName);
 
@@ -2413,6 +2467,14 @@ namespace RtCli.Modules.Function
                     }
 
                     _isRunning = true;
+
+                    // 确保Hangfire调度器已启动(AI任务依赖Hangfire执行cron定时任务)
+                    if (!Scheduler.IsRunning)
+                    {
+                        Log("正在启动Hangfire调度器...", 1);
+                        Scheduler.Start();
+                    }
+
                     RegisterAllTasks();
                     Log($"AI自动化管理已启动，共注册 {config.Tasks.Count} 个任务。", 1);
                 }
@@ -2470,14 +2532,35 @@ namespace RtCli.Modules.Function
                     return;
                 }
 
-                Log($"AI自动化状态: {(_isRunning ? "[green]运行中[/]" : "[red]已停止[/]")} 任务数: {config.Tasks.Count}", 1);
+                var table = new Table();
+                table.Border(TableBorder.Rounded);
+                table.Title = new TableTitle($"[cyan]AI自动化任务列表[/] {(_isRunning ? "[green]● 运行中[/]" : "[red]● 已停止[/]")}");
+                table.AddColumn("标识");
+                table.AddColumn("名称");
+                table.AddColumn("状态");
+                table.AddColumn("触发条件");
+                table.AddColumn("间隔Cron");
+                table.AddColumn("已执行");
+                table.AddColumn("最后运行");
+
                 foreach (var kv in config.Tasks)
                 {
-                    string status = kv.Value.Enabled ? "[green]启用[/]" : "[red]禁用[/]";
-                    string lastRun = LastRunTime.TryGetValue(kv.Key, out var t) ? t.ToString("HH:mm:ss") : "未运行";
+                    string status = kv.Value.Enabled ? "[green]启用[/]" : "[grey]禁用[/]";
+                    string lastRun = LastRunTime.TryGetValue(kv.Key, out var t) ? t.ToString("MM-dd HH:mm:ss") : "-";
                     int count = RunCount.TryGetValue(kv.Key, out var c) ? c : 0;
-                    Log($"  - [{kv.Key}] {kv.Value.Name} | {status} | 触发: {kv.Value.Trigger} | 间隔: {kv.Value.Interval} | 已执行: {count} | 最后: {lastRun}", 1);
+
+                    table.AddRow(
+                        Markup.Escape(kv.Key),
+                        Markup.Escape(kv.Value.Name),
+                        status,
+                        Markup.Escape(kv.Value.Trigger),
+                        Markup.Escape(kv.Value.Interval),
+                        count.ToString(),
+                        lastRun
+                    );
                 }
+
+                AnsiConsole.Write(table);
             }
 
             /// <summary>手动触发指定任务(跳过trigger检查，强制执行)</summary>

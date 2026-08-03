@@ -125,6 +125,46 @@ namespace RtCli.Modules.Function
                 return;
             }
 
+            // EULA 预检查: 启动前检查 eula.txt
+            string eulaPath = Path.Combine(workPath, "eula.txt");
+            if (File.Exists(eulaPath))
+            {
+                try
+                {
+                    string eulaContent = File.ReadAllText(eulaPath);
+                    if (eulaContent.Contains("eula=false"))
+                    {
+                        if (Config.App.AutoAgreeEula)
+                        {
+                            eulaContent = eulaContent.Replace("eula=false", "eula=true");
+                            File.WriteAllText(eulaPath, eulaContent);
+                            Output.Log("已自动同意 EULA（配置: auto_agree_eula = true）。", 1, ThisProgramName);
+                        }
+                        else
+                        {
+                            Output.Log("检测到 EULA 未同意。", 2, ThisProgramName);
+                            Output.Log("Minecraft EULA 说明: https://www.minecraft.net/eula", 1, ThisProgramName);
+                            bool agree = AnsiConsole.Confirm("是否同意 Minecraft EULA？(阅读 https://www.minecraft.net/eula)", false);
+                            if (agree)
+                            {
+                                eulaContent = eulaContent.Replace("eula=false", "eula=true");
+                                File.WriteAllText(eulaPath, eulaContent);
+                                Output.Log("已同意 EULA。", 1, ThisProgramName);
+                            }
+                            else
+                            {
+                                Output.Log("未同意 EULA，服务端无法启动。", 2, ThisProgramName);
+                                return;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Output.Log($"EULA 检查失败: {ex.Message}", 2, ThisProgramName);
+                }
+            }
+
             try
             {
                 _serverProcess = new Process
@@ -156,11 +196,11 @@ namespace RtCli.Modules.Function
                         ProcessPlayerEventLine(e.Data);
                         ProcessCrashDetectionLine(e.Data);
 
-                        // 自动检测EULA提示
+                        // 自动检测EULA提示 (首次启动时服务端生成eula.txt后退出)
                         if (e.Data.Contains("eula=false", StringComparison.OrdinalIgnoreCase) ||
                             e.Data.Contains("You need to agree to the EULA", StringComparison.OrdinalIgnoreCase))
                         {
-                            if (Config.App.AutoAgreeEula && !string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
+                            if (!string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
                             {
                                 string eulaPath = Path.Combine(Config.CurrentServer.WorkPath, "eula.txt");
                                 if (File.Exists(eulaPath))
@@ -170,21 +210,61 @@ namespace RtCli.Modules.Function
                                         string content = File.ReadAllText(eulaPath);
                                         if (content.Contains("eula=false"))
                                         {
-                                            content = content.Replace("eula=false", "eula=true");
-                                            File.WriteAllText(eulaPath, content);
-                                            Output.Log("已自动同意 EULA，正在重启服务端...", 1, "Analyzer");
-                                            _ = Task.Run(async () =>
+                                            if (Config.App.AutoAgreeEula)
                                             {
-                                                await Task.Delay(2000);
-                                                StopServer();
-                                                await Task.Delay(1000);
-                                                StartServer();
-                                            });
+                                                // auto_agree_eula=true: 自动同意并自动重启
+                                                content = content.Replace("eula=false", "eula=true");
+                                                File.WriteAllText(eulaPath, content);
+                                                Output.Log("已自动同意 EULA，正在重启服务端...", 1, "Analyzer");
+                                                _ = Task.Run(async () =>
+                                                {
+                                                    await Task.Delay(2000);
+                                                    StopServer();
+                                                    await Task.Delay(1000);
+                                                    StartServer();
+                                                });
+                                            }
+                                            else
+                                            {
+                                                // auto_agree_eula=false: 提示用户阅读并确认
+                                                _ = Task.Run(async () =>
+                                                {
+                                                    await Task.Delay(2000); // 等待服务端退出
+                                                    Output.Log("服务端因 EULA 未同意而关闭。", 2, "Analyzer");
+                                                    Output.Log("Minecraft EULA 说明: https://www.minecraft.net/eula", 1, "Analyzer");
+                                                    bool agree = AnsiConsole.Confirm("是否同意 Minecraft EULA？(阅读 https://www.minecraft.net/eula)", false);
+                                                    if (agree)
+                                                    {
+                                                        try
+                                                        {
+                                                            content = File.ReadAllText(eulaPath);
+                                                            content = content.Replace("eula=false", "eula=true");
+                                                            File.WriteAllText(eulaPath, content);
+                                                            Output.Log("已同意 EULA。", 1, "Analyzer");
+
+                                                            bool restart = AnsiConsole.Confirm("是否重新启动服务端？", true);
+                                                            if (restart)
+                                                            {
+                                                                StartServer();
+                                                                Output.Log("服务端已重新启动。", 1, "Analyzer");
+                                                            }
+                                                        }
+                                                        catch (Exception ex)
+                                                        {
+                                                            Output.Log($"同意EULA失败: {ex.Message}", 2, "Analyzer");
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        Output.Log("未同意 EULA，服务端无法运行。稍后可手动修改 eula.txt 后使用 .server start 启动。", 2, "Analyzer");
+                                                    }
+                                                });
+                                            }
                                         }
                                     }
                                     catch (Exception ex)
                                     {
-                                        Output.Log($"自动同意EULA失败: {ex.Message}", 2, "Analyzer");
+                                        Output.Log($"EULA处理失败: {ex.Message}", 2, "Analyzer");
                                     }
                                 }
                             }
@@ -681,7 +761,30 @@ namespace RtCli.Modules.Function
 
         public static bool IsAttached => _attachedProcessId != 0 || _isRunModeActive;
 
-        public static Process? GetServerProcess() => _serverProcess;
+        /// <summary>
+        /// 获取 MC 服务端进程。
+        /// Run 模式返回 _serverProcess；Attach/RCON 模式通过 _attachedProcessId 获取。
+        /// </summary>
+        public static Process? GetServerProcess()
+        {
+            // Run 模式：直接返回启动的进程
+            if (_serverProcess != null && !_serverProcess.HasExited)
+                return _serverProcess;
+
+            // Attach/RCON 模式：通过 PID 获取
+            if (_attachedProcessId != 0)
+            {
+                try
+                {
+                    var proc = Process.GetProcessById(_attachedProcessId);
+                    if (proc != null && !proc.HasExited)
+                        return proc;
+                }
+                catch { }
+            }
+
+            return null;
+        }
 
         private static bool ShouldHideConsole()
         {
@@ -756,6 +859,263 @@ namespace RtCli.Modules.Function
             catch (Exception ex)
             {
                 Output.Log($"RCON 发送命令失败: {ex.Message}", 3, ThisProgramName);
+            }
+        }
+
+        // ===== 命令发送 + 响应捕获(用于 tps/list 等需要解析返回结果的命令) =====
+
+        /// <summary>
+        /// 发送命令到 MC 服务端并捕获响应行。
+        /// RCON 模式直接返回响应；Run 模式从日志缓冲区收集命令执行后产生的新行。
+        /// </summary>
+        /// <param name="command">要发送的命令(不含前导 /)</param>
+        /// <param name="timeoutMs">等待响应的超时时间(毫秒)</param>
+        /// <param name="silent">静默模式: 不打印 "> 命令" 与响应行到控制台(用于 tps/list 等内部信息采集)</param>
+        /// <returns>捕获到的响应行列表</returns>
+        public static List<string> SendCommandWithCapture(string command, int timeoutMs = 3000, bool silent = false)
+        {
+            var result = new List<string>();
+            lock (_attachLock)
+            {
+                if (UsesRconCommands && _rconClient != null && _rconClient.IsConnected)
+                {
+                    // RCON 模式：SendCommand 直接返回响应字符串
+                    try
+                    {
+                        string response = _rconClient.SendCommand(command);
+                        if (!silent)
+                        {
+                            Output.Log($"> {command}", 1, _connectedServerName);
+                            if (!string.IsNullOrWhiteSpace(response))
+                                Output.Log(Markup.Escape(response), 1, _connectedServerName);
+                        }
+                        if (!string.IsNullOrWhiteSpace(response))
+                        {
+                            // RCON 响应可能是多行的
+                            foreach (var line in response.Replace("\r\n", "\n").Split('\n'))
+                            {
+                                if (!string.IsNullOrWhiteSpace(line))
+                                    result.Add(line);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"RCON 发送命令失败: {ex.Message}", 3, "Analyzer");
+                    }
+                    return result;
+                }
+
+                if ((IsRunMode || IsManagementMode) && _isRunModeActive && _serverInput != null)
+                {
+                    // Run 模式：写入 stdin，然后从日志缓冲区收集新行
+                    int startCount;
+                    lock (_logBufferLock)
+                    {
+                        startCount = _logBuffer.Count;
+                    }
+
+                    try
+                    {
+                        _serverInput.WriteLine(command);
+                        _serverInput.Flush();
+                        if (!silent)
+                            Output.Log($"> {command}", 1, _connectedServerName);
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"发送命令失败: {ex.Message}", 3, "Analyzer");
+                        return result;
+                    }
+
+                    // 轮询日志缓冲区等待响应
+                    var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                    bool gotAny = false;
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        Thread.Sleep(100);
+                        lock (_logBufferLock)
+                        {
+                            result.Clear();
+                            for (int i = startCount; i < _logBuffer.Count; i++)
+                                result.Add(_logBuffer[i]);
+                        }
+                        if (result.Count > 0)
+                        {
+                            if (!gotAny)
+                            {
+                                // 第一次收到响应，再等 300ms 收集完整输出
+                                gotAny = true;
+                                Thread.Sleep(300);
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                    return result;
+                }
+            }
+            return result;
+        }
+
+        // ===== TPS 查询(发送 tps 命令解析返回) =====
+
+        private static DateTime _lastTpsQueryTime = DateTime.MinValue;
+        private static (double T1m, double T5m, double T15m) _cachedTps = (-1, -1, -1);
+        private static readonly TimeSpan _tpsQueryInterval = TimeSpan.FromSeconds(10);
+
+        /// <summary>
+        /// 发送 tps 命令并解析返回结果。
+        /// 支持 Spark 插件格式："TPS from last 1m, 5m, 15m: 20.0*, 20.0, 19.9"
+        /// 也兼容旧式单值格式。
+        /// 带 10 秒节流缓存，避免频繁发送命令。
+        /// </summary>
+        public static (double Tps1m, double Tps5m, double Tps15m) QueryTps(int timeoutMs = 3000)
+        {
+            if (!IsRunModeActive && !IsAttached)
+                return (-1, -1, -1);
+
+            // 节流：10 秒内不重复查询
+            if (DateTime.UtcNow - _lastTpsQueryTime < _tpsQueryInterval)
+                return _cachedTps;
+
+            _lastTpsQueryTime = DateTime.UtcNow;
+
+            try
+            {
+                var lines = SendCommandWithCapture("tps", timeoutMs, silent: true);
+                // Spark 格式: TPS from last 1m, 5m, 15m: 20.0*, 20.0, 19.9
+                var sparkPattern = new Regex(
+                    @"TPS\s+from\s+last\s+\d+m\s*,\s*\d+m\s*,\s*\d+m\s*:\s*([\d.]+)\s*\*?\s*,\s*([\d.]+)\s*\*?\s*,\s*([\d.]+)\s*\*?",
+                    RegexOptions.IgnoreCase);
+                // 旧式单值格式: TPS: 20.0  或  TPS from last 1m: 20.0
+                var singlePattern = new Regex(
+                    @"TPS\s*(?:from\s+last\s+\d+m)?\s*:\s*([\d.]+)",
+                    RegexOptions.IgnoreCase);
+
+                foreach (var line in lines)
+                {
+                    var m = sparkPattern.Match(line);
+                    if (m.Success)
+                    {
+                        _cachedTps = (
+                            double.TryParse(m.Groups[1].Value, out var t1) ? t1 : -1,
+                            double.TryParse(m.Groups[2].Value, out var t5) ? t5 : -1,
+                            double.TryParse(m.Groups[3].Value, out var t15) ? t15 : -1
+                        );
+                        return _cachedTps;
+                    }
+                    m = singlePattern.Match(line);
+                    if (m.Success && double.TryParse(m.Groups[1].Value, out var t))
+                    {
+                        _cachedTps = (t, t, t);
+                        return _cachedTps;
+                    }
+                }
+            }
+            catch { }
+
+            return _cachedTps;
+        }
+
+        // ===== 玩家数量查询(发送 list 命令解析返回) =====
+
+        private static DateTime _lastListQueryTime = DateTime.MinValue;
+        private static (int Count, int Max) _cachedPlayers = (-1, -1);
+        private static readonly TimeSpan _listQueryInterval = TimeSpan.FromSeconds(10);
+
+        /// <summary>
+        /// 发送 list 命令并解析在线玩家数。
+        /// 解析格式："There are 2 of a max of 20 players online: ..."
+        /// 带 10 秒节流缓存。
+        /// </summary>
+        public static (int Count, int Max) QueryPlayerCount(int timeoutMs = 3000)
+        {
+            if (!IsRunModeActive && !IsAttached)
+                return (-1, -1);
+
+            if (DateTime.UtcNow - _lastListQueryTime < _listQueryInterval)
+                return _cachedPlayers;
+
+            _lastListQueryTime = DateTime.UtcNow;
+
+            try
+            {
+                var lines = SendCommandWithCapture("list", timeoutMs, silent: true);
+                // 格式: There are 2 of a max of 20 players online: player1, player2
+                // 也兼容中文端: 当前有 2 名玩家在线 / 共 20 个 slot
+                var pattern = new Regex(
+                    @"(?:There\s+(?:are|'re)\s+)(\d+)\s+of\s+a\s+max\s+of\s+(\d+)\s+players?\s+online",
+                    RegexOptions.IgnoreCase);
+
+                foreach (var line in lines)
+                {
+                    var m = pattern.Match(line);
+                    if (m.Success)
+                    {
+                        _cachedPlayers = (
+                            int.TryParse(m.Groups[1].Value, out var c) ? c : -1,
+                            int.TryParse(m.Groups[2].Value, out var mx) ? mx : -1
+                        );
+                        return _cachedPlayers;
+                    }
+                }
+            }
+            catch { }
+
+            return _cachedPlayers;
+        }
+
+        // ===== MC 进程 CPU 使用率(基于 TotalProcessorTime 两次采样) =====
+
+        private static DateTime _lastMcCpuSampleTime = DateTime.MinValue;
+        private static TimeSpan _lastMcCpuTime = TimeSpan.Zero;
+        private static double _cachedMcCpuUsage = -1;
+
+        /// <summary>
+        /// 获取 MC 服务端 Java 进程的 CPU 使用率(%)。
+        /// 基于 Process.TotalProcessorTime 两次采样计算，首次调用返回 -1。
+        /// </summary>
+        public static double GetMcCpuUsage()
+        {
+            var proc = GetServerProcess();
+            if (proc == null || proc.HasExited)
+            {
+                _lastMcCpuSampleTime = DateTime.MinValue;
+                _cachedMcCpuUsage = -1;
+                return -1;
+            }
+
+            try
+            {
+                var now = DateTime.UtcNow;
+                var cpuTime = proc.TotalProcessorTime;
+
+                if (_lastMcCpuSampleTime == DateTime.MinValue)
+                {
+                    // 首次采样，只记录基准值
+                    _lastMcCpuSampleTime = now;
+                    _lastMcCpuTime = cpuTime;
+                    return _cachedMcCpuUsage < 0 ? -1 : _cachedMcCpuUsage;
+                }
+
+                var wallElapsed = now - _lastMcCpuSampleTime;
+                var cpuElapsed = cpuTime - _lastMcCpuTime;
+
+                // 至少间隔 0.5 秒才更新，避免抖动
+                if (wallElapsed.TotalSeconds >= 0.5)
+                {
+                    _cachedMcCpuUsage = (cpuElapsed.TotalMilliseconds /
+                        (wallElapsed.TotalMilliseconds * Environment.ProcessorCount)) * 100;
+                    _lastMcCpuSampleTime = now;
+                    _lastMcCpuTime = cpuTime;
+                }
+
+                return _cachedMcCpuUsage < 0 ? -1 : _cachedMcCpuUsage;
+            }
+            catch
+            {
+                return -1;
             }
         }
 
@@ -2247,18 +2607,19 @@ namespace RtCli.Modules.Function
         private static List<MinecraftServerInfo> ScanMinecraftServers()
         {
             var results = new List<MinecraftServerInfo>();
-            var javaProcesses = new List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle)>();
+            var javaProcesses = new List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle, string ExecutablePath)>();
 
             try
             {
                 using var searcher = new ManagementObjectSearcher(
-                    "SELECT ProcessId, CommandLine, Name FROM Win32_Process WHERE Name LIKE 'java%'");
+                    "SELECT ProcessId, CommandLine, Name, ExecutablePath FROM Win32_Process WHERE Name LIKE 'java%'");
                 using var collection = searcher.Get();
 
                 foreach (ManagementObject obj in collection)
                 {
                     int pid = Convert.ToInt32(obj["ProcessId"]);
                     string? cmdLine = obj["CommandLine"]?.ToString() ?? "";
+                    string? exePath = obj["ExecutablePath"]?.ToString() ?? "";
 
                     try
                     {
@@ -2269,10 +2630,15 @@ namespace RtCli.Modules.Function
                         {
                             processName = process.ProcessName;
                             windowTitle = process.MainWindowTitle ?? "";
+                            // WMI 未返回 ExecutablePath 时回退到 MainModule.FileName
+                            if (string.IsNullOrEmpty(exePath))
+                            {
+                                try { exePath = process.MainModule?.FileName ?? ""; } catch { }
+                            }
                         }
                         catch { }
 
-                        javaProcesses.Add((pid, processName, cmdLine, windowTitle));
+                        javaProcesses.Add((pid, processName, cmdLine, windowTitle, exePath ?? ""));
                     }
                     catch
                     {
@@ -2284,7 +2650,25 @@ namespace RtCli.Modules.Function
                 Output.Log($"WMI 查询失败: {ex.Message}", 3, "Analyzer");
             }
 
-            foreach (var (processId, processName, cmdLine, windowTitle) in javaProcesses)
+            // 计算配置的 Java 路径目录(用于优先级匹配)
+            // 仅当配置为完整路径(包含目录且文件名为 java.exe/javaw.exe)时才参与匹配,
+            // 否则(例如配置为 "java")无法做目录级匹配, 所有候选视为同等优先级。
+            string? configuredJavaDir = null;
+            string configuredJavaPath = Config.CurrentServer.JavaPath ?? "";
+            if (!string.IsNullOrWhiteSpace(configuredJavaPath) && Path.IsPathRooted(configuredJavaPath))
+            {
+                try
+                {
+                    string fn = Path.GetFileName(configuredJavaPath).ToLowerInvariant();
+                    if (fn == "java.exe" || fn == "javaw.exe" || fn == "java" || fn == "javaw")
+                    {
+                        configuredJavaDir = NormalizeDir(Path.GetDirectoryName(configuredJavaPath));
+                    }
+                }
+                catch { }
+            }
+
+            foreach (var (processId, processName, cmdLine, windowTitle, exePath) in javaProcesses)
             {
                 string? jarPath = ExtractJarPath(cmdLine);
                 if (!string.IsNullOrEmpty(jarPath))
@@ -2318,19 +2702,112 @@ namespace RtCli.Modules.Function
 
                     if (isLikelyMcServer || hasMcClasses)
                     {
+                        int score = ComputeJavaPathMatchScore(exePath, configuredJavaDir);
                         results.Add(new MinecraftServerInfo
                         {
                             ProcessId = processId,
                             ProcessName = processName,
                             WindowTitle = string.IsNullOrEmpty(windowTitle) ? $"java (PID: {processId})" : windowTitle,
                             JarPath = jarPath,
-                            CommandLine = cmdLine
+                            CommandLine = cmdLine,
+                            JavaExePath = exePath,
+                            MatchScore = score
                         });
                     }
                 }
             }
 
+            // 按匹配优先级排序(高分在前); 同分保持原顺序(稳定排序)
+            // 这一步确保: 当 javapath_target_* 哨兵进程与真实 MC 服务端(jdk-22)同时存在时,
+            // 配置了 JavaPath 的真实进程会排在首位, 从而被 FindServerPathFromScan / 自动连接选中。
+            if (results.Count > 1)
+            {
+                results = results.OrderByDescending(r => r.MatchScore).ToList();
+
+                // 诊断日志: 多候选时记录最终选择与各候选的 Java 路径(便于排查 CPU/内存取错进程的问题)
+                try
+                {
+                    var top = results[0];
+                    var others = results.Skip(1).Select(r => $"PID={r.ProcessId}({r.JavaExePath},score={r.MatchScore})");
+                    Output.Log(
+                        $"扫描到 {results.Count} 个候选 Java 进程, 已按 JavaPath 优先级排序. " +
+                        $"首选: PID={top.ProcessId} java={top.JavaExePath} score={top.MatchScore}; " +
+                        $"其他: {string.Join(", ", others)}",
+                        1, "Analyzer");
+                }
+                catch { }
+            }
+
             return results;
+        }
+
+        /// <summary>规范化目录字符串: 小写 + 去除尾部路径分隔符, 用于路径比较</summary>
+        private static string? NormalizeDir(string? dir)
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                return null;
+            return dir.Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// 计算候选进程 Java 可执行路径与配置 JavaPath 的匹配优先级。
+        /// 100 = 目录完全一致; 90 = 解析符号链接/短路径后一致; 0 = 不匹配或无法比较。
+        /// </summary>
+        private static int ComputeJavaPathMatchScore(string exePath, string? configuredJavaDir)
+        {
+            if (string.IsNullOrEmpty(exePath) || string.IsNullOrEmpty(configuredJavaDir))
+                return 0;
+
+            try
+            {
+                string? exeDir = NormalizeDir(Path.GetDirectoryName(exePath));
+                if (string.IsNullOrEmpty(exeDir))
+                    return 0;
+
+                if (string.Equals(exeDir, configuredJavaDir, StringComparison.Ordinal))
+                    return 100;
+
+                // 解析符号链接/ Junction(例如 javapath_target_XXX 可能是 Junction)
+                // 后再比较一次, 兼容 Oracle javapath 哨兵目录指向真实 JDK 的情况
+                string? resolvedExeDir = NormalizeDir(ResolveRealDirectory(exePath));
+                if (!string.IsNullOrEmpty(resolvedExeDir) &&
+                    string.Equals(resolvedExeDir, configuredJavaDir, StringComparison.Ordinal))
+                    return 90;
+
+                return 0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        /// <summary>尝试解析路径的真实目录(去除符号链接/ Junction), 失败时返回原路径目录</summary>
+        private static string? ResolveRealDirectory(string exePath)
+        {
+            try
+            {
+                // 优先用 Win32 API 解析最终路径(可识别 Junction/Symbolic Link)
+                string? dir = Path.GetDirectoryName(exePath);
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+                    return dir;
+
+                // 使用 Alphaleonis 或直接调用 GetFinalPathNameByHandle 较重,
+                // 这里采用 DirectoryInfo.ResolveLinkTarget(.NET 6+), 不可用则回退。
+                var di = new DirectoryInfo(dir);
+                try
+                {
+                    var resolved = di.ResolveLinkTarget(true);
+                    if (resolved != null)
+                        return resolved.FullName;
+                }
+                catch { }
+                return dir;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static string? ExtractJarPath(string cmdLine)
@@ -2383,6 +2860,10 @@ namespace RtCli.Modules.Function
         public string WindowTitle { get; set; } = "";
         public string JarPath { get; set; } = "";
         public string CommandLine { get; set; } = "";
+        /// <summary>Java 可执行文件实际路径(来自 WMI ExecutablePath 或 MainModule.FileName)</summary>
+        public string JavaExePath { get; set; } = "";
+        /// <summary>与配置 JavaPath 的匹配优先级(越高越优先, 100=完全匹配)</summary>
+        public int MatchScore { get; set; }
     }
 
     internal class RconClient

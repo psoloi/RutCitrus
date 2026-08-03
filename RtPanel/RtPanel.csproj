@@ -4,6 +4,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 程序版本信息 -->
+    <AssemblyTitle>RtPanel</AssemblyTitle>
+    <Product>RtPanel</Product>
+    <Description>RutCitrus 管理面板</Description>
+    <UserSecretsId>c8d00b30-3f96-43fc-bccf-b17609e7773a</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,5 +24,16 @@
   <ItemGroup>
     <Protobuf Include="..\Protos\rtcli.proto" GrpcServices="Client" />
   </ItemGroup>
+
+  <!-- 显式将 wwwroot 复制到输出目录，确保从 bin/Debug 或 bin/Release 直接运行 exe 时能找到静态文件 -->
+  <!-- Web SDK 默认已将 wwwroot 标记为 Content，但不会在 build 时复制到输出目录，这里用 Update 添加 CopyToOutputDirectory -->
+  <ItemGroup>
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- 发布配置说明：
+       方式一(推荐)：dotnet publish rtpanel/RtPanel.csproj -p:PublishProfile=SelfContained -c Release
+       方式二：dotnet publish rtpanel/RtPanel.csproj -c Release -r win-x64 -p:SelfContained=true -p:PublishSingleFile=true -p:PublishReadyToRun=true
+       发布后到 bin\Release\net8.0\win-x64\publish\ 取 RtPanel.exe + wwwroot + appsettings.json 即可分发 -->
 
 </Project>

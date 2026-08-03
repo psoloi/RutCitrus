@@ -1,0 +1,724 @@
+@page
+@model RtPanel.Pages.InstancesModel
+@{
+    ViewData["Title"] = "实例";
+}
+
+<div class="instances-page">
+    <!-- 顶部工具栏 -->
+    <div class="card bg-dark text-light border-secondary mb-3">
+        <div class="card-body py-2">
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <div class="form-check form-check-inline mb-0">
+                    <input type="checkbox" class="form-check-input" id="selectAll" onchange="toggleSelectAll(this.checked)" />
+                    <label class="form-check-label small" for="selectAll">全选</label>
+                </div>
+                <div class="vr"></div>
+                <button class="btn btn-sm btn-outline-success" onclick="batchAction('start')" title="启动所有选中">开启</button>
+                <button class="btn btn-sm btn-outline-danger" onclick="batchAction('stop')" title="停止所有选中">关闭</button>
+                <button class="btn btn-sm btn-outline-warning" onclick="batchAction('restart')" title="重启所有选中">重启</button>
+                <button class="btn btn-sm btn-outline-danger" onclick="batchDelete()" title="删除所有选中(需逐一确认)">删除</button>
+                <div class="vr"></div>
+                <button class="btn btn-sm btn-outline-info" onclick="showCreateGroupModal()">创建群组服</button>
+                <button class="btn btn-sm btn-primary" onclick="showCreateInstanceModal()">+ 创建新实例</button>
+                <div class="ms-auto small text-muted">
+                    <span id="instanceCount">0</span> 个实例 · <span id="groupCount">0</span> 个群组
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 群组列表区域 -->
+    <div id="groupsContainer"></div>
+
+    <!-- 独立实例区域 -->
+    <div class="card bg-dark text-light border-secondary mb-3" id="standaloneCard" style="display:none;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>独立实例</span>
+            <small class="text-muted">未加入群组的服务器</small>
+        </div>
+        <div class="card-body" id="standaloneContainer"></div>
+    </div>
+
+    <!-- 空状态 -->
+    <div id="emptyState" class="text-center py-5 text-muted" style="display:none;">
+        <div style="font-size:3rem;">📦</div>
+        <p class="mt-3">暂无实例,点击右上角「+ 创建新实例」开始</p>
+    </div>
+</div>
+
+<!-- 创建实例弹窗 -->
+<div class="modal-overlay" id="createInstanceModal" style="display:none;">
+    <div class="modal-box" style="max-width:560px;">
+        <h5>创建新实例</h5>
+        <div class="mb-2">
+            <label class="form-label small">实例标识 *</label>
+            <input type="text" class="form-control form-control-sm" id="newInstance_identifier" placeholder="如: survival" />
+            <small class="text-muted">唯一标识,用于 config.yml server_list 的键</small>
+        </div>
+        <div class="mb-2">
+            <label class="form-label small">显示名称</label>
+            <input type="text" class="form-control form-control-sm" id="newInstance_name" placeholder="如: 生存服" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label small">工作目录</label>
+            <input type="text" class="form-control form-control-sm" id="newInstance_workPath" placeholder="如: C:\mc\survival" />
+        </div>
+        <div class="row">
+            <div class="col-md-6 mb-2">
+                <label class="form-label small">Java 路径</label>
+                <input type="text" class="form-control form-control-sm" id="newInstance_javaPath" placeholder="留空用默认 java" />
+            </div>
+            <div class="col-md-6 mb-2">
+                <label class="form-label small">分析模式</label>
+                <select class="form-select form-select-sm" id="newInstance_analyzerMode">
+                    <option value="Management">Management</option>
+                    <option value="Run">Run</option>
+                    <option value="Rcon">Rcon</option>
+                    <option value="OnlyRcon">OnlyRcon</option>
+                </select>
+            </div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label small">启动参数</label>
+            <textarea class="form-control form-control-sm" id="newInstance_runFlags" rows="2" placeholder="留空使用默认参数"></textarea>
+        </div>
+        <div class="text-end">
+            <button class="btn btn-sm btn-secondary" onclick="closeModal('createInstanceModal')">取消</button>
+            <button class="btn btn-sm btn-primary" onclick="createInstance()">创建</button>
+        </div>
+    </div>
+</div>
+
+<!-- 创建群组弹窗 -->
+<div class="modal-overlay" id="createGroupModal" style="display:none;">
+    <div class="modal-box" style="max-width:480px;">
+        <h5>创建群组服</h5>
+        <div class="mb-2">
+            <label class="form-label small">群组名称 *</label>
+            <input type="text" class="form-control form-control-sm" id="newGroup_name" placeholder="如: 主群组" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label small">选择成员(可多选)</label>
+            <div id="newGroup_members" class="border rounded p-2" style="max-height:240px;overflow-y:auto;"></div>
+        </div>
+        <div class="text-end">
+            <button class="btn btn-sm btn-secondary" onclick="closeModal('createGroupModal')">取消</button>
+            <button class="btn btn-sm btn-primary" onclick="createGroup()">创建</button>
+        </div>
+    </div>
+</div>
+
+<!-- 实例管理弹窗(详情+备份+配置) -->
+<div class="modal-overlay" id="manageModal" style="display:none;">
+    <div class="modal-box" style="max-width:720px;">
+        <h5 id="manageTitle">实例管理</h5>
+        <div id="manageContent"></div>
+        <div class="text-end mt-3">
+            <button class="btn btn-sm btn-secondary" onclick="closeModal('manageModal')">关闭</button>
+        </div>
+    </div>
+</div>
+
+<!-- 通用确认弹窗(用于删除确认) -->
+<div class="modal-overlay" id="confirmModal" style="display:none;">
+    <div class="modal-box" style="max-width:420px;">
+        <h5 id="confirmTitle">确认</h5>
+        <p id="confirmMsg" class="text-muted"></p>
+        <div class="mb-3">
+            <input type="text" class="form-control form-control-sm" id="confirmInput" placeholder="请输入服务器标识名称以确认" />
+        </div>
+        <div class="text-end">
+            <button class="btn btn-sm btn-secondary" onclick="closeModal('confirmModal')">取消</button>
+            <button class="btn btn-sm btn-danger" id="confirmBtn">确认删除</button>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    // === 全局状态 ===
+    let allInstances = [];
+    let allGroups = [];
+    let pendingDeleteQueue = []; // 批量删除队列
+
+    // === 工具函数 ===
+    function escapeHtml(s) {
+        return (s ?? '').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function showStatus(msg, type) {
+        // 复用全局 toast
+        if (window.RtPanel && RtPanel.showToast) { RtPanel.showToast(msg, type); return; }
+        console.log(`[${type}] ${msg}`);
+    }
+
+    function openModal(id) { document.getElementById(id).style.display = 'flex'; }
+    function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+    function formatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+        if (bytes < 1073741824) return (bytes/1048576).toFixed(1) + ' MB';
+        return (bytes/1073741824).toFixed(2) + ' GB';
+    }
+
+    // === 加载数据 ===
+    async function loadInstances() {
+        const resp = await fetch('/api/instances/list').then(r => r.json()).catch(() => ({ success: false }));
+        if (!resp.success) {
+            showStatus(resp.message || '加载失败', 'danger');
+            return;
+        }
+        allInstances = resp.instances || [];
+        allGroups = resp.groups || [];
+        render();
+    }
+
+    // === 渲染 ===
+    function render() {
+        document.getElementById('instanceCount').textContent = allInstances.length;
+        document.getElementById('groupCount').textContent = allGroups.length;
+
+        const groupsContainer = document.getElementById('groupsContainer');
+        const standaloneCard = document.getElementById('standaloneCard');
+        const standaloneContainer = document.getElementById('standaloneContainer');
+        const emptyState = document.getElementById('emptyState');
+
+        groupsContainer.innerHTML = '';
+        standaloneContainer.innerHTML = '';
+
+        if (allInstances.length === 0 && allGroups.length === 0) {
+            emptyState.style.display = '';
+            standaloneCard.style.display = 'none';
+            return;
+        }
+        emptyState.style.display = 'none';
+
+        // 渲染群组
+        allGroups.forEach(g => {
+            const members = allInstances.filter(i => i.groupId === g.id);
+            const card = document.createElement('div');
+            card.className = 'card bg-dark text-light border-info mb-3';
+            card.innerHTML = `
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2 instance-group-header">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-info">${members.length}</span>
+                        <strong>${escapeHtml(g.name)}</strong>
+                        <small class="text-muted">群组 ID: ${escapeHtml(g.id)}</small>
+                        <button class="btn btn-sm btn-outline-info py-0 px-1" title="建立群组服务器(暂未开发)" disabled>建立群组服务器</button>
+                    </div>
+                    <div class="d-flex gap-1 flex-wrap">
+                        <button class="btn btn-sm btn-outline-success" onclick="groupAction('${g.id}','start')" title="启动全部">▶ 全部启动</button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="groupAction('${g.id}','stop')" title="停止全部">■ 全部停止</button>
+                        <button class="btn btn-sm btn-outline-warning" onclick="groupAction('${g.id}','restart')" title="重启全部">⟳ 全部重启</button>
+                        <button class="btn btn-sm btn-outline-info" onclick="showAddMemberModal('${g.id}')" title="添加成员">+ 添加</button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="showManageGroupModal('${g.id}')" title="管理群组">管理</button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="disbandGroup('${g.id}')" title="解散群组">解散</button>
+                    </div>
+                </div>
+                <div class="card-body" id="group_${g.id}_body"></div>
+            `;
+            groupsContainer.appendChild(card);
+            const body = card.querySelector(`#group_${g.id}_body`);
+            members.forEach(inst => body.appendChild(renderInstanceRow(inst, g.id)));
+            if (members.length === 0) {
+                body.innerHTML = '<div class="text-muted small py-2">群组为空,点击「+ 添加」加入实例</div>';
+            }
+        });
+
+        // 渲染独立实例
+        const standalone = allInstances.filter(i => !i.groupId);
+        if (standalone.length > 0) {
+            standaloneCard.style.display = '';
+            standalone.forEach(inst => standaloneContainer.appendChild(renderInstanceRow(inst, '')));
+        } else {
+            standaloneCard.style.display = 'none';
+        }
+
+        // 更新全选状态
+        updateSelectAllState();
+    }
+
+    function renderInstanceRow(inst, groupId) {
+        const row = document.createElement('div');
+        row.className = 'instance-row d-flex align-items-center border rounded mb-2 p-2';
+        row.dataset.id = inst.id;
+        row.dataset.groupId = groupId;
+        const statusBadge = inst.isRunning
+            ? '<span class="badge bg-success">运行中</span>'
+            : '<span class="badge bg-secondary">已停止</span>';
+        row.innerHTML = `
+            <div class="me-2">
+                <input type="checkbox" class="form-check-input instance-check" data-id="${escapeHtml(inst.id)}" onchange="updateSelectAllState()" />
+            </div>
+            <div class="flex-grow-1">
+                <div class="d-flex align-items-center gap-2">
+                    ${statusBadge}
+                    <strong>${escapeHtml(inst.name)}</strong>
+                    <small class="text-muted">${escapeHtml(inst.id)}</small>
+                    ${inst.hidden ? '<span class="badge bg-warning text-dark">隐藏</span>' : ''}
+                    ${inst.autoRestart ? '<span class="badge bg-info">自动重启</span>' : ''}
+                </div>
+                <small class="text-muted d-block">${escapeHtml(inst.workPath || '未配置工作目录')} · ${escapeHtml(inst.analyzerMode)}</small>
+            </div>
+            <div class="d-flex gap-1">
+                <button class="btn btn-sm btn-outline-success instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','start')" title="启动" ${inst.isRunning?'disabled':''}>▶</button>
+                <button class="btn btn-sm btn-outline-danger instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','stop')" title="停止" ${!inst.isRunning?'disabled':''}>■</button>
+                <button class="btn btn-sm btn-outline-warning instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','restart')" title="重启">⟳</button>
+                <button class="btn btn-sm btn-outline-info instance-icon-btn" onclick="showManageModal('${escapeHtml(inst.id)}')" title="管理">⚙</button>
+            </div>
+        `;
+        return row;
+    }
+
+    // === 选择 ===
+    function toggleSelectAll(checked) {
+        document.querySelectorAll('.instance-check').forEach(cb => cb.checked = checked);
+    }
+
+    function updateSelectAllState() {
+        const checks = document.querySelectorAll('.instance-check');
+        const selectAll = document.getElementById('selectAll');
+        if (checks.length === 0) { selectAll.checked = false; selectAll.indeterminate = false; return; }
+        const checked = document.querySelectorAll('.instance-check:checked');
+        selectAll.checked = checked.length === checks.length;
+        selectAll.indeterminate = checked.length > 0 && checked.length < checks.length;
+    }
+
+    function getSelectedIds() {
+        return Array.from(document.querySelectorAll('.instance-check:checked')).map(cb => cb.dataset.id);
+    }
+
+    // === 单个操作 ===
+    async function singleAction(id, action) {
+        const resp = await fetch('/api/instances/action', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ action, ids: [id] })
+        }).then(r => r.json());
+        showStatus(resp.message || (resp.success ? '操作成功' : '操作失败'), resp.success ? 'success' : 'danger');
+        if (resp.success) loadInstances();
+    }
+
+    // === 批量操作 ===
+    async function batchAction(action) {
+        const ids = getSelectedIds();
+        if (ids.length === 0) { showStatus('请先选择实例', 'warning'); return; }
+        const actionName = { start:'开启', stop:'关闭', restart:'重启' }[action] || action;
+        if (!await confirmDialog(`批量${actionName}`, `确定对选中的 ${ids.length} 个实例执行「${actionName}」操作?`)) return;
+        const resp = await fetch('/api/instances/action', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ action, ids })
+        }).then(r => r.json());
+        showStatus(resp.message || '操作完成', resp.success ? 'success' : 'danger');
+        if (resp.success) loadInstances();
+    }
+
+    // === 批量删除(逐一确认) ===
+    async function batchDelete() {
+        const ids = getSelectedIds();
+        if (ids.length === 0) { showStatus('请先选择实例', 'warning'); return; }
+        if (!await confirmDialog('批量删除', `将删除选中的 ${ids.length} 个实例,每个需单独确认。是否开始?`)) return;
+        pendingDeleteQueue = [...ids];
+        processDeleteQueue();
+    }
+
+    async function processDeleteQueue() {
+        if (pendingDeleteQueue.length === 0) {
+            showStatus('批量删除完成', 'success');
+            loadInstances();
+            return;
+        }
+        const id = pendingDeleteQueue.shift();
+        const inst = allInstances.find(i => i.id === id);
+        const name = inst ? inst.name : id;
+
+        // 要求用户输入标识名称确认
+        document.getElementById('confirmTitle').textContent = `确认删除 (${pendingDeleteQueue.length + 1} 个剩余)`;
+        document.getElementById('confirmMsg').textContent = `请输入服务器标识名称 "${id}" 以确认删除「${name}」。`;
+        document.getElementById('confirmInput').value = '';
+        document.getElementById('confirmInput').placeholder = `输入 ${id} 确认`;
+        document.getElementById('confirmBtn').onclick = async () => {
+            const input = document.getElementById('confirmInput').value.trim();
+            if (input !== id) { showStatus('标识名称不匹配,已跳过此实例', 'warning'); closeModal('confirmModal'); processDeleteQueue(); return; }
+            const deleteFiles = document.getElementById('confirmDeleteFiles')?.checked || false;
+            const resp = await fetch('/api/instances/delete', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ id, deleteFiles: false })
+            }).then(r => r.json());
+            showStatus(resp.message, resp.success ? 'success' : 'danger');
+            closeModal('confirmModal');
+            processDeleteQueue();
+        };
+        openModal('confirmModal');
+        document.getElementById('confirmInput').focus();
+    }
+
+    // === 创建实例 ===
+    function showCreateInstanceModal() {
+        ['newInstance_identifier','newInstance_name','newInstance_workPath','newInstance_javaPath','newInstance_runFlags']
+            .forEach(id => document.getElementById(id).value = '');
+        openModal('createInstanceModal');
+    }
+
+    async function createInstance() {
+        const payload = {
+            identifier: document.getElementById('newInstance_identifier').value.trim(),
+            name: document.getElementById('newInstance_name').value.trim(),
+            workPath: document.getElementById('newInstance_workPath').value.trim(),
+            javaPath: document.getElementById('newInstance_javaPath').value.trim(),
+            runFlags: document.getElementById('newInstance_runFlags').value.trim(),
+            analyzerMode: document.getElementById('newInstance_analyzerMode').value
+        };
+        if (!payload.identifier) { showStatus('请输入实例标识', 'warning'); return; }
+        const resp = await fetch('/api/instances/create', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) { closeModal('createInstanceModal'); loadInstances(); }
+    }
+
+    // === 创建群组 ===
+    function showCreateGroupModal() {
+        document.getElementById('newGroup_name').value = '';
+        const container = document.getElementById('newGroup_members');
+        container.innerHTML = '';
+        allInstances.filter(i => !i.groupId).forEach(inst => {
+            const div = document.createElement('div');
+            div.className = 'form-check';
+            div.innerHTML = `<input type="checkbox" class="form-check-input" value="${escapeHtml(inst.id)}" id="gc_${escapeHtml(inst.id)}" />
+                <label class="form-check-label" for="gc_${escapeHtml(inst.id)}">${escapeHtml(inst.name)} <small class="text-muted">(${escapeHtml(inst.id)})</small></label>`;
+            container.appendChild(div);
+        });
+        if (container.children.length === 0) {
+            container.innerHTML = '<div class="text-muted small">没有可用的独立实例</div>';
+        }
+        openModal('createGroupModal');
+    }
+
+    async function createGroup() {
+        const name = document.getElementById('newGroup_name').value.trim();
+        if (!name) { showStatus('请输入群组名称', 'warning'); return; }
+        const memberIds = Array.from(document.querySelectorAll('#newGroup_members input:checked')).map(cb => cb.value);
+        const resp = await fetch('/api/instances/group/create', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ name, memberIds })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) { closeModal('createGroupModal'); loadInstances(); }
+    }
+
+    // === 群组操作 ===
+    async function groupAction(groupId, action) {
+        const actionName = { start:'启动', stop:'停止', restart:'重启' }[action] || action;
+        const group = allGroups.find(g => g.id === groupId);
+        if (!await confirmDialog(`群组${actionName}`, `确定对群组「${group?.name}」的全部 ${group?.memberIds?.length || 0} 个成员执行「${actionName}」?`)) return;
+        const resp = await fetch('/api/instances/group/action', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ action, groupId })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadInstances();
+    }
+
+    async function disbandGroup(groupId) {
+        const group = allGroups.find(g => g.id === groupId);
+        if (!await confirmDialog('解散群组', `确定解散群组「${group?.name}」?成员将变为独立实例,服务器文件不受影响。`)) return;
+        const resp = await fetch('/api/instances/group/delete', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ groupId })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadInstances();
+    }
+
+    async function showAddMemberModal(groupId) {
+        const group = allGroups.find(g => g.id === groupId);
+        const available = allInstances.filter(i => i.groupId !== groupId);
+        if (available.length === 0) { showStatus('没有可添加的实例', 'info'); return; }
+
+        const container = document.createElement('div');
+        container.innerHTML = `<h5>添加成员到「${escapeHtml(group.name)}」</h5>`;
+        available.forEach(inst => {
+            const div = document.createElement('div');
+            div.className = 'form-check';
+            div.innerHTML = `<input type="checkbox" class="form-check-input" value="${escapeHtml(inst.id)}" id="am_${escapeHtml(inst.id)}" />
+                <label class="form-check-label" for="am_${escapeHtml(inst.id)}">${escapeHtml(inst.name)} <small class="text-muted">(${escapeHtml(inst.id)})</small></label>`;
+            container.appendChild(div);
+        });
+        const btnRow = document.createElement('div');
+        btnRow.className = 'text-end mt-3';
+        btnRow.innerHTML = `<button class="btn btn-sm btn-secondary" onclick="closeModal('manageModal')">取消</button>
+            <button class="btn btn-sm btn-primary" onclick="addMembers('${groupId}')">添加</button>`;
+        container.appendChild(btnRow);
+        document.getElementById('manageContent').innerHTML = '';
+        document.getElementById('manageContent').appendChild(container);
+        document.getElementById('manageTitle').textContent = '添加成员';
+        openModal('manageModal');
+    }
+
+    async function addMembers(groupId) {
+        const memberIds = Array.from(document.querySelectorAll('#manageContent input:checked')).map(cb => cb.value);
+        if (memberIds.length === 0) { showStatus('请选择成员', 'warning'); return; }
+        const resp = await fetch('/api/instances/group/update', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ operation: 'add', groupId, memberIds })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) { closeModal('manageModal'); loadInstances(); }
+    }
+
+    async function showManageGroupModal(groupId) {
+        const group = allGroups.find(g => g.id === groupId);
+        const members = allInstances.filter(i => i.groupId === groupId);
+        const container = document.createElement('div');
+        container.innerHTML = `
+            <div class="mb-3">
+                <label class="form-label small">群组名称</label>
+                <input type="text" class="form-control form-control-sm" id="mg_name" value="${escapeHtml(group.name)}" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label small">成员列表 (${members.length})</label>
+                <div class="border rounded p-2" style="max-height:200px;overflow-y:auto;">
+                    ${members.length === 0 ? '<div class="text-muted small">无成员</div>' :
+                        members.map(m => `<div class="d-flex justify-content-between align-items-center py-1">
+                            <span>${escapeHtml(m.name)} <small class="text-muted">(${escapeHtml(m.id)})</small></span>
+                            <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="removeMember('${groupId}','${escapeHtml(m.id)}')">移除</button>
+                        </div>`).join('')}
+                </div>
+            </div>
+            <div class="text-end">
+                <button class="btn btn-sm btn-primary" onclick="renameGroup('${groupId}')">重命名</button>
+            </div>
+        `;
+        document.getElementById('manageContent').innerHTML = '';
+        document.getElementById('manageContent').appendChild(container);
+        document.getElementById('manageTitle').textContent = '管理群组';
+        openModal('manageModal');
+    }
+
+    async function renameGroup(groupId) {
+        const name = document.getElementById('mg_name').value.trim();
+        if (!name) { showStatus('名称不能为空', 'warning'); return; }
+        const resp = await fetch('/api/instances/group/update', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ operation: 'rename', groupId, name })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) { closeModal('manageModal'); loadInstances(); }
+    }
+
+    async function removeMember(groupId, memberId) {
+        const resp = await fetch('/api/instances/group/update', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ operation: 'remove', groupId, memberIds: [memberId] })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) { closeModal('manageModal'); loadInstances(); }
+    }
+
+    // === 实例管理(详情+备份+配置) ===
+    async function showManageModal(id) {
+        const resp = await fetch(`/api/instances/detail?id=${encodeURIComponent(id)}`).then(r => r.json());
+        if (!resp.success) { showStatus(resp.message, 'danger'); return; }
+        const inst = resp.instance;
+        const backups = resp.backups || [];
+
+        const container = document.createElement('div');
+        container.innerHTML = `
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label class="form-label small">显示名称</label>
+                    <input type="text" class="form-control form-control-sm" id="mg_inst_name" value="${escapeHtml(inst.name)}" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small">分析模式</label>
+                    <select class="form-select form-select-sm" id="mg_inst_mode">
+                        ${['Management','Run','Rcon','OnlyRcon'].map(m => `<option value="${m}" ${m===inst.analyzerMode?'selected':''}>${m}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+            <div class="mb-2">
+                <label class="form-label small">工作目录</label>
+                <input type="text" class="form-control form-control-sm" id="mg_inst_workPath" value="${escapeHtml(inst.workPath)}" />
+            </div>
+            <div class="mb-2">
+                <label class="form-label small">Java 路径</label>
+                <input type="text" class="form-control form-control-sm" id="mg_inst_javaPath" value="${escapeHtml(inst.javaPath)}" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label small">启动参数</label>
+                <textarea class="form-control form-control-sm" id="mg_inst_runFlags" rows="2">${escapeHtml(inst.runFlags)}</textarea>
+            </div>
+            <div class="mb-3">
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="mg_inst_hidden" ${inst.hidden?'checked':''} onchange="toggleHidden('${escapeHtml(inst.id)}', this.checked)" />
+                    <label class="form-check-label small" for="mg_inst_hidden">隐藏控制台消息(同步到 config.yml)</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="checkbox" class="form-check-input" id="mg_inst_autoRestart" ${inst.autoRestart?'checked':''} />
+                    <label class="form-check-label small" for="mg_inst_autoRestart">崩溃自动重启</label>
+                </div>
+            </div>
+            <hr/>
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0">备份管理</h6>
+                <button class="btn btn-sm btn-outline-success" onclick="createBackup('${escapeHtml(inst.id)}')">+ 创建备份</button>
+            </div>
+            <div class="border rounded" style="max-height:200px;overflow-y:auto;">
+                ${backups.length === 0 ? '<div class="text-muted small p-3">暂无备份</div>' :
+                    backups.map(b => `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
+                        <div>
+                            <div class="small">${escapeHtml(b.fileName)}</div>
+                            <small class="text-muted">${escapeHtml(b.createdAt)} · ${formatBytes(b.sizeBytes)}</small>
+                        </div>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-warning" onclick="restoreBackup('${escapeHtml(inst.id)}','${escapeHtml(b.fileName)}')">恢复</button>
+                            <button class="btn btn-outline-danger" onclick="deleteBackup('${escapeHtml(inst.id)}','${escapeHtml(b.fileName)}')">删除</button>
+                        </div>
+                    </div>`).join('')}
+            </div>
+            <hr/>
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0">快捷操作</h6>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteSingle('${escapeHtml(inst.id)}')">删除此实例</button>
+            </div>
+            <div class="text-end mt-3">
+                <button class="btn btn-sm btn-primary" onclick="saveInstanceConfig('${escapeHtml(inst.id)}')">保存配置</button>
+            </div>
+        `;
+        document.getElementById('manageContent').innerHTML = '';
+        document.getElementById('manageContent').appendChild(container);
+        document.getElementById('manageTitle').textContent = `管理: ${inst.name} (${inst.id})`;
+        openModal('manageModal');
+    }
+
+    async function toggleHidden(id, hidden) {
+        const resp = await fetch('/api/instances/update', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id, hidden })
+        }).then(r => r.json());
+        showStatus(resp.message || (resp.success ? '已更新隐藏设置' : '更新失败'), resp.success ? 'success' : 'danger');
+    }
+
+    async function saveInstanceConfig(id) {
+        const payload = {
+            id,
+            name: document.getElementById('mg_inst_name').value,
+            workPath: document.getElementById('mg_inst_workPath').value,
+            javaPath: document.getElementById('mg_inst_javaPath').value,
+            runFlags: document.getElementById('mg_inst_runFlags').value,
+            analyzerMode: document.getElementById('mg_inst_mode').value,
+            hidden: document.getElementById('mg_inst_hidden').checked,
+            autoRestart: document.getElementById('mg_inst_autoRestart').checked
+        };
+        const resp = await fetch('/api/instances/update', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadInstances();
+    }
+
+    async function createBackup(id) {
+        showStatus('正在创建备份...', 'info');
+        const resp = await fetch('/api/instances/backup/create', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) showManageModal(id);
+    }
+
+    async function restoreBackup(id, fileName) {
+        if (!await confirmDialog('恢复备份', `确定从「${fileName}」恢复?当前文件会被自动备份。`)) return;
+        showStatus('正在恢复...', 'info');
+        const resp = await fetch('/api/instances/backup/restore', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id, fileName })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) showManageModal(id);
+    }
+
+    async function deleteBackup(id, fileName) {
+        if (!await confirmDialog('删除备份', `确定删除备份「${fileName}」?此操作不可恢复。`)) return;
+        const resp = await fetch('/api/instances/backup/delete', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id, fileName })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) showManageModal(id);
+    }
+
+    async function deleteSingle(id) {
+        if (!await confirmDialog('删除实例', `确定删除实例「${id}」?config.yml 中的配置也会被移除。`)) return;
+        const resp = await fetch('/api/instances/delete', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id, deleteFiles: false })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) { closeModal('manageModal'); loadInstances(); }
+    }
+
+    // === 简易确认对话框(不需要输入的) ===
+    function confirmDialog(title, msg) {
+        return new Promise(resolve => {
+            document.getElementById('confirmTitle').textContent = title;
+            document.getElementById('confirmMsg').textContent = msg;
+            document.getElementById('confirmInput').style.display = 'none';
+            document.getElementById('confirmBtn').textContent = '确认';
+            document.getElementById('confirmBtn').className = 'btn btn-sm btn-primary';
+            document.getElementById('confirmBtn').onclick = () => {
+                closeModal('confirmModal');
+                document.getElementById('confirmInput').style.display = '';
+                document.getElementById('confirmBtn').textContent = '确认删除';
+                document.getElementById('confirmBtn').className = 'btn btn-sm btn-danger';
+                resolve(true);
+            };
+            // 取消按钮
+            const oldCancel = document.querySelector('#confirmModal .btn-secondary');
+            oldCancel.onclick = () => {
+                closeModal('confirmModal');
+                document.getElementById('confirmInput').style.display = '';
+                document.getElementById('confirmBtn').textContent = '确认删除';
+                document.getElementById('confirmBtn').className = 'btn btn-sm btn-danger';
+                resolve(false);
+            };
+            openModal('confirmModal');
+        });
+    }
+
+    // === 初始化 ===
+    loadInstances();
+    // 每 10 秒刷新一次状态
+    setInterval(() => { if (document.getElementById('manageModal').style.display === 'none') loadInstances(); }, 10000);
+</script>
+
+<style>
+    .instance-row { background: rgba(255,255,255,0.02); transition: background 0.15s; }
+    .instance-row:hover { background: rgba(56,189,248,0.08); }
+    .instance-row[data-running="true"] { border-color: rgba(16,185,129,0.3) !important; }
+    /* 实例行图标按钮: 固定正方形, 避免扁长 */
+    .instance-icon-btn { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 0.95rem; line-height: 1; }
+    .instance-group-header { background: rgba(56, 189, 248, 0.12); }
+
+    /* 亮色主题适配 */
+    [data-theme="light"] .instance-row { background: rgba(0,0,0,0.02); }
+    [data-theme="light"] .instance-row:hover { background: rgba(2, 132, 199, 0.08); }
+    [data-theme="light"] .modal-box { background: #fff; }
+    [data-theme="light"] .modal-box h5 { color: var(--accent); }
+    [data-theme="light"] .instance-group-header { background: rgba(2, 132, 199, 0.1); }
+    /* 亮色主题: outline 按钮 border 增强可见性 */
+    [data-theme="light"] .btn-outline-info { border-color: var(--color-info); }
+    [data-theme="light"] .btn-outline-warning { border-color: var(--color-warning); }
+    [data-theme="light"] .btn-outline-success { border-color: var(--color-success); }
+    [data-theme="light"] .btn-outline-danger { border-color: var(--color-danger); }
+
+    /* disabled 按钮在两个主题下都清晰可辨 */
+    .instance-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+</style>
+}

@@ -8,38 +8,50 @@
     <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <script>
+        // 主题预先应用: 避免 FOUC(页面加载时闪烁)
+        // localStorage.theme = 'light' | 'dark'(缺省视为 dark)
+        try {
+            var t = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+        }
+    </script>
     <style>
         .toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; }
         .custom-toast {
             min-width: 300px; max-width: 450px; padding: 14px 20px; margin-bottom: 10px;
             border-radius: 8px; color: #fff; opacity: 0; transform: translateX(100%);
-            transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transition: all 0.3s ease; box-shadow: 0 4px 16px rgba(0,0,0,0.3);
             display: flex; justify-content: space-between; align-items: center;
+            border: 1px solid rgba(255,255,255,0.08);
         }
         .custom-toast.show { opacity: 1; transform: translateX(0); }
-        .custom-toast.success { background: #28a745; }
-        .custom-toast.error { background: #dc3545; }
-        .custom-toast.warning { background: #ffc107; color: #333; }
-        .custom-toast.info { background: #17a2b8; }
+        .custom-toast.success { background: linear-gradient(135deg, #10b981, #059669); }
+        .custom-toast.error { background: linear-gradient(135deg, #ef4444, #dc2626); }
+        .custom-toast.warning { background: linear-gradient(135deg, #f59e0b, #d97706); color: #0a1424; }
+        .custom-toast.info { background: linear-gradient(135deg, #38bdf8, #0ea5e9); color: #0a1424; }
         .custom-toast .close-btn { cursor: pointer; margin-left: 12px; font-size: 18px; opacity: 0.7; }
         .custom-toast .close-btn:hover { opacity: 1; }
 
         .modal-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.5); z-index: 10000;
+            background: rgba(10,20,36,0.75); z-index: 10000;
             display: flex; justify-content: center; align-items: center;
+            backdrop-filter: blur(4px);
         }
         .modal-box {
-            background: #16213e; border-radius: 12px; padding: 24px; min-width: 360px; max-width: 500px;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.4); border: 1px solid #2a2a4a;
+            background: #122236; border-radius: 12px; padding: 24px; min-width: 360px; max-width: 500px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.6); border: 1px solid #1e3a5f;
         }
-        .modal-box h5 { margin-bottom: 12px; color: #e0e0e0; }
-        .modal-box p { margin-bottom: 20px; color: #b0b0b0; }
+        .modal-box h5 { margin-bottom: 12px; color: #38bdf8; font-weight: 600; }
+        .modal-box p { margin-bottom: 20px; color: #8b9bb4; }
         .modal-box input {
-            width: 100%; padding: 8px 12px; border: 1px solid #2a2a4a; border-radius: 6px;
-            margin-bottom: 16px; font-size: 14px; background-color: #1a1a2e; color: #e0e0e0;
+            width: 100%; padding: 8px 12px; border: 1px solid #1e3a5f; border-radius: 6px;
+            margin-bottom: 16px; font-size: 14px; background-color: #0d1b2e; color: #e2eaf4;
         }
-        .modal-box input:focus { outline: none; border-color: #6c63ff; box-shadow: 0 0 0 3px rgba(108,99,255,0.15); }
+        .modal-box input:focus { outline: none; border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56,189,248,0.2); }
         .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
     </style>
 </head>
@@ -61,15 +73,27 @@
                             <a class="nav-link" asp-area="" asp-page="/Console">控制台</a>
                         </li>
                         <li class="nav-item">
+                            <a class="nav-link" asp-area="" asp-page="/Instances">实例</a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link" asp-area="" asp-page="/Config">配置</a>
                         </li>
                         <li class="nav-item">
                             <a class="nav-link" asp-area="" asp-page="/Extensions">扩展</a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-area="" asp-page="/Settings">设置</a>
+                        </li>
                     </ul>
                     <ul class="navbar-nav align-items-center">
                         <li class="nav-item me-2">
                             <span id="globalConnStatus" class="badge bg-secondary" style="font-size:0.85em;padding:6px 12px;border-radius:12px;">未连接</span>
+                        </li>
+                        <li class="nav-item me-2">
+                            <button class="btn btn-sm btn-outline-secondary" id="themeToggleBtn"
+                                    title="切换亮色/暗色主题" onclick="toggleTheme()">
+                                <span id="themeIcon">🌙</span>
+                            </button>
                         </li>
                         <li class="nav-item">
                             <button class="btn btn-sm btn-outline-danger" onclick="logout()">登出</button>
@@ -102,6 +126,7 @@
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
     <script>
         window.RtPanel = {
@@ -206,6 +231,26 @@
             } catch {}
             window.location.href = '/Login';
         }
+
+        // === 主题切换(亮色/暗色) ===
+        function getTheme() {
+            return document.documentElement.getAttribute('data-theme') || 'dark';
+        }
+
+        function applyThemeIcon() {
+            const icon = document.getElementById('themeIcon');
+            if (icon) icon.textContent = getTheme() === 'light' ? '☀' : '🌙';
+        }
+
+        function toggleTheme() {
+            const next = getTheme() === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', next);
+            try { localStorage.setItem('theme', next); } catch (e) {}
+            applyThemeIcon();
+        }
+
+        // 初始化图标与已存主题一致
+        applyThemeIcon();
 
         setInterval(() => RtPanel.checkConnection(), 8000);
         RtPanel.checkConnection();
