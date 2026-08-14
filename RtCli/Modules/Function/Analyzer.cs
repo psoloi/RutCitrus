@@ -28,7 +28,7 @@ namespace RtCli.Modules.Function
         private static readonly object _scanLock = new object();
         private static List<MinecraftServerInfo> _lastScanResults = new List<MinecraftServerInfo>();
         private static long _logFilePosition = 0;
-        private static string _currentMode = "RCON";
+        private static string _currentMode = "RM";
         private static bool _isRunModeActive = false;
 
         internal static readonly object _logBufferLock = new object();
@@ -58,26 +58,44 @@ namespace RtCli.Modules.Function
             get { lock (_scanLock) { return _lastScanResults.ToList(); } }
         }
         public static string CurrentMode => _currentMode;
-        /// <summary>Run模式 - 启动MC服务端作为子进程，通过stdin发送命令</summary>
+        /// <summary>Run模式 - 启动MC服务端作为子进程，通过stdout获取控制台，stdin发送命令</summary>
         public static bool IsRunMode => _currentMode == "RUN";
-        /// <summary>Rcon模式 - 启动MC服务端作为子进程读取日志 + RCON发送命令</summary>
+        /// <summary>Rcon模式 - 不启动服务端，仅通过RCON发送命令并显示返回信息</summary>
         public static bool IsRconMode => _currentMode == "RCON";
-        /// <summary>OnlyRcon模式 - 连接已运行的MC服务端(日志文件+RCON)</summary>
-        public static bool IsOnlyRconMode => _currentMode == "ONLYRCON";
-        /// <summary>Management模式 - 启动MC服务端读取日志，命令由管理模式处理</summary>
-        public static bool IsManagementMode => _currentMode == "MANAGEMENT";
-        /// <summary>是否需要启动MC服务端作为子进程(Run/Rcon/Management)</summary>
-        public static bool NeedsRunServer => _currentMode == "RUN" || _currentMode == "RCON" || _currentMode == "MANAGEMENT";
-        /// <summary>是否使用RCON发送命令(Rcon/OnlyRcon)</summary>
-        public static bool UsesRconCommands => _currentMode == "RCON" || _currentMode == "ONLYRCON";
+        /// <summary>RR模式(Run+Rcon) - 启动服务端读取stdout控制台，通过RCON发送命令</summary>
+        public static bool IsRRMode => _currentMode == "RR";
+        /// <summary>RM模式(Run+Management) - 启动服务端通过日志文件读取控制台，stdin发送命令</summary>
+        public static bool IsRMMode => _currentMode == "RM";
+        // 兼容旧属性名
+        public static bool IsOnlyRconMode => _currentMode == "RCON";
+        public static bool IsManagementMode => _currentMode == "RM";
+        /// <summary>是否需要启动MC服务端作为子进程(Run/RR/RM)</summary>
+        public static bool NeedsRunServer => _currentMode == "RUN" || _currentMode == "RR" || _currentMode == "RM";
+        /// <summary>是否使用RCON发送命令(Rcon/RR)</summary>
+        public static bool UsesRconCommands => _currentMode == "RCON" || _currentMode == "RR";
+        /// <summary>是否使用stdin发送命令(Run/RM)</summary>
+        public static bool UsesStdinCommands => _currentMode == "RUN" || _currentMode == "RM";
+        /// <summary>是否从stdout读取控制台(Run/RR)</summary>
+        public static bool ReadsFromStdout => _currentMode == "RUN" || _currentMode == "RR";
+        /// <summary>是否从日志文件读取控制台(RM)</summary>
+        public static bool ReadsFromLogFile => _currentMode == "RM";
+        /// <summary>是否使用服务端管理协议(RM)</summary>
+        public static bool UsesManagementProtocol => _currentMode == "RM";
 
         public static void Initialize()
         {
-            _currentMode = Config.CurrentServer.AnalyzerMode.ToUpperInvariant();
-            if (_currentMode != "RUN" && _currentMode != "RCON" && _currentMode != "ONLYRCON" && _currentMode != "MANAGEMENT")
+            string raw = Config.CurrentServer.AnalyzerMode.ToUpperInvariant();
+            // 向后兼容: 旧模式名映射到新模式名
+            _currentMode = raw switch
             {
-                _currentMode = "MANAGEMENT";
-            }
+                "RUN" => "RUN",
+                "RCON" => "RR",        // 旧Rcon = 新RR (Run+Rcon)
+                "ONLYRCON" => "RCON",  // 旧OnlyRcon = 新Rcon (纯RCON)
+                "MANAGEMENT" => "RM",  // 旧Management = 新RM (Run+Management)
+                "RR" => "RR",
+                "RM" => "RM",
+                _ => "RM"
+            };
         }
 
         #region RUN Mode
@@ -90,7 +108,7 @@ namespace RtCli.Modules.Function
 
             if (!NeedsRunServer)
             {
-                Output.Log("当前模式为 OnlyRcon，无法启动服务端。请在配置文件中设置 analyzer_mode 为 Run/Rcon/Management。", 2, ThisProgramName);
+                Output.Log("当前模式为 Rcon，无法启动服务端。请在配置文件中设置 analyzer_mode 为 Run/RR/RM。", 2, ThisProgramName);
                 return;
             }
 
@@ -189,12 +207,16 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                     {
-                        AddToLogBuffer(e.Data);
-                        if (!ShouldHideConsole())
-                            Output.Log(e.Data, 0, _connectedServerName);
+                        // RM模式: 不从stdout读取控制台(改用日志文件)，但仍检测EULA
+                        if (ReadsFromStdout)
+                        {
+                            AddToLogBuffer(e.Data);
+                            if (!ShouldHideConsole())
+                                Output.Log(e.Data, 0, _connectedServerName);
 
-                        ProcessPlayerEventLine(e.Data);
-                        ProcessCrashDetectionLine(e.Data);
+                            ProcessPlayerEventLine(e.Data);
+                            ProcessCrashDetectionLine(e.Data);
+                        }
 
                         // 自动检测EULA提示 (首次启动时服务端生成eula.txt后退出)
                         if (e.Data.Contains("eula=false", StringComparison.OrdinalIgnoreCase) ||
@@ -276,11 +298,15 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                     {
-                        AddToLogBuffer(e.Data);
-                        if (!ShouldHideConsole())
-                            Output.Log(e.Data, 0, _connectedServerName);
-                        ProcessPlayerEventLine(e.Data);
-                        ProcessCrashDetectionLine(e.Data);
+                        // RM模式: 不从stderr读取控制台(改用日志文件)
+                        if (ReadsFromStdout)
+                        {
+                            AddToLogBuffer(e.Data);
+                            if (!ShouldHideConsole())
+                                Output.Log(e.Data, 0, _connectedServerName);
+                            ProcessPlayerEventLine(e.Data);
+                            ProcessCrashDetectionLine(e.Data);
+                        }
                     }
                 };
 
@@ -318,11 +344,11 @@ namespace RtCli.Modules.Function
                 Output.Log($"工作目录: {workPath}", 1, ThisProgramName);
                 Output.Log($"启动参数: java {flags}", 1, ThisProgramName);
 
-                // Rcon模式：启动后尝试RCON连接
+                // RR模式：启动后尝试RCON连接
                 if (UsesRconCommands)
                 {
                     _rconClient = new RconClient();
-                    Output.Log("Rcon模式：将在服务端启动完成后自动连接RCON...", 1, ThisProgramName);
+                    Output.Log("RR模式：将在服务端启动完成后自动连接RCON...", 1, ThisProgramName);
                     _ = Task.Run(() =>
                     {
                         // 等待服务端启动完成（最多等待5分钟）
@@ -350,9 +376,12 @@ namespace RtCli.Modules.Function
                 {
                     Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
                 }
-                else if (IsManagementMode)
+                else if (IsRMMode)
                 {
-                    Output.Log("Management模式：日志读取已启动，使用stdin发送命令。", 1, ThisProgramName);
+                    // RM模式: 通过日志文件获取控制台信息流
+                    Output.Log("RM模式：正在启动日志文件监控...", 1, ThisProgramName);
+                    _ = Task.Run(() => StartRMLogFileMonitor(workPath, _outputCts.Token));
+                    Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
                 }
 
                 Output.Log("输入 .server stop 停止服务端。", 1, ThisProgramName);
@@ -552,9 +581,9 @@ namespace RtCli.Modules.Function
         {
             string ThisProgramName = "Analyzer";
 
-            if (!IsOnlyRconMode)
+            if (!IsRconMode)
             {
-                Output.Log("当前模式不支持 .server connect。OnlyRcon模式下才可连接已运行的服务端。", 2, ThisProgramName);
+                Output.Log("当前模式不支持 .server connect。Rcon模式下才可连接已运行的服务端。", 2, ThisProgramName);
                 return;
             }
 
@@ -582,9 +611,9 @@ namespace RtCli.Modules.Function
         {
             string ThisProgramName = "Analyzer";
 
-            if (!IsOnlyRconMode)
+            if (!IsRconMode)
             {
-                Output.Log("当前模式不支持 .server connect。OnlyRcon模式下才可连接已运行的服务端。", 2, ThisProgramName);
+                Output.Log("当前模式不支持 .server connect。Rcon模式下才可连接已运行的服务端。", 2, ThisProgramName);
                 return;
             }
 
@@ -625,35 +654,30 @@ namespace RtCli.Modules.Function
 
                 try
                 {
-                    string? serverDir = ResolveServerDirectory(server);
-                    if (string.IsNullOrEmpty(serverDir))
-                    {
-                        Output.Log("无法确定服务端工作目录，连接失败。", 2, ThisProgramName);
-                        return;
-                    }
-
-                    string logFile = Path.Combine(serverDir, "logs", "latest.log");
-                    if (!File.Exists(logFile))
-                    {
-                        Output.Log($"找不到日志文件: {logFile}", 2, ThisProgramName);
-                        return;
-                    }
-
                     _attachedProcessId = server.ProcessId;
                     _attachedWindowTitle = server.WindowTitle;
                     _connectedServerName = serverName;
 
-                    using (var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                    {
-                        Interlocked.Exchange(ref _logFilePosition, fs.Length);
-                    }
-
                     _outputCts = new CancellationTokenSource();
                     var token = _outputCts.Token;
-                    var capturedServerName = _connectedServerName;
-                    var capturedLogFile = logFile;
 
-                    _ = Task.Run(() => WatchLogFile(capturedLogFile, capturedServerName, token), token);
+                    // Rcon模式: 不读取日志文件，仅通过RCON通信
+                    string? serverDir = ResolveServerDirectory(server);
+                    if (!string.IsNullOrEmpty(serverDir))
+                    {
+                        string logFile = Path.Combine(serverDir, "logs", "latest.log");
+                        if (File.Exists(logFile))
+                        {
+                            using (var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                            {
+                                Interlocked.Exchange(ref _logFilePosition, fs.Length);
+                            }
+                            var capturedServerName = _connectedServerName;
+                            var capturedLogFile = logFile;
+                            _ = Task.Run(() => WatchLogFile(capturedLogFile, capturedServerName, token), token);
+                            Output.Log($"日志文件: {logFile}", 1, ThisProgramName);
+                        }
+                    }
 
                     _rconClient = new RconClient();
                     bool rconConnected = false;
@@ -670,7 +694,6 @@ namespace RtCli.Modules.Function
                     }
 
                     Output.Log($"已连接服务端: {Path.GetFileName(server.JarPath)} (PID: {server.ProcessId})", 1, ThisProgramName);
-                    Output.Log($"日志文件: {logFile}", 1, ThisProgramName);
                     if (rconConnected)
                     {
                         Output.Log($"RCON 已连接 ({Config.CurrentServer.RconHost}:{Config.CurrentServer.RconPort})", 1, ThisProgramName);
@@ -691,6 +714,37 @@ namespace RtCli.Modules.Function
                     Output.ReportError(ex, false, "连接服务端失败");
                 }
             }
+        }
+
+        /// <summary>
+        /// RM模式日志文件监控: 等待日志文件创建后开始监控
+        /// </summary>
+        private static void StartRMLogFileMonitor(string workPath, CancellationToken cancellationToken)
+        {
+            string ThisProgramName = "Analyzer";
+            string logFile = Path.Combine(workPath, "logs", "latest.log");
+
+            // 等待日志文件创建(最多60秒)
+            for (int i = 0; i < 60; i++)
+            {
+                if (cancellationToken.IsCancellationRequested) return;
+                if (File.Exists(logFile)) break;
+                Thread.Sleep(1000);
+            }
+
+            if (!File.Exists(logFile))
+            {
+                Output.Log("RM模式: 日志文件未创建，无法启动监控。", 2, ThisProgramName);
+                return;
+            }
+
+            // 从文件开头开始读取(MC服务端每次启动会清空latest.log)
+            Interlocked.Exchange(ref _logFilePosition, 0);
+
+            string serverName = _connectedServerName;
+            Output.Log($"RM模式: 日志文件监控已启动 ({logFile})", 1, ThisProgramName);
+
+            WatchLogFile(logFile, serverName, cancellationToken);
         }
 
         private static void WatchLogFile(string logFile, string serverName, CancellationToken cancellationToken)
@@ -798,7 +852,7 @@ namespace RtCli.Modules.Function
         {
             lock (_attachLock)
             {
-                if (IsRunMode || IsManagementMode)
+                if (UsesStdinCommands)
                 {
                     SendCommandRunMode(command);
                 }
@@ -906,7 +960,7 @@ namespace RtCli.Modules.Function
                     return result;
                 }
 
-                if ((IsRunMode || IsManagementMode) && _isRunModeActive && _serverInput != null)
+                if (UsesStdinCommands && _isRunModeActive && _serverInput != null)
                 {
                     // Run 模式：写入 stdin，然后从日志缓冲区收集新行
                     int startCount;
@@ -2248,6 +2302,147 @@ namespace RtCli.Modules.Function
             Output.Log($"共 {plugins.Count} 个插件。使用 .fx filter plugin <序号> 切换启用/禁用，使用.fx filter plugin 0 重启服务端。", 1, ThisProgramName);
         }
 
+        // ===== fx filter mod (模组启用/禁用, 参考 filter plugin) =====
+        private static readonly List<ModEntry> _lastModList = new List<ModEntry>();
+
+        public static void FilterMod(int? selectedIndex)
+        {
+            string ThisProgramName = "Filter";
+
+            if (selectedIndex.HasValue && selectedIndex.Value == 0)
+            {
+                Output.Log("正在重启 MC 服务端...", 1, ThisProgramName);
+                StopServer();
+                Thread.Sleep(2000);
+                StartServer();
+                return;
+            }
+
+            if (selectedIndex.HasValue && selectedIndex.Value > 0)
+            {
+                lock (_filterLock)
+                {
+                    if (_lastModList.Count == 0)
+                    {
+                        Output.Log("没有模组列表，请先使用 .fx filter mod 查看。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    int idx = selectedIndex.Value - 1;
+                    if (idx >= _lastModList.Count)
+                    {
+                        Output.Log($"无效的序号，请输入 1 到 {_lastModList.Count} 之间的数字。", 2, ThisProgramName);
+                        return;
+                    }
+
+                    var mod = _lastModList[idx];
+                    try
+                    {
+                        // 模组禁用约定: mod.jar -> mod.jar.disabled (Fabric/Forge 通用)
+                        if (mod.IsDisabled)
+                        {
+                            string newPath = mod.FullPath.Substring(0, mod.FullPath.Length - ".disabled".Length);
+                            File.Move(mod.FullPath, newPath);
+                            Output.Log($"已启用模组: {Markup.Escape(mod.FileName)} -> {Markup.Escape(Path.GetFileName(newPath))}", 1, ThisProgramName);
+                        }
+                        else
+                        {
+                            string newPath = mod.FullPath + ".disabled";
+                            File.Move(mod.FullPath, newPath);
+                            Output.Log($"已禁用模组: {Markup.Escape(mod.FileName)} -> {Markup.Escape(Path.GetFileName(newPath))}", 1, ThisProgramName);
+                        }
+
+                        ListMods();
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"操作失败: {ex.Message}", 3, ThisProgramName);
+                    }
+                }
+                return;
+            }
+
+            ListMods();
+        }
+
+        private static void ListMods()
+        {
+            string ThisProgramName = "Filter";
+            string workPath = GetWorkPath();
+            if (string.IsNullOrEmpty(workPath) || !Directory.Exists(workPath))
+            {
+                Output.Log("无法获取 MC 服务端工作目录。", 2, ThisProgramName);
+                return;
+            }
+
+            string modsDir = Path.Combine(workPath, "mods");
+            if (!Directory.Exists(modsDir))
+            {
+                Output.Log("mods 目录不存在。", 2, ThisProgramName);
+                return;
+            }
+
+            lock (_filterLock)
+            {
+                _lastModList.Clear();
+            }
+
+            var jarFiles = new List<FileInfo>();
+            try
+            {
+                var dirInfo = new DirectoryInfo(modsDir);
+                jarFiles.AddRange(dirInfo.GetFiles("*.jar"));
+                jarFiles.AddRange(dirInfo.GetFiles("*.disabled"));
+                jarFiles = jarFiles.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"读取模组目录失败: {ex.Message}", 3, ThisProgramName);
+                return;
+            }
+
+            if (jarFiles.Count == 0)
+            {
+                Output.Log("mods 目录中没有找到模组文件。", 2, ThisProgramName);
+                return;
+            }
+
+            var mods = new List<ModEntry>();
+            int index = 1;
+            foreach (var file in jarFiles)
+            {
+                bool isDisabled = file.Extension.Equals(".disabled", StringComparison.OrdinalIgnoreCase);
+                mods.Add(new ModEntry
+                {
+                    Index = index++,
+                    FileName = file.Name,
+                    FullPath = file.FullName,
+                    IsDisabled = isDisabled
+                });
+            }
+
+            lock (_filterLock)
+            {
+                _lastModList.Clear();
+                _lastModList.AddRange(mods);
+            }
+
+            var table = new Table()
+                .Border(TableBorder.Rounded)
+                .AddColumn("序号", c => c.Alignment(Justify.Center).Width(6))
+                .AddColumn("模组文件名", c => c.Width(50))
+                .AddColumn("状态", c => c.Alignment(Justify.Center).Width(12));
+
+            foreach (var mod in mods)
+            {
+                string status = mod.IsDisabled ? "[red]已禁用[/]" : "[green]正常[/]";
+                table.AddRow(mod.Index.ToString(), Markup.Escape(mod.FileName), status);
+            }
+
+            AnsiConsole.Write(table);
+            Output.Log($"共 {mods.Count} 个模组。使用 .fx filter mod <序号> 切换启用/禁用，使用.fx filter mod 0 重启服务端。", 1, ThisProgramName);
+        }
+
         private static string GetWorkPath()
         {
             string? workPath = Config.CurrentServer.WorkPath;
@@ -3030,6 +3225,14 @@ namespace RtCli.Modules.Function
     }
 
     internal class PluginEntry
+    {
+        public int Index { get; set; }
+        public string FileName { get; set; } = "";
+        public string FullPath { get; set; } = "";
+        public bool IsDisabled { get; set; }
+    }
+
+    internal class ModEntry
     {
         public int Index { get; set; }
         public string FileName { get; set; } = "";

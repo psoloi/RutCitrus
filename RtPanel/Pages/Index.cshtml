@@ -352,7 +352,9 @@
         }
     }
 
-    // 从 panel_data.json 同步保留时长设置
+    // 从 panel_data.json 同步设置(保留时长/图表默认/刷新间隔)
+    let REFRESH_INTERVAL_MS = 5000;
+    let statsTimerId = null;
     async function syncRetentionSetting() {
         try {
             const resp = await fetch('/api/system/paneldata').then(r => r.json());
@@ -362,6 +364,14 @@
                     RETENTION_HOURS = data.historyRetention;
                     STORAGE_INTERVAL_MS = calcStorageInterval();
                     trimHistory();
+                }
+                // 图表默认展开/收起
+                applyChartDefaultSetting(data.chartDefault || 'collapsed');
+                // 刷新间隔
+                if (data.refreshInterval && data.refreshInterval !== REFRESH_INTERVAL_MS) {
+                    REFRESH_INTERVAL_MS = data.refreshInterval;
+                    if (statsTimerId) clearInterval(statsTimerId);
+                    statsTimerId = setInterval(loadSystemStats, REFRESH_INTERVAL_MS);
                 }
             }
         } catch { }
@@ -437,19 +447,29 @@
         memChart.update('none');
     }
 
+    // CPU/内存图表同步切换: 点击任一按钮, 两个图表同时展开/收起
     function toggleChart(type) {
-        if (type === 'cpu') {
-            const wrap = document.getElementById('cpuChartWrap');
-            const visible = wrap.style.display !== 'none';
-            wrap.style.display = visible ? 'none' : '';
-            if (!visible && !cpuChart) initRealtimeCharts();
-            if (!visible) updateRealtimeCharts();
-        } else {
-            const wrap = document.getElementById('memChartWrap');
-            const visible = wrap.style.display !== 'none';
-            wrap.style.display = visible ? 'none' : '';
-            if (!visible && !memChart) initRealtimeCharts();
-            if (!visible) updateRealtimeCharts();
+        const cpuWrap = document.getElementById('cpuChartWrap');
+        const memWrap = document.getElementById('memChartWrap');
+        // 以任一图表当前状态决定目标状态(两者保持同步)
+        const visible = cpuWrap.style.display !== 'none' || memWrap.style.display !== 'none';
+        const target = visible ? 'none' : '';
+        cpuWrap.style.display = target;
+        memWrap.style.display = target;
+        if (!visible) {
+            if (!cpuChart || !memChart) initRealtimeCharts();
+            updateRealtimeCharts();
+        }
+    }
+
+    // 应用图表默认展开/收起设置(来自 panel_data.json)
+    function applyChartDefaultSetting(chartDefault) {
+        const target = chartDefault === 'expanded' ? '' : 'none';
+        document.getElementById('cpuChartWrap').style.display = target;
+        document.getElementById('memChartWrap').style.display = target;
+        if (chartDefault === 'expanded') {
+            if (!cpuChart || !memChart) initRealtimeCharts();
+            updateRealtimeCharts();
         }
     }
 
@@ -660,7 +680,7 @@
     loadSystemStats();
     loadRtStatus();
     setInterval(loadDashboard, 5000);
-    setInterval(loadSystemStats, 5000);
+    statsTimerId = setInterval(loadSystemStats, REFRESH_INTERVAL_MS);
     setInterval(loadRtStatus, 30000);
 
     // 页面卸载前保存历史数据

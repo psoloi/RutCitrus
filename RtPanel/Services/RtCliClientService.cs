@@ -63,7 +63,11 @@ namespace RtPanel.Services
                 AuthKey = authKey;
 
                 var address = $"http://{host}:{port}";
-                _channel = GrpcChannel.ForAddress(address);
+                _channel = GrpcChannel.ForAddress(address, new GrpcChannelOptions
+                {
+                    MaxReceiveMessageSize = 64 * 1024 * 1024,
+                    MaxSendMessageSize = 64 * 1024 * 1024
+                });
                 _client = new RtCliService.RtCliServiceClient(_channel);
 
                 var info = await _client.GetServerInfoAsync(new Empty(),
@@ -535,6 +539,69 @@ namespace RtPanel.Services
         {
             if (_client == null || !IsConnected) return null;
             try { return await _client.GetConfigDocsAsync(new ConfigFileRequest { FileName = fileName ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(5)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceErrorsResponse?> AnalyzeInstanceErrorsAsync(string id)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.AnalyzeInstanceErrorsAsync(new InstanceDetailRequest { Id = id ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<AiAnalyzeResponse?> AiAnalyzeInstanceErrorsAsync(string id, string range)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.AiAnalyzeInstanceErrorsAsync(new AiAnalyzeRequest { Id = id ?? "", Range = range ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(300)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<PlayerEventListResponse?> GetPlayerEventsAsync(string id, int limit = 0)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetPlayerEventsAsync(new PlayerEventRequest { Id = id ?? "", Limit = limit }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<JarFileListResponse?> ListPluginsAsync(string id)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ListPluginsAsync(new InstanceDetailRequest { Id = id ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<JarFileListResponse?> ListModsAsync(string id)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ListModsAsync(new InstanceDetailRequest { Id = id ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> ToggleJarFileAsync(string id, string fileName, string type)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ToggleJarFileAsync(new ManageJarFileRequest { Id = id ?? "", FileName = fileName, Type = type }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> DeleteJarFileAsync(string id, string fileName, string type)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.DeleteJarFileAsync(new ManageJarFileRequest { Id = id ?? "", FileName = fileName, Type = type }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> UploadJarFileAsync(string id, string fileName, string type, byte[] content)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.UploadJarFileAsync(new UploadJarFileRequest { Id = id ?? "", FileName = fileName, Type = type, Content = Google.Protobuf.ByteString.CopyFrom(content) }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(60)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> ManagePlayerAsync(string id, string action, string target, string reason, string command)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ManagePlayerAsync(new ManagePlayerRequest { Id = id ?? "", Action = action, Target = target ?? "", Reason = reason ?? "", Command = command ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15)); }
             catch { MarkDisconnected(); return null; }
         }
 

@@ -611,12 +611,16 @@ namespace RtCli.Modules
     /// <summary>
     /// 面板设置管理器: 负责加载/保存 panel_data.json
     /// 存储在 server_data.json 同目录(Config.DataPath)
+    /// 同时管理玩家事件日志(按实例ID分组, 保存在 playerEvents 字段下)
     /// </summary>
     internal static class PanelDataManager
     {
         private static readonly string FileName = "panel_data.json";
         private static string FilePath => Path.Combine(Unit.Config.DataPath, FileName);
         private static readonly object _lock = new();
+
+        /// <summary>每个实例最多保留的玩家事件条数</summary>
+        private const int MaxEventsPerInstance = 1000;
 
         /// <summary>加载面板设置(JSON 字符串)</summary>
         public static string Load()
@@ -653,5 +657,194 @@ namespace RtCli.Modules
                 }
             }
         }
+
+        /// <summary>追加一条玩家事件到指定实例的事件列表</summary>
+        public static void AppendPlayerEvent(string instanceId, PlayerEventEntry entry)
+        {
+            if (string.IsNullOrEmpty(instanceId) || entry == null) return;
+            lock (_lock)
+            {
+                try
+                {
+                    var json = File.Exists(FilePath) ? File.ReadAllText(FilePath) : "{}";
+                    using var doc = JsonDocument.Parse(json);
+                    using var ms = new MemoryStream();
+                    using (var writer = new Utf8JsonWriter(ms))
+                    {
+                        writer.WriteStartObject();
+                        bool hasPlayerEvents = false;
+                        foreach (var prop in doc.RootElement.EnumerateObject())
+                        {
+                            if (prop.Name == "playerEvents")
+                            {
+                                hasPlayerEvents = true;
+                                writer.WritePropertyName("playerEvents");
+                                writer.WriteStartObject();
+                                // 复制已有实例的事件
+                                bool foundInstance = false;
+                                foreach (var instProp in prop.Value.EnumerateObject())
+                                {
+                                    if (instProp.Name == instanceId)
+                                    {
+                                        foundInstance = true;
+                                        writer.WritePropertyName(instanceId);
+                                        WriteEventArrayWithAppend(writer, instProp.Value, entry);
+                                    }
+                                    else
+                                    {
+                                        instProp.WriteTo(writer);
+                                    }
+                                }
+                                if (!foundInstance)
+                                {
+                                    writer.WritePropertyName(instanceId);
+                                    writer.WriteStartArray();
+                                    WriteEventEntry(writer, entry);
+                                    writer.WriteEndArray();
+                                }
+                                writer.WriteEndObject();
+                            }
+                            else
+                            {
+                                prop.WriteTo(writer);
+                            }
+                        }
+                        if (!hasPlayerEvents)
+                        {
+                            writer.WritePropertyName("playerEvents");
+                            writer.WriteStartObject();
+                            writer.WritePropertyName(instanceId);
+                            writer.WriteStartArray();
+                            WriteEventEntry(writer, entry);
+                            writer.WriteEndArray();
+                            writer.WriteEndObject();
+                        }
+                        writer.WriteEndObject();
+                    }
+                    File.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
+                }
+                catch (Exception ex)
+                {
+                    Output.Log($"追加玩家事件失败: {ex.Message}", 3, "Hub");
+                }
+            }
+        }
+
+        /// <summary>获取指定实例的玩家事件列表</summary>
+        public static List<PlayerEventEntry> GetPlayerEvents(string instanceId, int limit = 0)
+        {
+            var result = new List<PlayerEventEntry>();
+            if (string.IsNullOrEmpty(instanceId)) return result;
+            lock (_lock)
+            {
+                try
+                {
+                    if (!File.Exists(FilePath)) return result;
+                    var json = File.ReadAllText(FilePath);
+                    using var doc = JsonDocument.Parse(json);
+                    if (!doc.RootElement.TryGetProperty("playerEvents", out var eventsObj)) return result;
+                    if (!eventsObj.TryGetProperty(instanceId, out var arr)) return result;
+                    foreach (var item in arr.EnumerateArray())
+                    {
+                        result.Add(new PlayerEventEntry
+                        {
+                            EventType = item.TryGetProperty("eventType", out var t) ? t.GetString() ?? "" : "",
+                            PlayerName = item.TryGetProperty("playerName", out var n) ? n.GetString() ?? "" : "",
+                            TriggerTime = item.TryGetProperty("triggerTime", out var tt) ? tt.GetString() ?? "" : "",
+                            RecordedAt = item.TryGetProperty("recordedAt", out var r) ? r.GetString() ?? "" : "",
+                            Detail = item.TryGetProperty("detail", out var d) ? d.GetString() ?? "" : ""
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Output.Log($"读取玩家事件失败: {ex.Message}", 3, "Hub");
+                }
+            }
+            if (limit > 0 && result.Count > limit)
+                result = result.Skip(result.Count - limit).ToList();
+            return result;
+        }
+
+        /// <summary>清空指定实例的玩家事件</summary>
+        public static (bool Success, string Message) ClearPlayerEvents(string instanceId)
+        {
+            lock (_lock)
+            {
+                try
+                {
+                    if (!File.Exists(FilePath)) return (true, "无数据");
+                    var json = File.ReadAllText(FilePath);
+                    using var doc = JsonDocument.Parse(json);
+                    using var ms = new MemoryStream();
+                    using (var writer = new Utf8JsonWriter(ms))
+                    {
+                        writer.WriteStartObject();
+                        foreach (var prop in doc.RootElement.EnumerateObject())
+                        {
+                            if (prop.Name == "playerEvents")
+                            {
+                                writer.WritePropertyName("playerEvents");
+                                writer.WriteStartObject();
+                                foreach (var instProp in prop.Value.EnumerateObject())
+                                {
+                                    if (instProp.Name != instanceId)
+                                        instProp.WriteTo(writer);
+                                }
+                                writer.WriteEndObject();
+                            }
+                            else
+                            {
+                                prop.WriteTo(writer);
+                            }
+                        }
+                        writer.WriteEndObject();
+                    }
+                    File.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
+                    return (true, "已清空");
+                }
+                catch (Exception ex)
+                {
+                    return (false, $"清空失败: {ex.Message}");
+                }
+            }
+        }
+
+        private static void WriteEventArrayWithAppend(Utf8JsonWriter writer, JsonElement existing, PlayerEventEntry newEntry)
+        {
+            writer.WriteStartArray();
+            var items = existing.EnumerateArray().ToList();
+            // 超过上限则丢弃最旧的, 保持不超过 MaxEventsPerInstance
+            int skip = 0;
+            if (items.Count >= MaxEventsPerInstance)
+                skip = items.Count - MaxEventsPerInstance + 1;
+            for (int i = skip; i < items.Count; i++)
+            {
+                items[i].WriteTo(writer);
+            }
+            WriteEventEntry(writer, newEntry);
+            writer.WriteEndArray();
+        }
+
+        private static void WriteEventEntry(Utf8JsonWriter writer, PlayerEventEntry entry)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("eventType", entry.EventType);
+            writer.WriteString("playerName", entry.PlayerName);
+            writer.WriteString("triggerTime", entry.TriggerTime);
+            writer.WriteString("recordedAt", entry.RecordedAt);
+            writer.WriteString("detail", entry.Detail);
+            writer.WriteEndObject();
+        }
+    }
+
+    /// <summary>玩家事件记录条目</summary>
+    public class PlayerEventEntry
+    {
+        public string EventType { get; set; } = "";
+        public string PlayerName { get; set; } = "";
+        public string TriggerTime { get; set; } = "";
+        public string RecordedAt { get; set; } = "";
+        public string Detail { get; set; } = "";
     }
 }

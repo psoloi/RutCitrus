@@ -13,14 +13,14 @@ namespace RtCli.Modules.Unit
     public class ServerEntry
     {
         public string ServerName { get; set; } = "myserver";
-        public string AnalyzerMode { get; set; } = "Management";
+        public string AnalyzerMode { get; set; } = "RM";
         public string WorkPath { get; set; } = "";
         public string RunServerFlags { get; set; } = "-Xms1024M -Xmx1024M -XX:+AlwaysPreTouch -XX:+DisableExplicitGC -XX:+ParallelRefProcEnabled -XX:+PerfDisableSharedMem -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1HeapRegionSize=8M -XX:G1HeapWastePercent=5 -XX:G1MaxNewSizePercent=40 -XX:G1MixedGCCountTarget=4 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1NewSizePercent=30 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:G1ReservePercent=20 -XX:InitiatingHeapOccupancyPercent=15 -XX:MaxGCPauseMillis=200 -XX:MaxTenuringThreshold=1 -XX:SurvivorRatio=32 -jar server.jar --nogui";
         public string JavaPath { get; set; } = "";
         public string RconHost { get; set; } = "127.0.0.1";
         public int RconPort { get; set; } = 25575;
         public string RconPassword { get; set; } = "";
-        // Management模式配置 (需要MC 1.21.9+，服务端需开启management-server-enabled)
+        // RM模式配置 (需要MC 1.21.9+，服务端需开启management-server-enabled)
         public string ManagementHost { get; set; } = "localhost";
         public int ManagementPort { get; set; } = 0;
         public string ManagementSecret { get; set; } = "";
@@ -314,19 +314,19 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#  server_list 中的每个服务端配置:");
             sb.AppendLine("#    server_name       - 服务器名称，用于标识");
             sb.AppendLine("#    analyzer_mode     - MC控制台模式:");
-            sb.AppendLine("#                          Run: 启动MC服务端作为子进程，通过stdin发送命令");
-            sb.AppendLine("#                          Rcon: 启动MC服务端作为子进程读取日志 + RCON发送命令(推荐)");
-            sb.AppendLine("#                          OnlyRcon: 连接已运行的MC服务端(日志文件+RCON)");
-            sb.AppendLine("#                          Management: 启动MC服务端读取日志 + 服务端管理协议(推荐)");
-            sb.AppendLine("#                                      需要MC 1.21.9+，服务端需开启management-server-enabled");
+            sb.AppendLine("#                          Run: 启动MC服务端作为子进程，通过stdout获取控制台，stdin发送命令");
+            sb.AppendLine("#                          Rcon: 不启动服务端，仅通过RCON发送命令并显示返回信息");
+            sb.AppendLine("#                          RR: (Run+Rcon) 启动服务端读取stdout控制台，通过RCON发送命令");
+            sb.AppendLine("#                          RM: (Run+Management) 启动服务端通过日志文件读取控制台，stdin发送命令");
+            sb.AppendLine("#                              RM模式可使用服务端管理协议(MC 1.21.9+, 需开启management-server-enabled)");
             sb.AppendLine("#    work_path         - MC服务端的工作目录路径");
             sb.AppendLine("#    run_server_flags  - 启动MC服务端的JVM参数");
             sb.AppendLine("#    java_path         - Java可执行文件路径(留空则使用系统默认java)");
             sb.AppendLine("#    rcon_host         - RCON服务地址");
             sb.AppendLine("#    rcon_port         - RCON服务端口");
             sb.AppendLine("#    rcon_password     - RCON密码");
-            sb.AppendLine("#    management_host   - 服务端管理协议地址(Management模式, 需MC 1.21.9+)");
-            sb.AppendLine("#    management_port   - 服务端管理协议端口(0=自动, Management模式)");
+            sb.AppendLine("#    management_host   - 服务端管理协议地址(RM模式, 需MC 1.21.9+)");
+            sb.AppendLine("#    management_port   - 服务端管理协议端口(0=自动, RM模式)");
             sb.AppendLine("#    management_secret - 服务端管理协议认证令牌(40位字母数字)");
             sb.AppendLine("#    management_tls_enabled - 是否启用TLS连接管理协议");
             sb.AppendLine("#    auto_restart      - 服务端崩溃后是否自动重启 (true/false)");
@@ -429,7 +429,7 @@ namespace RtCli.Modules.Unit
                 else if (trimmedLine.StartsWith("analyzer_mode:"))
                 {
                     sb.AppendLine();
-                    sb.AppendLine("# MC控制台模式 (Run/Rcon/OnlyRcon/Management)");
+                    sb.AppendLine("# MC控制台模式 (Run/Rcon/RR/RM)");
                 }
                 else if (trimmedLine.StartsWith("work_path:"))
                 {
@@ -484,7 +484,7 @@ namespace RtCli.Modules.Unit
                 else if (trimmedLine.StartsWith("management_host:"))
                 {
                     sb.AppendLine();
-                    sb.AppendLine("# 服务端管理协议地址(Management模式, 需MC 1.21.9+)");
+                    sb.AppendLine("# 服务端管理协议地址(RM模式, 需MC 1.21.9+)");
                 }
                 else if (trimmedLine.StartsWith("management_port:"))
                 {

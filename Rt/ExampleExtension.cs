@@ -11,6 +11,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Rt.Common;
 using Rt.Core;
+using Rt.Core.AntiCheat;
 using Spectre.Console;
 
 namespace Rt
@@ -20,13 +21,14 @@ namespace Rt
         // Core里面放主功能，Com则是模块
         // 这是一个示例扩展，详细展示了如何使用RtCli框架的功能和模块
         public override string Name => "Rt";
-        public override string Version => "1.7.0";
+        public override string Version => "1.8.6";
         public override string Description => "RtCli扩展插件，扩展了MC服务器安全方面的功能";
 
         private bool _isLoaded = false;
         // NetworkMonitor 是单例(NetworkMonitor.Instance)，无需字段
         private static PacketsLimitMonitor? _packetsLimitMonitor;
         private static AntibotMonitor? _antibotMonitor;
+        private static AntiCheatMonitor? _antiCheatMonitor;
 
         public override void Load()
         {
@@ -72,6 +74,11 @@ namespace Rt
                 Output.Log("  [cyan]rte antibot stop[/]        停止反机器人监测", 1, "Rt");
                 Output.Log("  [cyan]rte antibot notify[/]      切换流量通知(每15s显示流量统计)", 1, "Rt");
                 Output.Log("  [cyan]rte antibot verbose[/]     切换详细数据包日志", 1, "Rt");
+                Output.Log("[grey]── 反作弊子功能(MC服务端外检测) ──[/]", 1, "Rt");
+                Output.Log("  [cyan]rte anticheat status[/]    查看反作弊状态(违规统计)", 1, "Rt");
+                Output.Log("  [cyan]rte anticheat start[/]     启动反作弊监测(需先启动monitor)", 1, "Rt");
+                Output.Log("  [cyan]rte anticheat stop[/]      停止反作弊监测", 1, "Rt");
+                Output.Log("  [cyan]rte anticheat reset[[ip]][/] 重置违规计数(可指定IP, 不指定则全部)", 1, "Rt");
                 Output.Log("[grey]── 其他 ──[/]", 1, "Rt");
                 Output.Log("  [cyan]rte get [[host:port]][/]   查询MC服务器状态(Server List Ping协议)", 1, "Rt");
                 Output.Log("  [cyan]rte reload[/]              热重载 rt_config.yml 配置", 1, "Rt");
@@ -243,6 +250,55 @@ namespace Rt
                 _antibotMonitor.ToggleVerbose();
             }, "切换详细数据包日志(显示每个包的IP/方向/大小)");
 
+            // ============================================================
+            // 反作弊子功能命令
+            // ============================================================
+
+            // rte anticheat status - 查看反作弊状态
+            CommandRegistry.RegisterCommand("rte anticheat status", args =>
+            {
+                _antiCheatMonitor?.ShowStatus();
+                if (_antiCheatMonitor == null)
+                    Output.Log("反作弊监测器尚未初始化", 2, "Rt");
+            }, "查看反作弊监测状态(违规统计)");
+
+            // rte anticheat start - 启动反作弊监测器
+            CommandRegistry.RegisterCommand("rte anticheat start", args =>
+            {
+                if (_antiCheatMonitor == null)
+                    _antiCheatMonitor = new AntiCheatMonitor();
+
+                if (_antiCheatMonitor.IsRunning)
+                {
+                    Output.Log("反作弊监测器已在运行", 2, "Rt");
+                    return;
+                }
+                _antiCheatMonitor.Start();
+            }, "启动反作弊监测子功能(FastPlace/FastEat检测)");
+
+            // rte anticheat stop - 停止反作弊监测器
+            CommandRegistry.RegisterCommand("rte anticheat stop", args =>
+            {
+                if (_antiCheatMonitor == null || !_antiCheatMonitor.IsRunning)
+                {
+                    Output.Log("反作弊监测器未运行", 2, "Rt");
+                    return;
+                }
+                _antiCheatMonitor.Stop();
+            }, "停止反作弊监测子功能");
+
+            // rte anticheat reset [ip] - 重置违规计数
+            CommandRegistry.RegisterCommand("rte anticheat reset", args =>
+            {
+                if (_antiCheatMonitor == null)
+                {
+                    Output.Log("反作弊监测器尚未初始化", 2, "Rt");
+                    return;
+                }
+                string? ip = (args != null && args.Length > 0) ? args[0] : null;
+                _antiCheatMonitor.ResetViolations(ip);
+            }, "重置违规计数(可指定IP, 不指定则重置全部)");
+
             // rte reload - 热重载配置
             CommandRegistry.RegisterCommand("rte reload", args =>
             {
@@ -274,6 +330,13 @@ namespace Rt
             {
                 _antibotMonitor = new AntibotMonitor();
                 _antibotMonitor.Start();
+            }
+
+            // 4) 若 anti_cheat.enabled=true，自动启动反作弊监测子功能(需 NetworkMonitor 已运行)
+            if (RtConfig.Current.AntiCheat.Enabled)
+            {
+                _antiCheatMonitor = new AntiCheatMonitor();
+                _antiCheatMonitor.Start();
             }
 
             _isLoaded = true;
@@ -318,6 +381,9 @@ namespace Rt
             _antibotMonitor?.Stop();
             _antibotMonitor = null;
 
+            _antiCheatMonitor?.Stop();
+            _antiCheatMonitor = null;
+
             // 再停止 NetworkMonitor
             NetworkMonitor.Instance.Stop();
 
@@ -338,6 +404,10 @@ namespace Rt
             CommandRegistry.UnregisterCommand("rte antibot stop");
             CommandRegistry.UnregisterCommand("rte antibot notify");
             CommandRegistry.UnregisterCommand("rte antibot verbose");
+            CommandRegistry.UnregisterCommand("rte anticheat status");
+            CommandRegistry.UnregisterCommand("rte anticheat start");
+            CommandRegistry.UnregisterCommand("rte anticheat stop");
+            CommandRegistry.UnregisterCommand("rte anticheat reset");
             CommandRegistry.UnregisterCommand("rte reload");
 
             base.Unload();

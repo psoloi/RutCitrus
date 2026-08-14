@@ -46,6 +46,20 @@ service RtCliService {
   rpc SavePanelData (PanelDataRequest) returns (PanelDataResponse);
   // 配置文件项注释：按文件名获取键路径→中文说明字典(由 RtCli Repository 管理)
   rpc GetConfigDocs (ConfigFileRequest) returns (ConfigDocsResponse);
+  // 分析实例错误日志(正则提取)
+  rpc AnalyzeInstanceErrors (InstanceDetailRequest) returns (InstanceErrorsResponse);
+  // AI分析实例错误
+  rpc AiAnalyzeInstanceErrors (AiAnalyzeRequest) returns (AiAnalyzeResponse);
+  // 玩家事件监控: 获取指定实例的玩家活动日志
+  rpc GetPlayerEvents (PlayerEventRequest) returns (PlayerEventListResponse);
+  // 插件/模组管理
+  rpc ListPlugins (InstanceDetailRequest) returns (JarFileListResponse);
+  rpc ListMods (InstanceDetailRequest) returns (JarFileListResponse);
+  rpc ToggleJarFile (ManageJarFileRequest) returns (SimpleResponse);
+  rpc DeleteJarFile (ManageJarFileRequest) returns (SimpleResponse);
+  rpc UploadJarFile (UploadJarFileRequest) returns (SimpleResponse);
+  // 玩家管理
+  rpc ManagePlayer (ManagePlayerRequest) returns (SimpleResponse);
 }
 
 message Empty {}
@@ -409,4 +423,86 @@ message ConfigDocsResponse {
   string message = 2;
   string file_name = 3;
   map<string, string> docs = 4;     // 键路径 → 中文说明
+}
+
+// 实例错误分析响应
+message InstanceErrorsResponse {
+  bool success = 1;
+  string message = 2;
+  map<int32, string> errors = 3;    // 编号 → 错误内容
+}
+
+// AI分析请求
+message AiAnalyzeRequest {
+  string id = 1;                    // 实例ID
+  string range = 2;                 // 错误编号范围(如 "1" 或 "1-3"，空=全部)
+}
+
+// AI分析响应
+message AiAnalyzeResponse {
+  bool success = 1;
+  string message = 2;
+  string result = 3;                // AI分析结果文本
+}
+
+// ===== 玩家事件监控 =====
+message PlayerEventRequest {
+  string id = 1;                    // 实例ID(服务器标识)
+  int32 limit = 2;                  // 返回最近N条(0=全部)
+}
+
+message PlayerEventLog {
+  string event_type = 1;            // join/connect/lost/leave/command/chat/setmode/custom
+  string player_name = 2;
+  string trigger_time = 3;          // 原始日志中的时间字符串
+  string recorded_at = 4;           // 记录时间(ISO 8601)
+  string detail = 5;                // 附加详情(IP/原因/命令/消息等)
+}
+
+message PlayerEventListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated PlayerEventLog events = 3;
+}
+
+// ===== 插件/模组管理 =====
+message JarFileInfo {
+  string file_name = 1;
+  int64 size_bytes = 2;
+  bool is_disabled = 3;
+}
+
+message JarFileListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated JarFileInfo files = 3;
+}
+
+// type: "plugin" 或 "mod"
+message ManageJarFileRequest {
+  string id = 1;
+  string file_name = 2;
+  string type = 3;
+}
+
+message UploadJarFileRequest {
+  string id = 1;
+  string file_name = 2;
+  string type = 3;             // "plugin" 或 "mod"
+  bytes content = 4;
+}
+
+// ===== 玩家管理 =====
+// action: "ban" / "pardon" / "ban_ip" / "pardon_ip" / "kick" / "custom"
+message ManagePlayerRequest {
+  string id = 1;
+  string action = 2;
+  string target = 3;           // 玩家名或IP
+  string reason = 4;           // 封禁/踢出原因
+  string command = 5;          // action=custom 时的自定义命令
+}
+
+message SimpleResponse {
+  bool success = 1;
+  string message = 2;
 }

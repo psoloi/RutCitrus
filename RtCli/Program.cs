@@ -17,15 +17,12 @@ namespace RtCli
 {
     internal class Program
     {
-        // AI无人化优化
-
+        // 测试及功能完善，AI无人化优化
         // 优化文字和整理及I18n
+        // 服务端信息获取模式（Run、Rcon、RR、RM）"四架构 理功能"
+        // 添加更多错误识别并分类（mc和程序自身的）
 
-        // BlueMap和Litebans支持、容器、玩家监控与封禁等管理、群组服务器支持
-        // 日志分享上传 https://api.mclo.gs/ 需要加上小于10mb限制
-
-        // 服务端信息获取（其他方式Rcon、Mangent、Motd）"四架构理功能"、玩家监控、插件管理、容器化部署、日志分析（对接RtCli的功能）
-        // 添加ban封禁面板IP
+        // BlueMap和Litebans他们的MySQL支持、HUB群组服务器支持（创建和自动配置）、服务器模板包
 
         // readme.md参考 github-readme-stats-master 并且中英文分开
 
@@ -591,7 +588,7 @@ namespace RtCli
         {
             try
             {
-                Output.Log("[yellow]注意：功能还未完善！程序仅能在本机或局域网运行否则安全无法保障！[/]", 2, ThisProgramName);
+                Output.Log("[yellow]注意：程序仅能在本机或局域网中运行否则安全无法保障！[/]", 2, ThisProgramName);
                 try
                 {
                     Connector.StartServerAsync().GetAwaiter().GetResult();
@@ -874,6 +871,9 @@ namespace RtCli
                                 var pluginNode = filterNode.AddNode("[yellow]plugin[/] - 插件管理");
                                 pluginNode.AddNode(".fx filter plugin - 列出插件及状态");
                                 pluginNode.AddNode(".fx filter plugin <n> - 切换启用/禁用(0重启)");
+                                var modNode = filterNode.AddNode("[yellow]mod[/] - 模组管理");
+                                modNode.AddNode(".fx filter mod - 列出模组及状态");
+                                modNode.AddNode(".fx filter mod <n> - 切换启用/禁用(0重启)");
 
                                 var aiNode = fxRoot.AddNode("[green]ai[/] - AI智能分析");
                                 aiNode.AddNode(".fx ai <n> - 将第n个错误发送给AI分析");
@@ -981,6 +981,22 @@ namespace RtCli
                                 }
                                 handled = true;
                                 break;
+                            case var cmd when cmd == ".fx filter mod":
+                                Analyzer.FilterMod(null);
+                                handled = true;
+                                break;
+                            case var cmd when cmd != null && cmd.StartsWith(".fx filter mod "):
+                                string fmArg = cmd.Substring(".fx filter mod ".Length).Trim();
+                                if (int.TryParse(fmArg, out int fmIndex))
+                                {
+                                    Analyzer.FilterMod(fmIndex);
+                                }
+                                else
+                                {
+                                    Output.Log("无效的参数，请输入数字。用法: .fx filter mod <n>", 2, ThisProgramName);
+                                }
+                                handled = true;
+                                break;
                             case var cmd when cmd == ".cfg":
                                 var cfgRoot = new Tree("[cyan].cfg 命令[/]");
                                 cfgRoot.AddNode("[green]reload[/] - 热重载所有配置文件(包括语言脚本等)");
@@ -1004,7 +1020,7 @@ namespace RtCli
                                 Output.Log($"当前服务端: [cyan]{Markup.Escape(Config.App.CurrentServer)}[/] (模式: {Analyzer.CurrentMode})", 1, ThisProgramName);
                                 Output.Log("子命令：list、add、del、change、start、stop、status", 1, ThisProgramName);
                                 if (!Analyzer.NeedsRunServer)
-                                    Output.Log("OnlyRcon模式额外子命令：get、connect、detach", 1, ThisProgramName);
+                                    Output.Log("Rcon模式额外子命令：get、connect、detach", 1, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server list":
@@ -1046,12 +1062,12 @@ namespace RtCli
                                     var modeSelect = AnsiConsole.Prompt(
                                         new SelectionPrompt<string>()
                                             .Title("选择 [cyan]控制台模式[/]：")
-                                            .AddChoices("Management (推荐)", "Run", "Rcon", "OnlyRcon"));
+                                            .AddChoices("RM (推荐)", "Run", "RR", "Rcon"));
                                     newEntry.AnalyzerMode = modeSelect.Split(' ')[0];
 
-                                    if (newEntry.AnalyzerMode == "Management")
+                                    if (newEntry.AnalyzerMode == "RM")
                                     {
-                                        Output.Log("[yellow]Management模式需要MC 1.21.9+，服务端需开启management-server-enabled[/]", 1, ThisProgramName);
+                                        Output.Log("[yellow]RM模式可使用服务端管理协议(MC 1.21.9+, 需开启management-server-enabled)[/]", 1, ThisProgramName);
                                     }
 
                                     Config.App.ServerList[newKey] = newEntry;
@@ -1179,14 +1195,14 @@ namespace RtCli
                                 if (Analyzer.NeedsRunServer)
                                     Analyzer.StartServer();
                                 else
-                                    Output.Log("OnlyRcon模式下不支持 .server start，请使用 .server get + .server connect 连接。", 2, ThisProgramName);
+                                    Output.Log("Rcon模式下不支持 .server start，请使用 .server get + .server connect 连接。", 2, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server stop":
                                 if (Analyzer.NeedsRunServer)
                                     Analyzer.StopServer();
                                 else
-                                    Output.Log("OnlyRcon模式下不支持 .server stop。", 2, ThisProgramName);
+                                    Output.Log("Rcon模式下不支持 .server stop。", 2, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server status":
@@ -1423,6 +1439,8 @@ namespace RtCli
                 .AddRow("[white].fx filter config <n>[/]", "还原第n个差异文件(0删除备份)")
                 .AddRow("[white].fx filter plugin[/]", "列出/禁用/启用插件")
                 .AddRow("[white].fx filter plugin <n>[/]", "切换第n个插件启用/禁用(0重启)")
+                .AddRow("[white].fx filter mod[/]", "列出/禁用/启用模组")
+                .AddRow("[white].fx filter mod <n>[/]", "切换第n个模组启用/禁用(0重启)")
                 .AddRow("[white].cfg[/]", "配置管理 (输入 .cfg 查看子命令)")
                 .AddRow("[white].cfg reload[/]", "热重载所有配置文件")
                 .AddRow("[white].cfg clear[/]", "删除Content文件夹并冷重载")
@@ -1432,11 +1450,11 @@ namespace RtCli
                 .AddRow("[white].server add[/]", "添加新的MC服务端配置")
                 .AddRow("[white].server del[/]", "删除MC服务端配置")
                 .AddRow("[white].server change <标识>[/]", "切换当前MC服务端")
-                .AddRow("[white].server get[/]", "[[[DarkOrange]OnlyRcon[/]]] 扫描并列出运行中的MC服务端")
-                .AddRow("[white].server connect <序号|pid:进程ID>[/]", "[[[DarkOrange]OnlyRcon[/]]] 连接到指定的MC服务端")
-                .AddRow("[white].server detach[/]", "[[[DarkOrange]OnlyRcon[/]]] 断开与MC服务端的连接")
-                .AddRow("[white].server start[/]", "[[[green]Run/Rcon/Mgmt[/]]] 启动MC服务端作为子进程")
-                .AddRow("[white].server stop[/]", "[[[green]Run/Rcon/Mgmt[/]]] 停止MC服务端")
+                .AddRow("[white].server get[/]", "[[[DarkOrange]Rcon[/]]] 扫描并列出运行中的MC服务端")
+                .AddRow("[white].server connect <序号|pid:进程ID>[/]", "[[[DarkOrange]Rcon[/]]] 连接到指定的MC服务端")
+                .AddRow("[white].server detach[/]", "[[[DarkOrange]Rcon[/]]] 断开与MC服务端的连接")
+                .AddRow("[white].server start[/]", "[[[green]Run/RR/RM[/]]] 启动MC服务端作为子进程")
+                .AddRow("[white].server stop[/]", "[[[green]Run/RR/RM[/]]] 停止MC服务端")
                 .AddRow("[white].server status[/]", "查看MC服务端连接/运行状态")
                 .AddRow("[green]/<命令>[/]", "发送命令到MC服务端");
             AnsiConsole.Write(table);

@@ -266,7 +266,7 @@
                 <button class="btn btn-sm btn-outline-success instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','start')" title="启动" ${inst.isRunning?'disabled':''}>▶</button>
                 <button class="btn btn-sm btn-outline-danger instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','stop')" title="停止" ${!inst.isRunning?'disabled':''}>■</button>
                 <button class="btn btn-sm btn-outline-warning instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','restart')" title="重启">⟳</button>
-                <button class="btn btn-sm btn-outline-info instance-icon-btn" onclick="showManageModal('${escapeHtml(inst.id)}')" title="管理">⚙</button>
+                <a class="btn btn-sm btn-outline-info instance-icon-btn" href="/Instances/Manage/${encodeURIComponent(inst.id)}" title="管理">⚙</a>
             </div>
         `;
         return row;
@@ -581,6 +581,20 @@
             </div>
             <hr/>
             <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0">日志管理</h6>
+                <div class="d-flex gap-1">
+                    <button class="btn btn-sm btn-outline-info" onclick="loadInstanceLog('${escapeHtml(inst.id)}')">查看日志</button>
+                    <button class="btn btn-sm btn-outline-warning" onclick="analyzeInstanceErrors('${escapeHtml(inst.id)}')">分析错误</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="shareInstanceLog('${escapeHtml(inst.id)}')">分享日志</button>
+                </div>
+            </div>
+            <div id="instanceLogArea" class="border rounded mb-2" style="max-height:300px;overflow-y:auto;background:#0d0d1a;padding:8px;font-family:Consolas,monospace;font-size:12px;line-height:1.5;display:none;">
+                <div class="text-muted p-2">点击「查看日志」加载...</div>
+            </div>
+            <div id="instanceErrorArea" style="display:none;"></div>
+            <div id="instanceAiArea" style="display:none;"></div>
+            <hr/>
+            <div class="d-flex justify-content-between align-items-center mb-2">
                 <h6 class="mb-0">快捷操作</h6>
             </div>
             <div class="d-flex gap-2 flex-wrap">
@@ -662,6 +676,121 @@
         }).then(r => r.json());
         showStatus(resp.message, resp.success ? 'success' : 'danger');
         if (resp.success) { closeModal('manageModal'); loadInstances(); }
+    }
+
+    // === 日志管理 ===
+    async function loadInstanceLog(id) {
+        const area = document.getElementById('instanceLogArea');
+        area.style.display = '';
+        area.innerHTML = '<div class="text-muted p-2">正在加载日志...</div>';
+        const resp = await fetch(`/api/instances/log?id=${encodeURIComponent(id)}&maxLines=500`).then(r => r.json());
+        if (!resp.success) {
+            area.innerHTML = `<div class="text-danger p-2">${escapeHtml(resp.message || '加载失败')}</div>`;
+            return;
+        }
+        const lines = (resp.content || '').split('\n');
+        area.innerHTML = lines.map(line => {
+            let cls = 'text-light';
+            if (/ERROR|SEVERE|FATAL/i.test(line)) cls = 'text-danger';
+            else if (/WARN/i.test(line)) cls = 'text-warning';
+            else if (/<\/?INFO/i.test(line)) cls = 'text-info';
+            return `<div class="${cls}">${escapeHtml(line) || '&nbsp;'}</div>`;
+        }).join('');
+        area.scrollTop = area.scrollHeight;
+    }
+
+    async function analyzeInstanceErrors(id) {
+        const errArea = document.getElementById('instanceErrorArea');
+        errArea.style.display = '';
+        errArea.innerHTML = '<div class="text-muted p-2">正在分析错误...</div>';
+        const resp = await fetch('/api/instances/errors/analyze', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id })
+        }).then(r => r.json());
+        if (!resp.success) {
+            errArea.innerHTML = `<div class="text-danger p-2">${escapeHtml(resp.message || '分析失败')}</div>`;
+            return;
+        }
+        const errors = resp.errors || [];
+        if (errors.length === 0) {
+            errArea.innerHTML = '<div class="text-success p-2">未检测到错误</div>';
+            return;
+        }
+        errArea.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <small class="text-muted">检测到 ${errors.length} 条错误</small>
+                <div class="d-flex gap-1">
+                    <input type="text" class="form-control form-control-sm" id="aiRangeInput" placeholder="如 1 或 1-3(空=全部)" style="width:140px;" />
+                    <button class="btn btn-sm btn-primary" onclick="aiAnalyzeErrors('${escapeHtml(id)}')">AI分析</button>
+                </div>
+            </div>
+            <div class="border rounded" style="max-height:200px;overflow-y:auto;">
+                ${errors.map(e => `<div class="border-bottom p-2">
+                    <div class="d-flex justify-content-between">
+                        <span class="badge bg-danger">#${e.index}</span>
+                    </div>
+                    <pre class="small text-muted mb-0" style="white-space:pre-wrap;">${escapeHtml(e.content)}</pre>
+                </div>`).join('')}
+            </div>
+        `;
+    }
+
+    async function aiAnalyzeErrors(id) {
+        const range = document.getElementById('aiRangeInput')?.value?.trim() || '';
+        const aiArea = document.getElementById('instanceAiArea');
+        aiArea.style.display = '';
+        aiArea.innerHTML = '<div class="text-muted p-2">AI分析中，请耐心等待...</div>';
+        const resp = await fetch('/api/instances/errors/ai', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id, range })
+        }).then(r => r.json());
+        if (!resp.success) {
+            aiArea.innerHTML = `<div class="text-danger p-2">${escapeHtml(resp.message || 'AI分析失败')}</div>`;
+            return;
+        }
+        aiArea.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <small class="text-info">AI分析结果</small>
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="navigator.clipboard.writeText(document.getElementById('aiResultText').textContent)">复制</button>
+            </div>
+            <div class="border rounded p-2" style="background:rgba(56,189,248,0.05);">
+                <pre id="aiResultText" class="small text-light mb-0" style="white-space:pre-wrap;">${escapeHtml(resp.result)}</pre>
+            </div>
+        `;
+    }
+
+    async function shareInstanceLog(id) {
+        showStatus('正在获取日志并上传到 mclo.gs...', 'info');
+        // 先获取日志内容
+        const logResp = await fetch(`/api/instances/log?id=${encodeURIComponent(id)}&maxLines=0`).then(r => r.json());
+        if (!logResp.success) {
+            showStatus(logResp.message || '获取日志失败', 'danger');
+            return;
+        }
+        const content = logResp.content || '';
+        if (!content.trim()) {
+            showStatus('日志内容为空', 'warning');
+            return;
+        }
+        // 上传到 mclo.gs
+        const resp = await fetch('/api/instances/log/share', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id, content })
+        }).then(r => r.json());
+        if (!resp.success) {
+            showStatus(resp.message || '分享失败', 'danger');
+            return;
+        }
+        // 显示分享链接
+        const area = document.getElementById('instanceLogArea');
+        area.style.display = '';
+        area.innerHTML = `<div class="p-2">
+            <div class="text-success mb-2">日志已分享到 mclo.gs:</div>
+            <div class="d-flex align-items-center gap-2">
+                <a href="${escapeHtml(resp.url)}" target="_blank" class="text-info">${escapeHtml(resp.url)}</a>
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="navigator.clipboard.writeText('${escapeHtml(resp.url)}').then(()=>showStatus('已复制链接','success'))">复制</button>
+            </div>
+        </div>`;
     }
 
     // === 简易确认对话框(不需要输入的) ===

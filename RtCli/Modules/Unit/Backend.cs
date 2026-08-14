@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using RtCli.Modules.Extension;
 using RtCli.Modules.Function;
 using Spectre.Console;
@@ -35,7 +38,7 @@ namespace RtCli.Modules.Unit
             (".server status", "查看MC服务端状态"),
             (".server start", "启动MC服务端"),
             (".server stop", "停止MC服务端"),
-            (".server detach", "断开MC服务端连接(OnlyRcon)"),
+            (".server detach", "断开MC服务端连接(Rcon)"),
             (".ai", "AI自动化管理"),
             (".ai start", "启动AI自动化管理"),
             (".ai stop", "停止AI自动化管理"),
@@ -55,6 +58,7 @@ namespace RtCli.Modules.Unit
             (".fx del", "删除所有错误分析结果"),
             (".fx filter config", "备份/对照/还原配置文件"),
             (".fx filter plugin", "列出/启用/禁用插件"),
+            (".fx filter mod", "列出/启用/禁用模组"),
             (".help", "查看功能命令帮助"),
         };
 
@@ -78,6 +82,9 @@ namespace RtCli.Modules.Unit
                     // 广播失败不影响主流程
                 }
             };
+
+            // 启动玩家事件记录器(订阅 EventBus, 持久化到 panel_data.json)
+            PlayerEventRecorder.Start();
 
             Output.Log("面板后端适配层已初始化", 1, "Backend");
         }
@@ -318,7 +325,7 @@ namespace RtCli.Modules.Unit
                             Analyzer.StartServer();
                             return (true, "MC服务端启动命令已发送");
                         }
-                        return (false, "OnlyRcon模式下不支持 .server start，请使用 .server get + .server connect 连接");
+                        return (false, "Rcon模式下不支持 .server start，请使用 .server get + .server connect 连接");
                     }
 
                     if (cmd == ".server stop")
@@ -328,7 +335,7 @@ namespace RtCli.Modules.Unit
                             Analyzer.StopServer();
                             return (true, "MC服务端停止命令已发送");
                         }
-                        return (false, "OnlyRcon模式下不支持 .server stop");
+                        return (false, "Rcon模式下不支持 .server stop");
                     }
 
                     if (cmd == ".server detach")
@@ -563,6 +570,12 @@ namespace RtCli.Modules.Unit
                     {
                         Analyzer.FilterPlugin(null);
                         return (true, "插件列表已输出，详情见日志");
+                    }
+
+                    if (cmd == ".fx filter mod")
+                    {
+                        Analyzer.FilterMod(null);
+                        return (true, "模组列表已输出，详情见日志");
                     }
 
                     // MC 命令转发
@@ -1327,6 +1340,465 @@ namespace RtCli.Modules.Unit
                 return (false, ex.Message, null, new List<BackupItem>());
             }
         }
+
+        // ===== 插件/模组管理 API =====
+
+        /// <summary>插件/模组条目</summary>
+        public class JarFileItem
+        {
+            public string FileName { get; set; } = "";
+            public long SizeBytes { get; set; }
+            public bool IsDisabled { get; set; }
+        }
+
+        private static List<JarFileItem> ListJarFiles(string serverKey, string subDir, string disabledExt)
+        {
+            var result = new List<JarFileItem>();
+            var workPath = ResolveWorkPath(serverKey);
+            if (workPath == null) return result;
+            var dir = Path.Combine(workPath, subDir);
+            if (!Directory.Exists(dir)) return result;
+            var files = new List<FileInfo>();
+            var di = new DirectoryInfo(dir);
+            files.AddRange(di.GetFiles("*.jar"));
+            if (disabledExt == ".disjar")
+                files.AddRange(di.GetFiles("*.disjar"));
+            else
+                files.AddRange(di.GetFiles("*.disabled"));
+            files = files.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var f in files)
+            {
+                result.Add(new JarFileItem
+                {
+                    FileName = f.Name,
+                    SizeBytes = f.Length,
+                    IsDisabled = f.Extension.Equals(disabledExt, StringComparison.OrdinalIgnoreCase)
+                });
+            }
+            return result;
+        }
+
+        /// <summary>列出指定实例的插件</summary>
+        public static (bool Success, string Message, List<JarFileItem> Plugins)
+            ListPlugins(string serverKey)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null) return (false, "服务端工作目录未配置或不存在", new List<JarFileItem>());
+                return (true, "OK", ListJarFiles(serverKey, "plugins", ".disjar"));
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message, new List<JarFileItem>());
+            }
+        }
+
+        /// <summary>列出指定实例的模组</summary>
+        public static (bool Success, string Message, List<JarFileItem> Mods)
+            ListMods(string serverKey)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null) return (false, "服务端工作目录未配置或不存在", new List<JarFileItem>());
+                return (true, "OK", ListJarFiles(serverKey, "mods", ".disabled"));
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message, new List<JarFileItem>());
+            }
+        }
+
+        /// <summary>切换插件/模组启用状态</summary>
+        /// <param name="disabledExt">.disjar(插件) 或 .disabled(模组)</param>
+        private static (bool Success, string Message) ToggleJarFile(string serverKey, string subDir, string fileName, string disabledExt)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null) return (false, "服务端工作目录未配置或不存在");
+                var dir = Path.Combine(workPath, subDir);
+                var fullPath = Path.Combine(dir, fileName);
+                if (!File.Exists(fullPath)) return (false, $"文件不存在: {fileName}");
+
+                // 防止路径穿越
+                var resolvedPath = Path.GetFullPath(fullPath);
+                if (!resolvedPath.StartsWith(Path.GetFullPath(dir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    return (false, "非法路径");
+
+                string newPath;
+                if (fileName.EndsWith(disabledExt, StringComparison.OrdinalIgnoreCase))
+                {
+                    // 启用: 去掉禁用后缀
+                    newPath = resolvedPath.Substring(0, resolvedPath.Length - disabledExt.Length);
+                    File.Move(resolvedPath, newPath);
+                    return (true, $"已启用: {Path.GetFileName(newPath)}");
+                }
+                else if (fileName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 禁用: 添加禁用后缀
+                    newPath = resolvedPath + disabledExt;
+                    File.Move(resolvedPath, newPath);
+                    return (true, $"已禁用: {Path.GetFileName(newPath)}");
+                }
+                return (false, "不支持的文件类型");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"操作失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>切换插件启用/禁用</summary>
+        public static (bool Success, string Message) TogglePlugin(string serverKey, string fileName)
+            => ToggleJarFile(serverKey, "plugins", fileName, ".disjar");
+
+        /// <summary>切换模组启用/禁用</summary>
+        public static (bool Success, string Message) ToggleMod(string serverKey, string fileName)
+            => ToggleJarFile(serverKey, "mods", fileName, ".disabled");
+
+        /// <summary>删除插件/模组文件</summary>
+        private static (bool Success, string Message) DeleteJarFile(string serverKey, string subDir, string fileName)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null) return (false, "服务端工作目录未配置或不存在");
+                var dir = Path.Combine(workPath, subDir);
+                var fullPath = Path.Combine(dir, fileName);
+                if (!File.Exists(fullPath)) return (false, $"文件不存在: {fileName}");
+                var resolvedPath = Path.GetFullPath(fullPath);
+                if (!resolvedPath.StartsWith(Path.GetFullPath(dir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    return (false, "非法路径");
+                File.Delete(resolvedPath);
+                return (true, $"已删除: {fileName}");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"删除失败: {ex.Message}");
+            }
+        }
+
+        public static (bool Success, string Message) DeletePlugin(string serverKey, string fileName)
+            => DeleteJarFile(serverKey, "plugins", fileName);
+
+        public static (bool Success, string Message) DeleteMod(string serverKey, string fileName)
+            => DeleteJarFile(serverKey, "mods", fileName);
+
+        /// <summary>上传插件/模组文件(Base64内容)</summary>
+        private static (bool Success, string Message) UploadJarFile(string serverKey, string subDir, string fileName, byte[] content)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null) return (false, "服务端工作目录未配置或不存在");
+                var dir = Path.Combine(workPath, subDir);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                // 仅允许 .jar 后缀
+                if (!fileName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase))
+                    return (false, "仅支持 .jar 文件");
+                var safeName = Path.GetFileName(fileName);
+                var fullPath = Path.Combine(dir, safeName);
+                File.WriteAllBytes(fullPath, content);
+                return (true, $"已上传: {safeName}");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"上传失败: {ex.Message}");
+            }
+        }
+
+        public static (bool Success, string Message) UploadPlugin(string serverKey, string fileName, byte[] content)
+            => UploadJarFile(serverKey, "plugins", fileName, content);
+
+        public static (bool Success, string Message) UploadMod(string serverKey, string fileName, byte[] content)
+            => UploadJarFile(serverKey, "mods", fileName, content);
+
+        // ===== 玩家管理 API =====
+
+        /// <summary>封禁玩家</summary>
+        public static (bool Success, string Message) BanPlayer(string serverKey, string playerName, string reason)
+        {
+            var cmd = string.IsNullOrWhiteSpace(reason)
+                ? $"ban {playerName}"
+                : $"ban {playerName} {reason}";
+            var (ok, msg) = SendMcCommand(serverKey, cmd);
+            return (ok, msg);
+        }
+
+        /// <summary>解封玩家</summary>
+        public static (bool Success, string Message) PardonPlayer(string serverKey, string playerName)
+        {
+            var (ok, msg) = SendMcCommand(serverKey, $"pardon {playerName}");
+            return (ok, msg);
+        }
+
+        /// <summary>封禁IP</summary>
+        public static (bool Success, string Message) BanIp(string serverKey, string ipOrPlayer, string reason)
+        {
+            var cmd = string.IsNullOrWhiteSpace(reason)
+                ? $"ban-ip {ipOrPlayer}"
+                : $"ban-ip {ipOrPlayer} {reason}";
+            var (ok, msg) = SendMcCommand(serverKey, cmd);
+            return (ok, msg);
+        }
+
+        /// <summary>解封IP</summary>
+        public static (bool Success, string Message) PardonIp(string serverKey, string ip)
+        {
+            var (ok, msg) = SendMcCommand(serverKey, $"pardon-ip {ip}");
+            return (ok, msg);
+        }
+
+        /// <summary>踢出玩家</summary>
+        public static (bool Success, string Message) KickPlayer(string serverKey, string playerName, string reason)
+        {
+            var cmd = string.IsNullOrWhiteSpace(reason)
+                ? $"kick {playerName}"
+                : $"kick {playerName} {reason}";
+            var (ok, msg) = SendMcCommand(serverKey, cmd);
+            return (ok, msg);
+        }
+
+        /// <summary>发送自定义MC命令到指定实例</summary>
+        public static (bool Success, string Message) SendCustomCommand(string serverKey, string command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+                return (false, "命令不能为空");
+            // 去掉可能的 / 前缀
+            command = command.TrimStart('/');
+            return SendMcCommand(serverKey, command);
+        }
+
+        // ===== 实例日志 API =====
+
+        /// <summary>
+        /// 读取实例的 MC 服务端日志(latest.log)。
+        /// </summary>
+        public static (bool Success, string Message, string Content, int TotalLines)
+            GetInstanceLog(string serverKey, int maxLines = 0)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null)
+                    return (false, "服务端工作目录未配置或不存在", "", 0);
+
+                var logFile = Path.Combine(workPath, "logs", "latest.log");
+                if (!File.Exists(logFile))
+                    return (false, "日志文件不存在(logs/latest.log)", "", 0);
+
+                var allLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0));
+                var totalLines = allLines.Length;
+
+                string content;
+                if (maxLines > 0 && totalLines > maxLines)
+                {
+                    content = string.Join('\n', allLines.Skip(totalLines - maxLines));
+                    content = $"...(已截断前 {totalLines - maxLines} 行，仅显示最后 {maxLines} 行)\n" + content;
+                }
+                else
+                {
+                    content = string.Join('\n', allLines);
+                }
+
+                return (true, "OK", content, totalLines);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"读取日志失败: {ex.Message}", "", 0);
+            }
+        }
+
+        /// <summary>
+        /// 分析实例错误日志(使用 regex_settings 中的正则提取错误)。
+        /// </summary>
+        public static (bool Success, string Message, Dictionary<int, string> Errors)
+            AnalyzeInstanceErrors(string serverKey)
+        {
+            try
+            {
+                var workPath = ResolveWorkPath(serverKey);
+                if (workPath == null)
+                    return (false, "服务端工作目录未配置或不存在", new Dictionary<int, string>());
+
+                var logFile = Path.Combine(workPath, "logs", "latest.log");
+                if (!File.Exists(logFile))
+                    return (false, "日志文件不存在(logs/latest.log)", new Dictionary<int, string>());
+
+                ContentManager.Initialize();
+
+                var handlerPattern = ContentManager.Regex.Console_Error.Handler;
+                var limit = ContentManager.Regex.Console_Error.Limit;
+
+                if (string.IsNullOrWhiteSpace(handlerPattern))
+                    return (false, "正则表达式配置为空", new Dictionary<int, string>());
+
+                Regex handlerRegex;
+                try
+                {
+                    handlerRegex = new Regex(handlerPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                }
+                catch (Exception ex)
+                {
+                    return (false, $"正则表达式无效: {ex.Message}", new Dictionary<int, string>());
+                }
+
+                var logLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0));
+                var errors = new Dictionary<int, string>();
+                int errorIdx = 0;
+                int matchCount = 0;
+                int startIdx = -1;
+
+                for (int i = 0; i < logLines.Length; i++)
+                {
+                    if (handlerRegex.IsMatch(logLines[i]))
+                    {
+                        if (startIdx < 0)
+                            startIdx = i;
+                        matchCount++;
+
+                        // 每个错误块: 从匹配行开始，直到下一个匹配行或非连续行
+                        var sb = new StringBuilder();
+                        sb.AppendLine(logLines[i]);
+
+                        // 向后收集堆栈跟踪(以空白、at、Caused by 等开头的行)
+                        for (int j = i + 1; j < logLines.Length && j < i + 50; j++)
+                        {
+                            var line = logLines[j];
+                            if (handlerRegex.IsMatch(line))
+                                break;
+                            if (string.IsNullOrWhiteSpace(line) && sb.Length > 0)
+                            {
+                                // 空行可能表示错误块结束，但也可能是格式间隔
+                                // 检查下一行是否也是非匹配行
+                                if (j + 1 < logLines.Length && !handlerRegex.IsMatch(logLines[j + 1]) &&
+                                    !IsStackTraceLine(logLines[j + 1]))
+                                    break;
+                                continue;
+                            }
+                            if (IsStackTraceLine(line) || line.TrimStart().StartsWith("at "))
+                                sb.AppendLine(line);
+                            else
+                                break;
+                        }
+
+                        errorIdx++;
+                        errors[errorIdx] = sb.ToString().TrimEnd();
+                        startIdx = i;
+
+                        if (errors.Count >= limit)
+                            break;
+                    }
+                }
+
+                Output.Log($"实例 {serverKey} 日志分析完成: 共 {errors.Count} 条错误", 1, "Backend");
+                return (true, $"分析完成，共 {errors.Count} 条错误", errors);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"分析失败: {ex.Message}", new Dictionary<int, string>());
+            }
+        }
+
+        private static bool IsStackTraceLine(string line)
+        {
+            var trimmed = line.TrimStart();
+            return trimmed.StartsWith("at ") ||
+                   trimmed.StartsWith("Caused by:") ||
+                   trimmed.StartsWith("... ") ||
+                   trimmed.StartsWith("java.") ||
+                   trimmed.StartsWith("org.") ||
+                   trimmed.StartsWith("com.") ||
+                   trimmed.StartsWith("net.") ||
+                   trimmed.StartsWith("Suppressed:");
+        }
+
+        /// <summary>
+        /// AI分析实例错误(将错误内容发送给AI)。
+        /// </summary>
+        public static async Task<(bool Success, string Message, string Result)>
+            AiAnalyzeInstanceErrors(string serverKey, string range)
+        {
+            try
+            {
+                // 先分析错误
+                var (analyzeOk, analyzeMsg, errors) = AnalyzeInstanceErrors(serverKey);
+                if (!analyzeOk)
+                    return (false, analyzeMsg, "");
+
+                if (errors.Count == 0)
+                    return (false, "未检测到错误，无需AI分析", "");
+
+                // 解析范围
+                List<int> targetIndices;
+                if (string.IsNullOrWhiteSpace(range) || range == "all")
+                {
+                    targetIndices = errors.Keys.ToList();
+                }
+                else
+                {
+                    var parsed = ParseErrorRange(range, errors.Keys.ToList());
+                    if (parsed == null || parsed.Count == 0)
+                        return (false, $"无效的范围参数: {range}", "");
+                    targetIndices = parsed;
+                }
+
+                var sb = new StringBuilder();
+                foreach (int idx in targetIndices)
+                {
+                    if (errors.TryGetValue(idx, out var errorText))
+                    {
+                        sb.AppendLine($"[错误 #{idx}]");
+                        sb.AppendLine(errorText);
+                        sb.AppendLine("---");
+                    }
+                }
+
+                Output.Log($"正在将 {targetIndices.Count} 条错误发送给AI分析...(实例: {serverKey})", 1, "Backend");
+
+                var aiResponse = await Intelligence.AnalyzeWithAi(sb.ToString());
+
+                if (string.IsNullOrWhiteSpace(aiResponse))
+                    return (false, "AI分析未返回结果", "");
+
+                return (true, "AI分析完成", aiResponse);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"AI分析失败: {ex.Message}", "");
+            }
+        }
+
+        private static List<int>? ParseErrorRange(string range, List<int> availableKeys)
+        {
+            if (string.IsNullOrWhiteSpace(range))
+                return availableKeys;
+
+            var result = new List<int>();
+            var parts = range.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var part in parts)
+            {
+                var trimmed = part.Trim();
+                if (trimmed.Contains('-'))
+                {
+                    var rangeParts = trimmed.Split('-');
+                    if (rangeParts.Length == 2 && int.TryParse(rangeParts[0].Trim(), out int start) && int.TryParse(rangeParts[1].Trim(), out int end))
+                    {
+                        for (int i = start; i <= end; i++)
+                            if (availableKeys.Contains(i))
+                                result.Add(i);
+                    }
+                }
+                else if (int.TryParse(trimmed, out int idx))
+                {
+                    if (availableKeys.Contains(idx))
+                        result.Add(idx);
+                }
+            }
+            return result;
+        }
     }
 
     // ===== 实例管理数据传输类(供 Backend 与 Connector 共用) =====
@@ -1361,5 +1833,126 @@ namespace RtCli.Modules.Unit
         public string FileName { get; set; } = "";
         public string CreatedAt { get; set; } = "";
         public long SizeBytes { get; set; }
+    }
+
+    /// <summary>
+    /// 玩家事件记录器: 订阅 EventBus 的玩家事件, 持久化到 panel_data.json
+    /// 事件归属当前服务器(Config.App.CurrentServer)
+    /// </summary>
+    public static class PlayerEventRecorder
+    {
+        private static bool _started = false;
+        private static readonly object _lock = new();
+        // 内存缓冲: 按实例ID分组, 减少磁盘写入频率
+        private static readonly Dictionary<string, List<PlayerEventEntry>> _buffer = new();
+        private static Timer? _flushTimer;
+        private const int FlushIntervalMs = 5000; // 5秒批量写入一次
+
+        public static void Start()
+        {
+            lock (_lock)
+            {
+                if (_started) return;
+                _started = true;
+
+                EventBus.Subscribe<PlayerJoinEvent>(OnPlayerJoin);
+                EventBus.Subscribe<PlayerConnectEvent>(OnPlayerConnect);
+                EventBus.Subscribe<PlayerLostEvent>(OnPlayerLost);
+                EventBus.Subscribe<PlayerLeaveEvent>(OnPlayerLeave);
+                EventBus.Subscribe<PlayerCommandEvent>(OnPlayerCommand);
+                EventBus.Subscribe<PlayerChatEvent>(OnPlayerChat);
+                EventBus.Subscribe<PlayerSetModeEvent>(OnPlayerSetMode);
+                EventBus.Subscribe<CustomPlayerEvent>(OnCustomPlayer);
+
+                _flushTimer = new Timer(_ => FlushAll(), null, FlushIntervalMs, FlushIntervalMs);
+                Output.Log("玩家事件记录器已启动", 1, "PlayerEventRecorder");
+            }
+        }
+
+        private static string CurrentServer => Config.App.CurrentServer ?? "";
+
+        private static void Buffer(string eventType, string playerName, string triggerTime, string detail)
+        {
+            var entry = new PlayerEventEntry
+            {
+                EventType = eventType,
+                PlayerName = playerName ?? "",
+                TriggerTime = triggerTime ?? "",
+                RecordedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
+                Detail = detail ?? ""
+            };
+            var key = CurrentServer;
+            if (string.IsNullOrEmpty(key)) return;
+            lock (_buffer)
+            {
+                if (!_buffer.TryGetValue(key, out var list))
+                {
+                    list = new List<PlayerEventEntry>();
+                    _buffer[key] = list;
+                }
+                list.Add(entry);
+                // 内存缓冲上限, 防止突发流量内存溢出
+                if (list.Count > 200)
+                    list.RemoveRange(0, list.Count - 200);
+            }
+        }
+
+        private static void OnPlayerJoin(PlayerJoinEvent e) =>
+            Buffer("join", e.PlayerName, e.PlayerTriggerTime, "");
+        private static void OnPlayerConnect(PlayerConnectEvent e) =>
+            Buffer("connect", e.PlayerName, e.PlayerTriggerTime, e.PlayerIp ?? "");
+        private static void OnPlayerLost(PlayerLostEvent e) =>
+            Buffer("lost", e.PlayerName, e.PlayerTriggerTime, e.PlayerLostReason ?? "");
+        private static void OnPlayerLeave(PlayerLeaveEvent e) =>
+            Buffer("leave", e.PlayerName, e.PlayerTriggerTime, "");
+        private static void OnPlayerCommand(PlayerCommandEvent e) =>
+            Buffer("command", e.PlayerName, e.PlayerTriggerTime, e.Command ?? "");
+        private static void OnPlayerChat(PlayerChatEvent e) =>
+            Buffer("chat", e.PlayerName, e.PlayerTriggerTime, e.Message ?? "");
+        private static void OnPlayerSetMode(PlayerSetModeEvent e) =>
+            Buffer("setmode", e.PlayerName, e.PlayerTriggerTime, e.PlayerMode ?? "");
+        private static void OnCustomPlayer(CustomPlayerEvent e)
+        {
+            var detail = string.Join("; ", e.Parameters.Select(p => $"{p.Key}={p.Value}"));
+            Buffer(e.EventName, e.PlayerName, e.PlayerTriggerTime, detail);
+        }
+
+        /// <summary>将内存缓冲的事件批量写入磁盘</summary>
+        private static void FlushAll()
+        {
+            List<KeyValuePair<string, List<PlayerEventEntry>>> snapshot;
+            lock (_buffer)
+            {
+                if (_buffer.Count == 0) return;
+                snapshot = _buffer.Select(kvp =>
+                    new KeyValuePair<string, List<PlayerEventEntry>>(kvp.Key, kvp.Value.ToList())).ToList();
+                _buffer.Clear();
+            }
+            foreach (var kvp in snapshot)
+            {
+                foreach (var entry in kvp.Value)
+                {
+                    try { PanelDataManager.AppendPlayerEvent(kvp.Key, entry); }
+                    catch (Exception ex) { Output.Log($"写入玩家事件失败: {ex.Message}", 3, "PlayerEventRecorder"); }
+                }
+            }
+        }
+
+        /// <summary>获取指定实例的玩家事件(先刷新缓冲, 再读取磁盘)</summary>
+        public static List<PlayerEventEntry> GetEvents(string instanceId, int limit = 0)
+        {
+            FlushAll();
+            return PanelDataManager.GetPlayerEvents(instanceId, limit);
+        }
+
+        /// <summary>清空指定实例的玩家事件</summary>
+        public static (bool Success, string Message) ClearEvents(string instanceId)
+        {
+            lock (_buffer)
+            {
+                _buffer.Remove(instanceId);
+            }
+            return PanelDataManager.ClearPlayerEvents(instanceId);
+        }
     }
 }

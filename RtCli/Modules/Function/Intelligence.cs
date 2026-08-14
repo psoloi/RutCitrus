@@ -2219,7 +2219,7 @@ namespace RtCli.Modules.Function
                 try
                 {
                     if (!Analyzer.IsRunModeActive)
-                        return "[错误] MC服务端未运行(仅支持Run/Rcon/Management模式的重启)";
+                        return "[错误] MC服务端未运行(仅支持Run/RR/RM模式的重启)";
 
                     Log("AI 触发重启服务器...", 2);
 
@@ -2462,7 +2462,7 @@ namespace RtCli.Modules.Function
                     }
                     else if (!Analyzer.NeedsRunServer && !Analyzer.IsAttached)
                     {
-                        Log("当前模式为 OnlyRcon，请先使用 .server get + .server connect 连接服务端后再次启动AI。", 2);
+                        Log("当前模式为 Rcon，请先使用 .server get + .server connect 连接服务端后再次启动AI。", 2);
                         return;
                     }
 

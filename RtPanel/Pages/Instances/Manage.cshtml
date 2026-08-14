@@ -1,0 +1,747 @@
+@page "{id?}"
+@model RtPanel.Pages.Instances.ManageModel
+@{
+    ViewData["Title"] = "实例管理";
+}
+
+<div class="instances-manage-page">
+    <!-- 顶部导航 -->
+    <div class="d-flex align-items-center gap-2 mb-3 mt-3">
+        <a href="/Instances" class="btn btn-sm btn-outline-secondary">&larr; 返回实例列表</a>
+        <h5 class="mb-0" id="pageTitle">实例管理</h5>
+        <span id="pageStatus" class="badge bg-secondary">加载中...</span>
+    </div>
+
+    <!-- 标签页切换 -->
+    <ul class="nav nav-tabs mb-3" id="manageTabs">
+        <li class="nav-item">
+            <button class="nav-link active" data-tab="detail" onclick="switchTab('detail')">基本配置</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-tab="playerMgr" onclick="switchTab('playerMgr')">玩家管理</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-tab="plugins" onclick="switchTab('plugins')">插件管理</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-tab="mods" onclick="switchTab('mods')">模组管理</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-tab="backup" onclick="switchTab('backup')">备份管理</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-tab="logs" onclick="switchTab('logs')">日志管理</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-tab="players" onclick="switchTab('players')">玩家监控</button>
+        </li>
+    </ul>
+
+    <!-- 基本配置 -->
+    <div class="tab-pane-content" id="tab-detail">
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label small">显示名称</label>
+                        <input type="text" class="form-control form-control-sm" id="mg_inst_name" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">分析模式</label>
+                        <select class="form-select form-select-sm" id="mg_inst_mode">
+                            @foreach (var m in new[] { "Management", "Run", "Rcon", "OnlyRcon" })
+                            {
+                                <option value="@m">@m</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small">工作目录</label>
+                    <input type="text" class="form-control form-control-sm" id="mg_inst_workPath" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small">Java 路径</label>
+                    <input type="text" class="form-control form-control-sm" id="mg_inst_javaPath" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small">启动参数</label>
+                    <textarea class="form-control form-control-sm" id="mg_inst_runFlags" rows="2"></textarea>
+                </div>
+                <div class="mb-3">
+                    <div class="form-check form-check-inline">
+                        <input type="checkbox" class="form-check-input" id="mg_inst_hidden" onchange="toggleHidden()" />
+                        <label class="form-check-label small" for="mg_inst_hidden">隐藏控制台消息(同步到 config.yml)</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input type="checkbox" class="form-check-input" id="mg_inst_autoRestart" />
+                        <label class="form-check-label small" for="mg_inst_autoRestart">崩溃自动重启</label>
+                    </div>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                    <button class="btn btn-sm btn-primary" onclick="saveInstanceConfig()">保存配置</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="singleAction('start')">启动</button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="singleAction('stop')">停止</button>
+                    <button class="btn btn-sm btn-outline-warning" onclick="singleAction('restart')">重启</button>
+                    <button class="btn btn-sm btn-outline-danger ms-auto" onclick="deleteSingle()">删除此实例</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 玩家管理 -->
+    <div class="tab-pane-content" id="tab-playerMgr" style="display:none;">
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header"><span>玩家管理</span></div>
+            <div class="card-body">
+                <!-- 快速操作 -->
+                <div class="row g-2 mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label small">玩家名 / IP</label>
+                        <input type="text" class="form-control form-control-sm" id="pm_target" placeholder="输入玩家名或IP" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">原因(可选)</label>
+                        <input type="text" class="form-control form-control-sm" id="pm_reason" placeholder="封禁/踢出原因" />
+                    </div>
+                </div>
+                <div class="d-flex gap-2 flex-wrap mb-3">
+                    <button class="btn btn-sm btn-danger" onclick="playerAction('ban')">封禁玩家</button>
+                    <button class="btn btn-sm btn-success" onclick="playerAction('pardon')">解封玩家</button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="playerAction('ban_ip')">封禁IP</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="playerAction('pardon_ip')">解封IP</button>
+                    <button class="btn btn-sm btn-warning" onclick="playerAction('kick')">踢出玩家</button>
+                </div>
+                <hr class="border-secondary" />
+                <!-- 自定义命令 -->
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <strong class="small">自定义命令</strong>
+                    <div class="d-flex gap-1">
+                        <input type="text" class="form-control form-control-sm" id="pm_cc_name" placeholder="名称" style="width:100px;" />
+                        <input type="text" class="form-control form-control-sm" id="pm_cc_command" placeholder="命令(如 say Hello)" style="width:220px;" />
+                        <button class="btn btn-sm btn-outline-primary" onclick="addCustomCommand()">添加</button>
+                        <button class="btn btn-sm btn-outline-success" onclick="saveCustomCommands()">保存</button>
+                    </div>
+                </div>
+                <div id="customCommandList" class="border rounded" style="max-height:250px;overflow-y:auto;">
+                    <div class="text-muted small p-2">暂无自定义命令</div>
+                </div>
+                <small class="text-muted d-block mt-2">自定义命令保存在 panel_data.json 中,点击命令可快速执行</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- 插件管理 -->
+    <div class="tab-pane-content" id="tab-plugins" style="display:none;">
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>插件管理</span>
+                <div class="d-flex gap-1 align-items-center">
+                    <input type="file" id="pluginUploadInput" accept=".jar" style="display:none;" onchange="uploadJar('plugin', this)" />
+                    <button class="btn btn-sm btn-outline-success" onclick="document.getElementById('pluginUploadInput').click()">+ 上传插件</button>
+                    <button class="btn btn-sm btn-outline-info" onclick="loadJarFiles('plugin')">刷新</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="pluginList" class="border rounded" style="max-height:500px;overflow-y:auto;">
+                    <div class="text-muted small p-3">点击「刷新」加载插件列表...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模组管理 -->
+    <div class="tab-pane-content" id="tab-mods" style="display:none;">
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>模组管理</span>
+                <div class="d-flex gap-1 align-items-center">
+                    <input type="file" id="modUploadInput" accept=".jar" style="display:none;" onchange="uploadJar('mod', this)" />
+                    <button class="btn btn-sm btn-outline-success" onclick="document.getElementById('modUploadInput').click()">+ 上传模组</button>
+                    <button class="btn btn-sm btn-outline-info" onclick="loadJarFiles('mod')">刷新</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="modList" class="border rounded" style="max-height:500px;overflow-y:auto;">
+                    <div class="text-muted small p-3">点击「刷新」加载模组列表...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 备份管理 -->
+    <div class="tab-pane-content" id="tab-backup" style="display:none;">
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>备份管理</span>
+                <button class="btn btn-sm btn-outline-success" onclick="createBackup()">+ 创建备份</button>
+            </div>
+            <div class="card-body">
+                <div id="backupList" class="border rounded" style="max-height:400px;overflow-y:auto;">
+                    <div class="text-muted small p-3">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 日志管理 -->
+    <div class="tab-pane-content" id="tab-logs" style="display:none;">
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>日志管理</span>
+                <div class="d-flex gap-1">
+                    <button class="btn btn-sm btn-outline-info" onclick="loadInstanceLog()">查看日志</button>
+                    <button class="btn btn-sm btn-outline-warning" onclick="analyzeInstanceErrors()">分析错误</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="shareInstanceLog()">分享日志</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="instanceLogArea" class="border rounded mb-2" style="max-height:400px;overflow-y:auto;background:#0d0d1a;padding:8px;font-family:Consolas,monospace;font-size:12px;line-height:1.5;display:none;">
+                    <div class="text-muted p-2">点击「查看日志」加载...</div>
+                </div>
+                <div id="instanceErrorArea" style="display:none;"></div>
+                <div id="instanceAiArea" style="display:none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 玩家监控 -->
+    <div class="tab-pane-content" id="tab-players" style="display:none;">
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>玩家活动时间表</span>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <select class="form-select form-select-sm" id="playerEventFilter" onchange="renderPlayerEvents()" style="width:auto;">
+                        <option value="">全部事件</option>
+                        <option value="join">加入</option>
+                        <option value="connect">连接</option>
+                        <option value="leave">离开</option>
+                        <option value="lost">掉线</option>
+                        <option value="command">命令</option>
+                        <option value="chat">聊天</option>
+                        <option value="setmode">模式切换</option>
+                    </select>
+                    <input type="text" class="form-control form-control-sm" id="playerEventSearch" placeholder="搜索玩家名/内容" oninput="renderPlayerEvents()" style="width:180px;" />
+                    <button class="btn btn-sm btn-outline-info" onclick="loadPlayerEvents()">刷新</button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="clearPlayerEvents()">清空</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="playerStatsRow" class="row g-2 mb-3">
+                    <div class="col-md-3">
+                        <div class="border rounded p-2 text-center">
+                            <div class="text-sky fs-5 fw-bold" id="statTotal">0</div>
+                            <small class="text-muted">总事件</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="border rounded p-2 text-center">
+                            <div class="text-success fs-5 fw-bold" id="statJoin">0</div>
+                            <small class="text-muted">加入/连接</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="border rounded p-2 text-center">
+                            <div class="text-warning fs-5 fw-bold" id="statCmd">0</div>
+                            <small class="text-muted">命令</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="border rounded p-2 text-center">
+                            <div class="text-info fs-5 fw-bold" id="statChat">0</div>
+                            <small class="text-muted">聊天</small>
+                        </div>
+                    </div>
+                </div>
+                <div id="playerTimeline" class="player-timeline">
+                    <div class="text-muted text-center py-4">点击「刷新」加载玩家事件...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    const INSTANCE_ID = '@Model.Id';
+    let currentInstance = null;
+    let allPlayerEvents = [];
+
+    function escapeHtml(s) {
+        return (s ?? '').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function showStatus(msg, type) {
+        if (window.RtPanel && RtPanel.showToast) { RtPanel.showToast(msg, type); return; }
+        console.log(`[${type}] ${msg}`);
+    }
+    function formatBytes(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+        if (bytes < 1073741824) return (bytes/1048576).toFixed(1) + ' MB';
+        return (bytes/1073741824).toFixed(2) + ' GB';
+    }
+    function switchTab(tab) {
+        document.querySelectorAll('#manageTabs .nav-link').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-pane-content').forEach(p => p.style.display = 'none');
+        document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+        document.getElementById(`tab-${tab}`).style.display = '';
+        if (tab === 'players' && allPlayerEvents.length === 0) loadPlayerEvents();
+        if (tab === 'playerMgr') loadCustomCommands();
+        if (tab === 'plugins') loadJarFiles('plugin');
+        if (tab === 'mods') loadJarFiles('mod');
+    }
+
+    // === 加载实例详情 ===
+    async function loadDetail() {
+        if (!INSTANCE_ID) { showStatus('缺少实例ID', 'danger'); return; }
+        const resp = await fetch(`/api/instances/detail?id=${encodeURIComponent(INSTANCE_ID)}`).then(r => r.json());
+        if (!resp.success) { showStatus(resp.message, 'danger'); return; }
+        const inst = resp.instance;
+        currentInstance = inst;
+        const backups = resp.backups || [];
+
+        document.getElementById('pageTitle').textContent = `管理: ${inst.name} (${inst.id})`;
+        const statusBadge = document.getElementById('pageStatus');
+        statusBadge.className = inst.isRunning ? 'badge bg-success' : 'badge bg-secondary';
+        statusBadge.textContent = inst.isRunning ? '运行中' : '已停止';
+
+        document.getElementById('mg_inst_name').value = inst.name;
+        document.getElementById('mg_inst_mode').value = inst.analyzerMode;
+        document.getElementById('mg_inst_workPath').value = inst.workPath;
+        document.getElementById('mg_inst_javaPath').value = inst.javaPath;
+        document.getElementById('mg_inst_runFlags').value = inst.runFlags;
+        document.getElementById('mg_inst_hidden').checked = inst.hidden;
+        document.getElementById('mg_inst_autoRestart').checked = inst.autoRestart;
+
+        renderBackups(backups);
+    }
+
+    function renderBackups(backups) {
+        const container = document.getElementById('backupList');
+        if (!backups || backups.length === 0) {
+            container.innerHTML = '<div class="text-muted small p-3">暂无备份</div>';
+            return;
+        }
+        container.innerHTML = backups.map(b => `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
+            <div>
+                <div class="small">${escapeHtml(b.fileName)}</div>
+                <small class="text-muted">${escapeHtml(b.createdAt)} · ${formatBytes(b.sizeBytes)}</small>
+            </div>
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-warning" onclick="restoreBackup('${escapeHtml(b.fileName)}')">恢复</button>
+                <button class="btn btn-outline-danger" onclick="deleteBackup('${escapeHtml(b.fileName)}')">删除</button>
+            </div>
+        </div>`).join('');
+    }
+
+    async function toggleHidden() {
+        const hidden = document.getElementById('mg_inst_hidden').checked;
+        const resp = await fetch('/api/instances/update', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, hidden })
+        }).then(r => r.json());
+        showStatus(resp.message || (resp.success ? '已更新隐藏设置' : '更新失败'), resp.success ? 'success' : 'danger');
+    }
+
+    async function saveInstanceConfig() {
+        const payload = {
+            id: INSTANCE_ID,
+            name: document.getElementById('mg_inst_name').value,
+            workPath: document.getElementById('mg_inst_workPath').value,
+            javaPath: document.getElementById('mg_inst_javaPath').value,
+            runFlags: document.getElementById('mg_inst_runFlags').value,
+            analyzerMode: document.getElementById('mg_inst_mode').value,
+            hidden: document.getElementById('mg_inst_hidden').checked,
+            autoRestart: document.getElementById('mg_inst_autoRestart').checked
+        };
+        const resp = await fetch('/api/instances/update', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(payload)
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadDetail();
+    }
+
+    async function singleAction(action) {
+        const resp = await fetch('/api/instances/action', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ action, ids: [INSTANCE_ID] })
+        }).then(r => r.json());
+        showStatus(resp.message || (resp.success ? '操作成功' : '操作失败'), resp.success ? 'success' : 'danger');
+        if (resp.success) loadDetail();
+    }
+
+    async function deleteSingle() {
+        if (!confirm(`确定删除实例「${INSTANCE_ID}」?config.yml 中的配置也会被移除。`)) return;
+        const resp = await fetch('/api/instances/delete', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, deleteFiles: false })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) window.location.href = '/Instances';
+    }
+
+    // === 备份 ===
+    async function createBackup() {
+        showStatus('正在创建备份...', 'info');
+        const resp = await fetch('/api/instances/backup/create', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadDetail();
+    }
+    async function restoreBackup(fileName) {
+        if (!confirm(`确定从「${fileName}」恢复?当前文件会被自动备份。`)) return;
+        showStatus('正在恢复...', 'info');
+        const resp = await fetch('/api/instances/backup/restore', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, fileName })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadDetail();
+    }
+    async function deleteBackup(fileName) {
+        if (!confirm(`确定删除备份「${fileName}」?此操作不可恢复。`)) return;
+        const resp = await fetch('/api/instances/backup/delete', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, fileName })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadDetail();
+    }
+
+    // === 日志 ===
+    async function loadInstanceLog() {
+        const area = document.getElementById('instanceLogArea');
+        area.style.display = '';
+        area.innerHTML = '<div class="text-muted p-2">正在加载日志...</div>';
+        const resp = await fetch(`/api/instances/log?id=${encodeURIComponent(INSTANCE_ID)}&maxLines=500`).then(r => r.json());
+        if (!resp.success) { area.innerHTML = `<div class="text-danger p-2">${escapeHtml(resp.message || '加载失败')}</div>`; return; }
+        const lines = (resp.content || '').split('\n');
+        area.innerHTML = lines.map(line => {
+            let cls = 'text-light';
+            if (/ERROR|SEVERE|FATAL/i.test(line)) cls = 'text-danger';
+            else if (/WARN/i.test(line)) cls = 'text-warning';
+            else if (/<\/?INFO/i.test(line)) cls = 'text-info';
+            return `<div class="${cls}">${escapeHtml(line) || '&nbsp;'}</div>`;
+        }).join('');
+        area.scrollTop = area.scrollHeight;
+    }
+
+    async function analyzeInstanceErrors() {
+        const errArea = document.getElementById('instanceErrorArea');
+        errArea.style.display = '';
+        errArea.innerHTML = '<div class="text-muted p-2">正在分析错误...</div>';
+        const resp = await fetch('/api/instances/errors/analyze', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID })
+        }).then(r => r.json());
+        if (!resp.success) { errArea.innerHTML = `<div class="text-danger p-2">${escapeHtml(resp.message || '分析失败')}</div>`; return; }
+        const errors = resp.errors || [];
+        if (errors.length === 0) { errArea.innerHTML = '<div class="text-success p-2">未检测到错误</div>'; return; }
+        errArea.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <small class="text-muted">检测到 ${errors.length} 条错误</small>
+                <div class="d-flex gap-1">
+                    <input type="text" class="form-control form-control-sm" id="aiRangeInput" placeholder="如 1 或 1-3(空=全部)" style="width:140px;" />
+                    <button class="btn btn-sm btn-primary" onclick="aiAnalyzeErrors()">AI分析</button>
+                </div>
+            </div>
+            <div class="border rounded" style="max-height:250px;overflow-y:auto;">
+                ${errors.map(e => `<div class="border-bottom p-2">
+                    <span class="badge bg-danger">#${e.index}</span>
+                    <pre class="small text-muted mb-0 mt-1" style="white-space:pre-wrap;">${escapeHtml(e.content)}</pre>
+                </div>`).join('')}
+            </div>`;
+    }
+
+    async function aiAnalyzeErrors() {
+        const range = document.getElementById('aiRangeInput')?.value?.trim() || '';
+        const aiArea = document.getElementById('instanceAiArea');
+        aiArea.style.display = '';
+        aiArea.innerHTML = '<div class="text-muted p-2">AI分析中，请耐心等待...</div>';
+        const resp = await fetch('/api/instances/errors/ai', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, range })
+        }).then(r => r.json());
+        if (!resp.success) { aiArea.innerHTML = `<div class="text-danger p-2">${escapeHtml(resp.message || 'AI分析失败')}</div>`; return; }
+        aiArea.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <small class="text-info">AI分析结果</small>
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="navigator.clipboard.writeText(document.getElementById('aiResultText').textContent)">复制</button>
+            </div>
+            <div class="border rounded p-2" style="background:rgba(56,189,248,0.05);">
+                <pre id="aiResultText" class="small text-light mb-0" style="white-space:pre-wrap;">${escapeHtml(resp.result)}</pre>
+            </div>`;
+    }
+
+    async function shareInstanceLog() {
+        showStatus('正在获取日志并上传到 mclo.gs...', 'info');
+        const logResp = await fetch(`/api/instances/log?id=${encodeURIComponent(INSTANCE_ID)}&maxLines=0`).then(r => r.json());
+        if (!logResp.success) { showStatus(logResp.message || '获取日志失败', 'danger'); return; }
+        const content = logResp.content || '';
+        if (!content.trim()) { showStatus('日志内容为空', 'warning'); return; }
+        const resp = await fetch('/api/instances/log/share', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, content })
+        }).then(r => r.json());
+        if (!resp.success) { showStatus(resp.message || '分享失败', 'danger'); return; }
+        const area = document.getElementById('instanceLogArea');
+        area.style.display = '';
+        area.innerHTML = `<div class="p-2">
+            <div class="text-success mb-2">日志已分享到 mclo.gs:</div>
+            <div class="d-flex align-items-center gap-2">
+                <a href="${escapeHtml(resp.url)}" target="_blank" class="text-info">${escapeHtml(resp.url)}</a>
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="navigator.clipboard.writeText('${escapeHtml(resp.url)}').then(()=>showStatus('已复制链接','success'))">复制</button>
+            </div>
+        </div>`;
+    }
+
+    // === 玩家管理 ===
+    async function playerAction(action) {
+        const target = document.getElementById('pm_target').value.trim();
+        const reason = document.getElementById('pm_reason').value.trim();
+        if (!target && action !== 'custom') {
+            showStatus('请输入玩家名或IP', 'warning');
+            return;
+        }
+        const resp = await fetch('/api/instances/player/manage', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, action, target, reason, command: '' })
+        }).then(r => r.json());
+        showStatus(resp.message || (resp.success ? '操作成功' : '操作失败'), resp.success ? 'success' : 'danger');
+    }
+
+    // === 自定义命令 ===
+    let customCommands = [];
+    async function loadCustomCommands() {
+        const resp = await fetch(`/api/instances/custom-commands?id=${encodeURIComponent(INSTANCE_ID)}`).then(r => r.json());
+        if (resp.success) {
+            customCommands = resp.commands || [];
+            renderCustomCommands();
+        }
+    }
+    function renderCustomCommands() {
+        const container = document.getElementById('customCommandList');
+        if (customCommands.length === 0) {
+            container.innerHTML = '<div class="text-muted small p-2">暂无自定义命令</div>';
+            return;
+        }
+        container.innerHTML = customCommands.map((c, i) => `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
+            <div class="flex-grow-1">
+                <strong class="small">${escapeHtml(c.name)}</strong>
+                <code class="text-muted small d-block">${escapeHtml(c.command)}</code>
+            </div>
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-info" onclick="runCustomCommand(${i})" title="执行">▶</button>
+                <button class="btn btn-outline-danger" onclick="removeCustomCommand(${i})" title="删除">✕</button>
+            </div>
+        </div>`).join('');
+    }
+    function addCustomCommand() {
+        const name = document.getElementById('pm_cc_name').value.trim();
+        const command = document.getElementById('pm_cc_command').value.trim();
+        if (!name || !command) { showStatus('请输入名称和命令', 'warning'); return; }
+        customCommands.push({ name, command });
+        document.getElementById('pm_cc_name').value = '';
+        document.getElementById('pm_cc_command').value = '';
+        renderCustomCommands();
+    }
+    function removeCustomCommand(idx) {
+        customCommands.splice(idx, 1);
+        renderCustomCommands();
+    }
+    async function runCustomCommand(idx) {
+        const cmd = customCommands[idx];
+        if (!cmd) return;
+        const resp = await fetch('/api/instances/player/manage', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, action: 'custom', target: '', reason: '', command: cmd.command })
+        }).then(r => r.json());
+        showStatus(`执行「${cmd.name}」: ${resp.message}`, resp.success ? 'success' : 'danger');
+    }
+    async function saveCustomCommands() {
+        const resp = await fetch('/api/instances/custom-commands', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, commands: customCommands })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+    }
+
+    // === 插件/模组管理 ===
+    async function loadJarFiles(type) {
+        const containerId = type === 'plugin' ? 'pluginList' : 'modList';
+        const container = document.getElementById(containerId);
+        container.innerHTML = '<div class="text-muted small p-3">正在加载...</div>';
+        const resp = await fetch(`/api/instances/${type === 'plugin' ? 'plugins' : 'mods'}?id=${encodeURIComponent(INSTANCE_ID)}`).then(r => r.json());
+        if (!resp.success) {
+            container.innerHTML = `<div class="text-danger small p-3">${escapeHtml(resp.message || '加载失败')}</div>`;
+            return;
+        }
+        const files = resp.files || [];
+        if (files.length === 0) {
+            container.innerHTML = `<div class="text-muted small p-3">暂无${type === 'plugin' ? '插件' : '模组'}</div>`;
+            return;
+        }
+        container.innerHTML = files.map(f => `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
+            <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width:0;">
+                <span class="badge ${f.isDisabled ? 'bg-danger' : 'bg-success'}">${f.isDisabled ? '已禁用' : '启用'}</span>
+                <span class="small text-truncate">${escapeHtml(f.fileName)}</span>
+                <small class="text-muted text-nowrap">${formatBytes(f.sizeBytes)}</small>
+            </div>
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-warning" onclick="toggleJar('${type}','${escapeHtml(f.fileName)}')" title="${f.isDisabled ? '启用' : '禁用'}">${f.isDisabled ? '启用' : '禁用'}</button>
+                <button class="btn btn-outline-danger" onclick="deleteJar('${type}','${escapeHtml(f.fileName)}')" title="删除">删</button>
+            </div>
+        </div>`).join('');
+    }
+    async function toggleJar(type, fileName) {
+        const resp = await fetch('/api/instances/jar/toggle', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, fileName, type })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadJarFiles(type);
+    }
+    async function deleteJar(type, fileName) {
+        if (!confirm(`确定删除「${fileName}」?此操作不可恢复。`)) return;
+        const resp = await fetch('/api/instances/jar/delete', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, fileName, type })
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadJarFiles(type);
+    }
+    async function uploadJar(type, input) {
+        const file = input.files[0];
+        if (!file) return;
+        if (!file.name.endsWith('.jar')) {
+            showStatus('仅支持 .jar 文件', 'warning');
+            input.value = '';
+            return;
+        }
+        showStatus(`正在上传 ${file.name}...`, 'info');
+        const formData = new FormData();
+        formData.append('id', INSTANCE_ID);
+        formData.append('type', type);
+        formData.append('file', file);
+        const resp = await fetch('/api/instances/jar/upload', {
+            method: 'POST', body: formData
+        }).then(r => r.json());
+        showStatus(resp.message, resp.success ? 'success' : 'danger');
+        if (resp.success) loadJarFiles(type);
+        input.value = '';
+    }
+
+    // === 玩家事件监控 ===
+    const EVENT_META = {
+        join:    { label: '加入',   color: '#10b981', icon: '→', cls: 'text-success' },
+        connect: { label: '连接',   color: '#22c55e', icon: '↔', cls: 'text-success' },
+        leave:   { label: '离开',   color: '#ef4444', icon: '←', cls: 'text-danger' },
+        lost:    { label: '掉线',   color: '#f97316', icon: '✕', cls: 'text-warning' },
+        command: { label: '命令',   color: '#f59e0b', icon: '>', cls: 'text-warning' },
+        chat:    { label: '聊天',   color: '#3b82f6', icon: '✉', cls: 'text-info' },
+        setmode: { label: '模式',   color: '#8b5cf6', icon: '⚙', cls: 'text-info' }
+    };
+
+    async function loadPlayerEvents() {
+        const timeline = document.getElementById('playerTimeline');
+        timeline.innerHTML = '<div class="text-muted text-center py-4">正在加载玩家事件...</div>';
+        const resp = await fetch(`/api/instances/player-events?id=${encodeURIComponent(INSTANCE_ID)}&limit=0`).then(r => r.json());
+        if (!resp.success) {
+            timeline.innerHTML = `<div class="text-danger text-center py-4">${escapeHtml(resp.message || '加载失败')}</div>`;
+            return;
+        }
+        allPlayerEvents = resp.events || [];
+        renderPlayerEvents();
+    }
+
+    function renderPlayerEvents() {
+        const filter = document.getElementById('playerEventFilter').value;
+        const search = document.getElementById('playerEventSearch').value.trim().toLowerCase();
+        let events = allPlayerEvents;
+        if (filter) events = events.filter(e => e.eventType === filter);
+        if (search) events = events.filter(e =>
+            (e.playerName || '').toLowerCase().includes(search) ||
+            (e.detail || '').toLowerCase().includes(search)
+        );
+
+        // 统计
+        document.getElementById('statTotal').textContent = allPlayerEvents.length;
+        document.getElementById('statJoin').textContent = allPlayerEvents.filter(e => e.eventType === 'join' || e.eventType === 'connect').length;
+        document.getElementById('statCmd').textContent = allPlayerEvents.filter(e => e.eventType === 'command').length;
+        document.getElementById('statChat').textContent = allPlayerEvents.filter(e => e.eventType === 'chat').length;
+
+        const timeline = document.getElementById('playerTimeline');
+        if (events.length === 0) {
+            timeline.innerHTML = '<div class="text-muted text-center py-4">暂无玩家事件数据</div>';
+            return;
+        }
+
+        // 倒序显示(最新在上)
+        const sorted = [...events].reverse();
+        timeline.innerHTML = sorted.map(e => {
+            const meta = EVENT_META[e.eventType] || { label: e.eventType, color: '#64748b', icon: '·', cls: 'text-muted' };
+            const time = e.triggerTime || e.recordedAt || '';
+            const detailHtml = e.detail ? `<div class="small text-muted mt-1" style="word-break:break-all;">${escapeHtml(e.detail)}</div>` : '';
+            return `<div class="player-event-item" style="border-left:3px solid ${meta.color};">
+                <div class="d-flex align-items-start gap-2">
+                    <span class="${meta.cls} fw-bold" style="font-size:1.1rem;min-width:20px;">${meta.icon}</span>
+                    <div class="flex-grow-1">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-1">
+                            <div>
+                                <span class="badge" style="background:${meta.color};">${escapeHtml(meta.label)}</span>
+                                <strong class="ms-1">${escapeHtml(e.playerName || '未知')}</strong>
+                            </div>
+                            <small class="text-muted">${escapeHtml(time)}</small>
+                        </div>
+                        ${detailHtml}
+                    </div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    async function clearPlayerEvents() {
+        if (!confirm('确定清空该实例的所有玩家事件记录?')) return;
+        // 通过 panel_data API 清空(前端直接操作 playerEvents 字段)
+        try {
+            const dataResp = await fetch('/api/system/paneldata').then(r => r.json());
+            if (dataResp.success && dataResp.jsonData) {
+                const data = JSON.parse(dataResp.jsonData);
+                if (data.playerEvents && data.playerEvents[INSTANCE_ID]) {
+                    delete data.playerEvents[INSTANCE_ID];
+                    await fetch('/api/system/paneldata', {
+                        method: 'POST', headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ jsonData: JSON.stringify(data) })
+                    });
+                }
+            }
+        } catch { }
+        allPlayerEvents = [];
+        renderPlayerEvents();
+        showStatus('已清空玩家事件', 'success');
+    }
+
+    // === 初始化 ===
+    loadDetail();
+    // 玩家事件定时刷新(当处于玩家标签页时)
+    setInterval(() => {
+        if (document.getElementById('tab-players').style.display !== 'none') loadPlayerEvents();
+    }, 15000);
+</script>
+
+<style>
+    .player-timeline { max-height: 600px; overflow-y: auto; padding: 4px; }
+    .player-event-item {
+        padding: 8px 12px; margin-bottom: 8px; border-radius: 4px;
+        background: rgba(255,255,255,0.03); transition: background 0.15s;
+    }
+    .player-event-item:hover { background: rgba(56,189,248,0.08); }
+    [data-theme="light"] .player-event-item { background: rgba(0,0,0,0.02); }
+    [data-theme="light"] .player-event-item:hover { background: rgba(2,132,199,0.08); }
+    .nav-tabs .nav-link { color: var(--text-muted, #8b9bb4); }
+    .nav-tabs .nav-link.active { color: var(--accent, #38bdf8); border-bottom-color: var(--accent, #38bdf8); }
+</style>
+}

@@ -11,9 +11,9 @@
     <ApplicationIcon>rc.ico</ApplicationIcon>
     
     <!-- 版本号定义 - 程序版本号规则：主版本号.日期yyyymmdd.次版本号.编译号 -->
-    <VersionPrefix>1.20260731.8.1</VersionPrefix>
-	<AssemblyVersion>1.2607.8.1</AssemblyVersion>
-    <FileVersion>1.2607.8.1</FileVersion>
+    <VersionPrefix>1.20260815.9.3</VersionPrefix>
+	<AssemblyVersion>1.2608.9.3</AssemblyVersion>
+    <FileVersion>1.2608.9.3</FileVersion>
     <InformationalVersion>$(VersionPrefix)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     
