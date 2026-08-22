@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using RtPanel.Services;
 
@@ -25,7 +26,19 @@ namespace RtPanel
                 options.Conventions.AuthorizeFolder("/");
                 options.Conventions.AllowAnonymousToPage("/Login");
             });
-            builder.Services.AddControllers();
+            builder.Services.AddControllers(options =>
+            {
+                // 对所有控制器的不安全方法(POST/PUT/DELETE/PATCH)启用防跨站请求伪造校验
+                options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
+            });
+
+            // 防跨站请求伪造：令牌通过 X-CSRF-TOKEN 请求头传递(前端 fetch 统一注入)
+            builder.Services.AddAntiforgery(options =>
+            {
+                options.HeaderName = "X-CSRF-TOKEN";
+                options.Cookie.Name = "RtPanel.CSRF";
+                options.Cookie.HttpOnly = true;
+            });
             builder.Services.AddSingleton<RtCliClientService>();
             builder.Services.AddSingleton<ConfigSchemaService>();
 

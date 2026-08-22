@@ -29,6 +29,12 @@ namespace RtCli.Modules
         private static int _stripPatternsHash = 0;
         private static readonly object _stripCacheLock = new object();
 
+        // 敏感信息脱敏正则: 匹配 key: value / key=value 结构中的敏感键值(值替换为 ***)
+        // 仅匹配键值结构，避免误伤正文中出现的敏感词本身
+        private static readonly Regex _sensitivePattern = new Regex(
+            @"\b(rcon_password|management_secret|grpc_auth_key|api_key|auth_key|password|secret|token)\b(\s*[:=]\s*)(""[^""\r\n]*""|'[^'\r\n]*'|[^\s,;\r\n]+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         /// <summary>
         /// 日志广播钩子：参数依次为 timestamp, level, source, message。
         /// 由 Backend.Initialize 挂载，将日志推送到已连接的 gRPC 面板。
@@ -101,6 +107,7 @@ namespace RtCli.Modules
             string error = $"[white on dodgerblue2][[{time}]][/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + " [black on red]错误[/] ";
             string warn = $"[white on dodgerblue2][[{time}]][/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + " [black on gold1]警告[/] ";
 
+            msg = RedactSensitive(msg);
             string plainMsg = StripMarkup(msg);
 
             try
@@ -141,12 +148,25 @@ namespace RtCli.Modules
         }
 
         /// <summary>
+        /// 敏感信息脱敏: 将消息中 key: value / key=value 形式的敏感值替换为 ***。
+        /// 应用于控制台显示、日志文件记录与 gRPC 面板广播之前的统一入口。
+        /// </summary>
+        internal static string RedactSensitive(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            // 快速跳过: 不含 ':' 与 '=' 的行不可能命中键值结构
+            if (text.IndexOf(':') < 0 && text.IndexOf('=') < 0) return text;
+            return _sensitivePattern.Replace(text, m => m.Groups[1].Value + m.Groups[2].Value + "***");
+        }
+
+        /// <summary>
         /// 该方法用于所有的非错误日志输出,普通输出类型为1,警告类型为2,错误类型为3,兼容类型为0
         /// 基础输出的格式[时;分;秒] |信息| [线程Main/XXX - Task] (调用程序名称) 消息
         /// </summary>
         public static void Log(string msg, int msg_type, string? names)
         {
             string time = DateTime.Now.ToString("HH:mm:ss");
+            msg = RedactSensitive(msg);
             string plainMsg = StripMarkup(msg);
             // 仅用于控制台显示的过滤(如移除MC日志行首时间戳)，不影响日志记录和gRPC广播
             string displayMsg = StripForConsole(msg);
@@ -483,7 +503,7 @@ namespace RtCli.Modules
             _originalOut.Write(value);
             if (!string.IsNullOrEmpty(value))
             {
-                _logger.Debug("{Message}", value);
+                _logger.Debug("{Message}", Output.RedactSensitive(value));
             }
         }
 
@@ -492,7 +512,7 @@ namespace RtCli.Modules
             _originalOut.WriteLine(value);
             if (!string.IsNullOrEmpty(value))
             {
-                _logger.Debug("{Message}", value);
+                _logger.Debug("{Message}", Output.RedactSensitive(value));
             }
         }
 

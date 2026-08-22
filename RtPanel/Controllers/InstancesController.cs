@@ -76,7 +76,7 @@ namespace RtPanel.Controllers
                 WorkPath = payload.WorkPath ?? "",
                 JavaPath = payload.JavaPath ?? "",
                 RunFlags = payload.RunFlags ?? "",
-                AnalyzerMode = payload.AnalyzerMode ?? "Management",
+                AnalyzerMode = payload.AnalyzerMode ?? "RM",
                 GroupId = payload.GroupId ?? ""
             };
             var resp = await _client.CreateInstanceAsync(req);
@@ -246,14 +246,14 @@ namespace RtPanel.Controllers
             return Ok(new { success = resp?.Success ?? false, message = resp?.Message ?? "请求失败" });
         }
 
-        /// <summary>获取实例日志内容</summary>
+        /// <summary>获取实例日志内容(服务端截取尾部 maxLines 行，避免大日志全量传输)</summary>
         [HttpGet("log")]
         public async Task<IActionResult> Log([FromQuery] string id, [FromQuery] int maxLines = 500)
         {
             if (!_client.IsConnected)
                 return Ok(new { success = false, message = "未连接到服务器" });
 
-            var resp = await _client.GetServerFileAsync(id ?? "", "logs/latest.log");
+            var resp = await _client.GetServerFileAsync(id ?? "", "logs/latest.log", tailLines: maxLines);
             if (resp == null)
                 return Ok(new { success = false, message = "请求失败" });
 
@@ -261,10 +261,7 @@ namespace RtPanel.Controllers
                 return Ok(new { success = resp.Success, message = resp.Message });
 
             var content = resp.Content ?? "";
-            var lines = content.Split('\n');
-            var totalLines = lines.Length;
-            if (totalLines > maxLines)
-                content = string.Join('\n', lines.Skip(totalLines - maxLines));
+            var totalLines = content.Length == 0 ? 0 : content.Split('\n').Length;
 
             return Ok(new { success = true, message = resp.Message, content, totalLines });
         }
@@ -498,6 +495,126 @@ namespace RtPanel.Controllers
         }
 
         // ===== 自定义命令(保存在 panel_data.json) =====
+
+        // ===== 面板向导(对应 RtCli .guide / .group build) =====
+
+        /// <summary>获取可用的服务端类型列表</summary>
+        [HttpGet("wizard/types")]
+        public async Task<IActionResult> GetWizardServerTypes()
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var resp = await _client.GetServerTypesAsync();
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+
+            var types = resp.ServerTypes.Select(t => new
+            {
+                name = t.Name,
+                typeKey = t.TypeKey,
+                downloadable = t.Downloadable,
+                website = t.Website,
+                defaultJar = t.DefaultJar
+            }).ToList();
+            return Ok(new { success = resp.Success, message = resp.Message, types });
+        }
+
+        /// <summary>获取指定服务端类型的版本列表</summary>
+        [HttpGet("wizard/versions")]
+        public async Task<IActionResult> GetWizardServerVersions([FromQuery] string typeKey)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            if (string.IsNullOrEmpty(typeKey))
+                return Ok(new { success = false, message = "缺少服务端类型" });
+
+            var resp = await _client.GetServerVersionsAsync(typeKey);
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+
+            return Ok(new
+            {
+                success = resp.Success,
+                message = resp.Message,
+                versions = resp.Versions.ToList(),
+                allVersions = resp.AllVersions.ToList()
+            });
+        }
+
+        /// <summary>下载服务端 jar 到指定目录(version 留空 = 最新版)</summary>
+        [HttpPost("wizard/download")]
+        public async Task<IActionResult> WizardDownloadJar([FromBody] WizardDownloadPayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var resp = await _client.DownloadServerJarAsync(payload?.TypeKey ?? "", payload?.Version ?? "", payload?.WorkPath ?? "");
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+
+            return Ok(new { success = resp.Success, message = resp.Message, jarName = resp.JarName });
+        }
+
+        /// <summary>群组服务器一键构建(创建群组+代理实例+端口分配+代理配置生成)</summary>
+        [HttpPost("wizard/group-build")]
+        public async Task<IActionResult> WizardGroupBuild([FromBody] GroupBuildPayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            if (payload == null || string.IsNullOrEmpty(payload.GroupName))
+                return Ok(new { success = false, message = "缺少群组名称" });
+
+            var req = new GroupBuildRequest
+            {
+                GroupName = payload.GroupName ?? "",
+                ProxyType = payload.ProxyType ?? "velocity",
+                ProxyId = payload.ProxyId ?? "",
+                ProxyPort = payload.ProxyPort > 0 ? payload.ProxyPort : 25565,
+                AutoPorts = payload.AutoPorts,
+                PortRangeStart = payload.PortRangeStart,
+                PortRangeEnd = payload.PortRangeEnd,
+                OnlineMode = payload.OnlineMode,
+                LobbyServer = payload.LobbyServer ?? ""
+            };
+            if (payload.MemberIds != null)
+                req.MemberIds.AddRange(payload.MemberIds);
+
+            var resp = await _client.GroupBuildAsync(req);
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+
+            var ports = resp.ServerPorts.Select(kv => new { id = kv.Key, port = kv.Value }).ToList();
+            return Ok(new
+            {
+                success = resp.Success,
+                message = resp.Message,
+                groupId = resp.GroupId,
+                proxyInstanceId = resp.ProxyInstanceId,
+                serverPorts = ports
+            });
+        }
+
+        public class WizardDownloadPayload
+        {
+            public string? TypeKey { get; set; }
+            public string? Version { get; set; }
+            public string? WorkPath { get; set; }
+        }
+
+        public class GroupBuildPayload
+        {
+            public string? GroupName { get; set; }
+            public List<string>? MemberIds { get; set; }
+            public string? ProxyType { get; set; }     // velocity / bungeecord / manual
+            public string? ProxyId { get; set; }
+            public int ProxyPort { get; set; }
+            public bool AutoPorts { get; set; } = true;
+            public int PortRangeStart { get; set; }
+            public int PortRangeEnd { get; set; }
+            public bool OnlineMode { get; set; } = true;
+            public string? LobbyServer { get; set; }
+        }
 
         /// <summary>获取指定实例的自定义命令列表</summary>
         [HttpGet("custom-commands")]

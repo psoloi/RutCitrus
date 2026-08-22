@@ -118,6 +118,7 @@ namespace RtCli.Modules.Function
         private static readonly Dictionary<string, CancellationTokenSource> _delayedTasks = new();
         private static readonly Dictionary<string, List<string>> _eventSubscriptions = new();
         private static readonly object _lock = new();
+        private static readonly AsyncLocal<Dictionary<string, string>?> _eventVars = new();
 
         public static bool IsRunning => _isRunning;
         public static SchedulerSettings Settings => _settings;
@@ -389,6 +390,16 @@ namespace RtCli.Modules.Function
         {
             try
             {
+                // 事件变量优先（事件触发时由 SubscribeToEvent 注入，如 actor_uuid/player_name 等）
+                var eventVars = _eventVars.Value;
+                if (eventVars != null && eventVars.Count > 0)
+                {
+                    if (eventVars.TryGetValue(varName, out var ev1))
+                        return ev1;
+                    if (eventVars.TryGetValue(varName.ToLowerInvariant(), out var ev2))
+                        return ev2;
+                }
+
                 switch (varName.ToLowerInvariant())
                 {
                     case "server_running":
@@ -431,6 +442,68 @@ namespace RtCli.Modules.Function
                 }
             }
             catch { return ""; }
+        }
+
+        /// <summary>
+        /// 将事件对象的字段提取为变量字典，供 condition 中的 {rt.xxx} 求值使用。
+        /// </summary>
+        private static Dictionary<string, string> BuildEventVariables(RtEvent e)
+        {
+            var dict = new Dictionary<string, string>();
+            if (e == null) return dict;
+
+            switch (e)
+            {
+                case LuckPermsChangeEvent lpe:
+                    dict["actor_uuid"] = lpe.ActorUuid;
+                    dict["actor_name"] = lpe.ActorName;
+                    dict["type"] = lpe.Type;
+                    dict["acted_uuid"] = lpe.ActedUuid;
+                    dict["acted_name"] = lpe.ActedName;
+                    dict["action"] = lpe.Action;
+                    break;
+                case PlayerJoinEvent je:
+                    dict["player_name"] = je.PlayerName;
+                    dict["player_trigger_time"] = je.PlayerTriggerTime;
+                    break;
+                case PlayerConnectEvent ce:
+                    dict["player_name"] = ce.PlayerName;
+                    dict["player_trigger_time"] = ce.PlayerTriggerTime;
+                    dict["player_ip"] = ce.PlayerIp;
+                    break;
+                case PlayerLostEvent le:
+                    dict["player_name"] = le.PlayerName;
+                    dict["player_trigger_time"] = le.PlayerTriggerTime;
+                    dict["player_lost_reason"] = le.PlayerLostReason;
+                    break;
+                case PlayerLeaveEvent lve:
+                    dict["player_name"] = lve.PlayerName;
+                    dict["player_trigger_time"] = lve.PlayerTriggerTime;
+                    break;
+                case PlayerCommandEvent cme:
+                    dict["player_name"] = cme.PlayerName;
+                    dict["player_trigger_time"] = cme.PlayerTriggerTime;
+                    dict["command"] = cme.Command;
+                    break;
+                case PlayerChatEvent che:
+                    dict["player_name"] = che.PlayerName;
+                    dict["player_trigger_time"] = che.PlayerTriggerTime;
+                    dict["message"] = che.Message;
+                    break;
+                case PlayerSetModeEvent sme:
+                    dict["player_name"] = sme.PlayerName;
+                    dict["player_trigger_time"] = sme.PlayerTriggerTime;
+                    dict["player_mode"] = sme.PlayerMode;
+                    break;
+                case CustomPlayerEvent cpe:
+                    dict["player_name"] = cpe.PlayerName;
+                    dict["player_trigger_time"] = cpe.PlayerTriggerTime;
+                    foreach (var kvp in cpe.Parameters)
+                        dict[kvp.Key] = kvp.Value;
+                    break;
+            }
+
+            return dict;
         }
 
         #endregion
@@ -806,7 +879,19 @@ namespace RtCli.Modules.Function
                 }
 
                 string param = task.PassParameters ? e.EventName : "";
-                Task.Run(() => ExecuteTaskSafe(taskName, task, param));
+                var evtVars = BuildEventVariables(e);
+                Task.Run(async () =>
+                {
+                    _eventVars.Value = evtVars;
+                    try
+                    {
+                        await ExecuteTaskSafe(taskName, task, param);
+                    }
+                    finally
+                    {
+                        _eventVars.Value = null;
+                    }
+                });
             };
 
             switch (eventName)
@@ -882,6 +967,9 @@ namespace RtCli.Modules.Function
                     break;
                 case "PlayerSetModeEvent":
                     EventBus.Subscribe<PlayerSetModeEvent>(e => handler(e), subId);
+                    break;
+                case "LuckPermsChangeEvent":
+                    EventBus.Subscribe<LuckPermsChangeEvent>(e => handler(e), subId);
                     break;
                 case "CustomPlayerEvent":
                 default:

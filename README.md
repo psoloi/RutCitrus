@@ -1,3 +1,6 @@
+| [**中文**](README.md) | [English](README_EN.md) |
+| :---: | :---: |
+
 <p align="center">
  <h2 align="center">RtCli</h2>
  <p align="center">一个基于人工智能的Minecraft服务器后期的自动化维护、监测、管理器</p>

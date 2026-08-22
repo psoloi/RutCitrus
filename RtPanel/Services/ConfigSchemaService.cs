@@ -248,6 +248,26 @@ namespace RtPanel.Services
                 scripts.ValueTypes[k] = v;
             profiles["scripts_settings.yml"] = scripts;
 
+            // ===== support.yml =====
+            var support = new SchemaProfile("support.yml");
+            support.TopLevelKeys.UnionWith(new[] { "luckperms" });
+            support.Sections["luckperms"] = new SectionSchema(new[] { "enabled", "mysql" });
+            support.Sections["luckperms.mysql"] = new SectionSchema(new[]
+            {
+                "address", "database", "username", "password", "table_prefix"
+            });
+            foreach (var (k, v) in new Dictionary<string, string>
+            {
+                ["luckperms.enabled"] = "bool",
+                ["luckperms.mysql.address"] = "string",
+                ["luckperms.mysql.database"] = "string",
+                ["luckperms.mysql.username"] = "string",
+                ["luckperms.mysql.password"] = "string",
+                ["luckperms.mysql.table_prefix"] = "string",
+            })
+                support.ValueTypes[k] = v;
+            profiles["support.yml"] = support;
+
             // ===== bukkit.yml =====
             var bukkit = new SchemaProfile("bukkit.yml");
             bukkit.TopLevelKeys.UnionWith(new[] { "settings", "spawn-limits", "chunk-gc", "ticks-per" });
@@ -697,7 +717,7 @@ namespace RtPanel.Services
                 if (!string.IsNullOrEmpty(valuePart))
                 {
                     node.Value = UnquoteYaml(valuePart);
-                    node.ValueType = ResolveType(profile, path, valuePart, false, false);
+                    node.ValueType = ResolveType(profile!, path, valuePart, false, false);
                 }
                 else
                 {
@@ -706,7 +726,7 @@ namespace RtPanel.Services
                     node.ListEndLine = i;
                 }
 
-                node.IsUnknown = profile.IsUnknown(parentPath, key);
+                node.IsUnknown = profile!.IsUnknown(parentPath, key);
 
                 parent.Children.Add(node);
 

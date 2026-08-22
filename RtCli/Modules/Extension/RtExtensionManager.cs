@@ -23,9 +23,20 @@ namespace RtCli.Modules.Extension
         private static IReadOnlyDictionary<string, ExtensionInfo>? _cachedLoadedExtensions;
         private static readonly List<Task> _runningTasks = new List<Task>();
         private static readonly object _taskLock = new object();
+        private static readonly object _extensionsLock = new object();
 
-        public static IReadOnlyDictionary<string, ExtensionInfo> LoadedExtensions =>
-            _cachedLoadedExtensions ??= _loadedExtensions.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Info);
+        public static IReadOnlyDictionary<string, ExtensionInfo> LoadedExtensions
+        {
+            get
+            {
+                if (_cachedLoadedExtensions != null) return _cachedLoadedExtensions;
+                lock (_extensionsLock)
+                {
+                    return _cachedLoadedExtensions ??=
+                        _loadedExtensions.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Info);
+                }
+            }
+        }
 
         private static void InvalidateLoadedExtensionsCache()
         {
@@ -98,12 +109,18 @@ namespace RtCli.Modules.Extension
             {
                 string normalizedPath = Path.GetFullPath(assemblyPath);
 
-                var alreadyLoaded = _loadedExtensions.FirstOrDefault(kvp => 
-                    string.Equals(Path.GetFullPath(kvp.Value.Info.AssemblyPath ?? ""), normalizedPath, StringComparison.OrdinalIgnoreCase));
-                
-                if (!string.IsNullOrEmpty(alreadyLoaded.Key))
+                string? alreadyLoadedName = null;
+                lock (_extensionsLock)
                 {
-                    Output.Log($"扩展已加载，取消加载: {alreadyLoaded.Value.Info.Name} Ver:{alreadyLoaded.Value.Info.Version}", 2, ThisName);
+                    var dup = _loadedExtensions.FirstOrDefault(kvp =>
+                        string.Equals(Path.GetFullPath(kvp.Value.Info.AssemblyPath ?? ""), normalizedPath, StringComparison.OrdinalIgnoreCase));
+                    if (!string.IsNullOrEmpty(dup.Key))
+                        alreadyLoadedName = $"{dup.Value.Info.Name} Ver:{dup.Value.Info.Version}";
+                }
+
+                if (alreadyLoadedName != null)
+                {
+                    Output.Log($"扩展已加载，取消加载: {alreadyLoadedName}", 2, ThisName);
                     return false;
                 }
 
@@ -133,11 +150,14 @@ namespace RtCli.Modules.Extension
                         }
 
                         var extensionKey = $"{extension.Name}_{extension.Version}";
-                        
-                        if (_loadedExtensions.ContainsKey(extensionKey))
+
+                        lock (_extensionsLock)
                         {
-                            Output.Log($"扩展键已存在，取消加载: {extensionKey}", 2, ThisName);
-                            continue;
+                            if (_loadedExtensions.ContainsKey(extensionKey))
+                            {
+                                Output.Log($"扩展键已存在，取消加载: {extensionKey}", 2, ThisName);
+                                continue;
+                            }
                         }
 
                         extension.Load();
@@ -153,13 +173,19 @@ namespace RtCli.Modules.Extension
                             LoadTime = DateTime.Now
                         };
 
-                        _loadedExtensions[extensionKey] = new ExtensionContext
+                        lock (_extensionsLock)
                         {
-                            Context = context,
-                            Extension = extension,
-                            Info = info
-                        };
-                        InvalidateLoadedExtensionsCache();
+                            if (!_loadedExtensions.ContainsKey(extensionKey))
+                            {
+                                _loadedExtensions[extensionKey] = new ExtensionContext
+                                {
+                                    Context = context,
+                                    Extension = extension,
+                                    Info = info
+                                };
+                                InvalidateLoadedExtensionsCache();
+                            }
+                        }
 
                         Output.Log($"[green]+[/] 加载扩展成功: {extension.Name} Ver:{extension.Version}", 1, ThisName);
                         Output.Log($"   描述: {extension.Description}", 1, ThisName);
@@ -172,7 +198,10 @@ namespace RtCli.Modules.Extension
                     }
                 }
 
-                return _loadedExtensions.Any(kvp => kvp.Value.Context == context);
+                lock (_extensionsLock)
+                {
+                    return _loadedExtensions.Any(kvp => kvp.Value.Context == context);
+                }
             }
             catch (Exception ex)
             {
@@ -186,17 +215,22 @@ namespace RtCli.Modules.Extension
         /// </summary>
         public static void Run()
         {
-            if (_loadedExtensions.Count == 0)
+            List<ExtensionContext> extensions;
+            lock (_extensionsLock)
+            {
+                extensions = _loadedExtensions.Values.ToList();
+            }
+
+            if (extensions.Count == 0)
             {
                 Output.Log("没有可运行的扩展", 1, ThisName);
                 return;
             }
 
-            Output.Log($"开始运行 {_loadedExtensions.Count} 个扩展...", 1, ThisName);
+            Output.Log($"开始运行 {extensions.Count} 个扩展...", 1, ThisName);
 
-            foreach (var kvp in _loadedExtensions)
+            foreach (var context in extensions)
             {
-                var context = kvp.Value;
                 var task = Task.Run(() =>
                 {
                     try
@@ -236,15 +270,22 @@ namespace RtCli.Modules.Extension
                 }
             }
 
-            if (_loadedExtensions.Count == 0)
+            List<string> keys;
+            int totalCount;
+            lock (_extensionsLock)
+            {
+                keys = _loadedExtensions.Keys.ToList();
+                totalCount = _loadedExtensions.Count;
+            }
+
+            if (totalCount == 0)
             {
                 Output.Log("没有需要卸载的扩展", 1, ThisName);
                 return;
             }
 
-            Output.Log($"开始卸载 {_loadedExtensions.Count} 个扩展...", 1, ThisName);
+            Output.Log($"开始卸载 {totalCount} 个扩展...", 1, ThisName);
 
-            var keys = _loadedExtensions.Keys.ToList();
             int unloadedCount = 0;
 
             foreach (var key in keys)
@@ -268,32 +309,38 @@ namespace RtCli.Modules.Extension
         /// <returns>是否卸载成功</returns>
         private static bool UnloadExtension(string extensionKey)
         {
-            if (_loadedExtensions.TryGetValue(extensionKey, out var context))
+            ExtensionContext? context;
+            lock (_extensionsLock)
             {
-                try
+                if (!_loadedExtensions.TryGetValue(extensionKey, out context))
+                    return false;
+            }
+
+            try
+            {
+                EventBus.Publish(new ExtensionUnloadEvent(context.Info.Name ?? ""));
+
+                EventBus.UnsubscribeAll(context.Info.Name ?? "");
+
+                context.Extension.Unload();
+
+                // 卸载加载上下文
+                context.Context.Unload();
+
+                lock (_extensionsLock)
                 {
-                    EventBus.Publish(new ExtensionUnloadEvent(context.Info.Name ?? ""));
-
-                    EventBus.UnsubscribeAll(context.Info.Name ?? "");
-
-                    context.Extension.Unload();
-
-                    // 卸载加载上下文
-                    context.Context.Unload();
-
                     _loadedExtensions.Remove(extensionKey);
                     InvalidateLoadedExtensionsCache();
+                }
 
-                    Output.Log($"- 卸载扩展成功: {context.Info.Name}", 1, ThisName);
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    Output.Log($"× 卸载扩展失败 {context.Info.Name}: {ex.Message}", 1, ThisName);
-                    return false;
-                }
+                Output.Log($"- 卸载扩展成功: {context.Info.Name}", 1, ThisName);
+                return true;
             }
-            return false;
+            catch (Exception ex)
+            {
+                Output.Log($"× 卸载扩展失败 {context.Info.Name}: {ex.Message}", 1, ThisName);
+                return false;
+            }
         }
 
         /// <summary>
@@ -311,16 +358,22 @@ namespace RtCli.Modules.Extension
         /// </summary>
         public static void DisplayLoadedExtensions()
         {
-            if (_loadedExtensions.Count == 0)
+            List<KeyValuePair<string, ExtensionContext>> snapshot;
+            lock (_extensionsLock)
+            {
+                snapshot = _loadedExtensions.ToList();
+            }
+
+            if (snapshot.Count == 0)
             {
                 Output.Log("没有已加载的扩展", 1, ThisName);
                 return;
             }
 
-            Output.Log($"* - 已加载的扩展 ({_loadedExtensions.Count} 个):", 1, ThisName);
+            Output.Log($"* - 已加载的扩展 ({snapshot.Count} 个):", 1, ThisName);
             Output.Log(new string('=', 60), 1, ThisName);
 
-            foreach (var kvp in _loadedExtensions)
+            foreach (var kvp in snapshot)
             {
                 var info = kvp.Value.Info;
                 Output.Log($"[[#]] {info.Name} Ver:{info.Version}", 1, ThisName);
@@ -337,16 +390,20 @@ namespace RtCli.Modules.Extension
         /// </summary>
         public static string GetExtensionsJson()
         {
-            var extensions = _loadedExtensions.Select(kvp => new
+            List<object> snapshot;
+            lock (_extensionsLock)
             {
-                Key = kvp.Key,
-                Name = kvp.Value.Info.Name,
-                Version = kvp.Value.Info.Version,
-                Description = kvp.Value.Info.Description,
-                LoadTime = kvp.Value.Info.LoadTime.ToString("yyyy-MM-dd HH:mm:ss")
-            }).ToList();
+                snapshot = _loadedExtensions.Select(kvp => new
+                {
+                    Key = kvp.Key,
+                    Name = kvp.Value.Info.Name,
+                    Version = kvp.Value.Info.Version,
+                    Description = kvp.Value.Info.Description,
+                    LoadTime = kvp.Value.Info.LoadTime.ToString("yyyy-MM-dd HH:mm:ss")
+                }).ToList<object>();
+            }
 
-            return Newtonsoft.Json.JsonConvert.SerializeObject(extensions);
+            return Newtonsoft.Json.JsonConvert.SerializeObject(snapshot);
         }
 
         /// <summary>
@@ -360,11 +417,19 @@ namespace RtCli.Modules.Extension
                 return false;
             }
 
-            if (!_loadedExtensions.ContainsKey(extensionKey))
+            bool exists;
+            string[] availableKeys;
+            lock (_extensionsLock)
+            {
+                exists = _loadedExtensions.ContainsKey(extensionKey);
+                availableKeys = _loadedExtensions.Keys.ToArray();
+            }
+
+            if (!exists)
             {
                 Output.Log($"未找到扩展: {extensionKey}", 2, ThisName);
                 Output.Log("可用的扩展Key:", 1, ThisName);
-                foreach (var key in _loadedExtensions.Keys)
+                foreach (var key in availableKeys)
                 {
                     Output.Log($"  - {key}", 1, ThisName);
                 }
@@ -420,7 +485,10 @@ namespace RtCli.Modules.Extension
         /// <summary>
         /// 获取扩展数量
         /// </summary>
-        public static int GetExtensionCount() => _loadedExtensions.Count;
+        public static int GetExtensionCount()
+        {
+            lock (_extensionsLock) return _loadedExtensions.Count;
+        }
 
         /// <summary>
         /// 扩展上下文

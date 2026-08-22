@@ -25,8 +25,8 @@ namespace Rt.Common
         /// <summary>反机器人流量监测子功能配置</summary>
         public AntibotSection Antibot { get; set; } = new AntibotSection();
 
-        /// <summary>MC服务端外反作弊配置</summary>
-        public AntiCheatSection AntiCheat { get; set; } = new AntiCheatSection();
+        /// <summary>数据包事件功能配置</summary>
+        public PacketEventsSection PacketEvents { get; set; } = new PacketEventsSection();
 
         public StatusQuerySection StatusQuery { get; set; } = new StatusQuerySection();
     }
@@ -97,56 +97,18 @@ namespace Rt.Common
     }
 
     /// <summary>
-    /// MC服务端外反作弊配置。
-    /// 基于网络数据包大小+时序启发式检测作弊行为(无需协议解析, 加密模式下仍可用)。
+    /// 数据包事件功能配置。
+    /// 订阅 NetworkMonitor.PacketReceived，按 tick 周期聚合客户端/服务端数据包，
+    /// 解码后通过 EventBus 发布 PacketClientEvent / PacketServerEvent。
     /// </summary>
-    public class AntiCheatSection
+    public class PacketEventsSection
     {
-        /// <summary>是否启动反作弊监测器</summary>
+        /// <summary>是否启用数据包事件功能</summary>
         public bool Enabled { get; set; } = false;
-        /// <summary>是否显示警报(alert 行动受此开关控制)</summary>
-        public bool Alert { get; set; } = true;
-        /// <summary>RtCli服务端标识(ban行动通过此标识发送封禁命令，留空则使用当前服务端)</summary>
-        public string ServerKey { get; set; } = "";
-        /// <summary>快速放方块检测(FastPlace)</summary>
-        public AntiCheatDetectionSection FastPlace { get; set; } = new AntiCheatDetectionSection();
-        /// <summary>快速食用检测(FastEat)</summary>
-        public AntiCheatDetectionSection FastEat { get; set; } = new AntiCheatDetectionSection();
-    }
-
-    /// <summary>
-    /// 单个作弊检测项配置。
-    /// 每个检测项有独立的启用开关、违规阈值、衰减时间与行动定义。
-    /// </summary>
-    public class AntiCheatDetectionSection
-    {
-        /// <summary>是否开启此检测</summary>
-        public bool Enabled { get; set; } = true;
-        /// <summary>
-        /// 检测值，格式 "A:B"。
-        /// A = 触发行动所需的违规次数(达到A次执行一次行动)
-        /// B = 作弊相似度阈值(%)，当检测到相似度≥B%时计1次违规
-        /// 例如 "10:45" 表示相似度≥45%时计1次违规，满10次执行行动
-        /// </summary>
-        public string Vl { get; set; } = "10:45";
-        /// <summary>违规值清除时间(分钟)，超过此时间无新违规则计数清零。0=不清除</summary>
-        public int DecayMinutes { get; set; } = 10;
-        /// <summary>
-        /// 行动定义(多行字符串)。每行格式: [x]action [args]
-        /// x = 违规值达到此值时执行该行行动(每个阈值只执行一次)
-        /// action 类型:
-        ///   alert [自定义文本]  - 显示警报(受全局 alert 开关控制)
-        ///                         占位符: {player} {ip} {detection} {vl} {sim} {details}
-        ///   save                - 保存违规数据到 RtAC_data/data_玩家_时间.json
-        ///   ban                 - 通过 /ban-ip 命令封禁玩家IP
-        ///   command &lt;cmd&gt;     - 执行 RtCli 命令(支持占位符替换)
-        /// 示例:
-        ///   [5]alert
-        ///   [10]save
-        ///   [15]command say 检测到 {player} 使用 {detection}
-        ///   [20]ban
-        /// </summary>
-        public string Actions { get; set; } = "[5]alert\n[10]save\n[15]ban";
+        /// <summary>客户端包事件检测并触发周期(毫秒)</summary>
+        public int ClientEventTick { get; set; } = 1000;
+        /// <summary>服务端包事件检测并触发周期(毫秒)</summary>
+        public int ServerEventTick { get; set; } = 1000;
     }
 
     /// <summary>
@@ -261,22 +223,12 @@ namespace Rt.Common
             sb.AppendLine("#    notify_interval_seconds- 流量通知间隔(秒)，推荐15秒");
             sb.AppendLine("#    verbose_enabled       - 是否启用详细数据包日志(运行时可用 rte antibot verbose 切换)");
             sb.AppendLine("#");
-            sb.AppendLine("#  anti_cheat - MC服务端外反作弊(基于数据包大小+时序启发式检测)");
-            sb.AppendLine("#    enabled               - 是否启动反作弊监测器");
-            sb.AppendLine("#    alert                 - 是否显示警报(alert行动受此开关控制)");
-            sb.AppendLine("#    server_key            - RtCli服务端标识(ban行动发送目标，留空则使用当前服务端)");
-            sb.AppendLine("#    fast_place            - 快速放方块检测(FastPlace)");
-            sb.AppendLine("#    fast_eat              - 快速食用检测(FastEat)");
-            sb.AppendLine("#    每个检测项子配置:");
-            sb.AppendLine("#      enabled             - 是否开启此检测");
-            sb.AppendLine("#      vl                  - 检测值 A:B (A=违规次数阈值, B=相似度%阈值)");
-            sb.AppendLine("#                            例如 10:45 = 相似度≥45%计1次违规, 满10次执行行动");
-            sb.AppendLine("#      decay_minutes       - 违规值清除时间(分钟), 0=不清除");
-            sb.AppendLine("#      actions             - 行动定义(多行), 格式 [x]action [args]");
-            sb.AppendLine("#                            alert [文本]  显示警报(支持 {player} {ip} {detection} {vl} {sim} {details})");
-            sb.AppendLine("#                            save           保存到 RtAC_data/data_玩家_时间.json");
-            sb.AppendLine("#                            ban            通过 /ban-ip 封禁IP");
-            sb.AppendLine("#                            command <cmd>  执行RtCli命令(支持占位符)");
+            sb.AppendLine("#  packet_events - 数据包事件功能(订阅 NetworkMonitor 数据并按 tick 周期发布事件)");
+            sb.AppendLine("#    enabled               - 是否启用数据包事件功能");
+            sb.AppendLine("#    client_event_tick     - 客户端包事件检测并触发周期(毫秒)");
+            sb.AppendLine("#                            一个周期内客户端→服务端数据包发生变化时触发 PacketClientEvent");
+            sb.AppendLine("#    server_event_tick     - 服务端包事件检测并触发周期(毫秒)");
+            sb.AppendLine("#                            一个周期内服务端→客户端数据包发生变化时触发 PacketServerEvent");
             sb.AppendLine("#");
             sb.AppendLine("#  使用 rte reload 可热重载此配置");
             sb.AppendLine("# ==============================================================================");
@@ -354,15 +306,10 @@ namespace Rt.Common
                     if (trimmedLine.StartsWith("verbose_enabled:")) return "# 是否启用详细数据包日志(运行时可用 rte antibot verbose 切换)";
                     break;
 
-                case "anti_cheat":
-                    if (trimmedLine.StartsWith("enabled:")) return "# 是否启动反作弊监测器";
-                    if (trimmedLine.StartsWith("alert:")) return "# 是否显示警报(alert行动受此开关控制)";
-                    if (trimmedLine.StartsWith("server_key:")) return "# RtCli服务端标识(ban行动发送目标，留空则使用当前服务端)";
-                    if (trimmedLine.StartsWith("fast_place:")) return "# 快速放方块检测(FastPlace) - 1秒内放方块类发包数过多";
-                    if (trimmedLine.StartsWith("fast_eat:")) return "# 快速食用检测(FastEat) - 使用物品类发包间隔过短";
-                    if (trimmedLine.StartsWith("vl:")) return "# 检测值 A:B (A=违规次数阈值, B=相似度%阈值, 例如 10:45)";
-                    if (trimmedLine.StartsWith("decay_minutes:")) return "# 违规值清除时间(分钟), 0=不清除";
-                    if (trimmedLine.StartsWith("actions:")) return "# 行动定义(多行, [x]action [args]), 可用: alert [文本]/save/ban/command <cmd>";
+                case "packet_events":
+                    if (trimmedLine.StartsWith("enabled:")) return "# 是否启用数据包事件功能";
+                    if (trimmedLine.StartsWith("client_event_tick:")) return "# 客户端包事件检测并触发周期(毫秒)";
+                    if (trimmedLine.StartsWith("server_event_tick:")) return "# 服务端包事件检测并触发周期(毫秒)";
                     break;
             }
 

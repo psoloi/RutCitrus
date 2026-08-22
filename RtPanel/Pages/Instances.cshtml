@@ -19,8 +19,8 @@
                 <button class="btn btn-sm btn-outline-warning" onclick="batchAction('restart')" title="重启所有选中">重启</button>
                 <button class="btn btn-sm btn-outline-danger" onclick="batchDelete()" title="删除所有选中(需逐一确认)">删除</button>
                 <div class="vr"></div>
-                <button class="btn btn-sm btn-outline-info" onclick="showCreateGroupModal()">创建群组服</button>
-                <button class="btn btn-sm btn-primary" onclick="showCreateInstanceModal()">+ 创建新实例</button>
+                <button class="btn btn-sm btn-outline-info" onclick="openGroupWizard()" title="群组服务器一键构建向导(代理+端口+配置)">⚙ 创建群组服</button>
+                <button class="btn btn-sm btn-primary" onclick="openInstanceWizard()">+ 创建新实例</button>
                 <div class="ms-auto small text-muted">
                     <span id="instanceCount">0</span> 个实例 · <span id="groupCount">0</span> 个群组
                 </div>
@@ -47,64 +47,45 @@
     </div>
 </div>
 
-<!-- 创建实例弹窗 -->
-<div class="modal-overlay" id="createInstanceModal" style="display:none;">
-    <div class="modal-box" style="max-width:560px;">
-        <h5>创建新实例</h5>
-        <div class="mb-2">
-            <label class="form-label small">实例标识 *</label>
-            <input type="text" class="form-control form-control-sm" id="newInstance_identifier" placeholder="如: survival" />
-            <small class="text-muted">唯一标识,用于 config.yml server_list 的键</small>
+<!-- 创建实例向导 -->
+<div class="modal-overlay" id="instanceWizardModal" style="display:none;">
+    <div class="modal-box" style="max-width:680px;">
+        <h5 id="iwTitle">创建新实例向导</h5>
+        <div class="wizard-steps mb-3" id="iwStepsBar">
+            <span class="wizard-step active" data-step="1">1. 类型</span>
+            <span class="wizard-step" data-step="2">2. 版本</span>
+            <span class="wizard-step" data-step="3">3. 配置</span>
+            <span class="wizard-step" data-step="4">4. 创建</span>
         </div>
-        <div class="mb-2">
-            <label class="form-label small">显示名称</label>
-            <input type="text" class="form-control form-control-sm" id="newInstance_name" placeholder="如: 生存服" />
-        </div>
-        <div class="mb-2">
-            <label class="form-label small">工作目录</label>
-            <input type="text" class="form-control form-control-sm" id="newInstance_workPath" placeholder="如: C:\mc\survival" />
-        </div>
-        <div class="row">
-            <div class="col-md-6 mb-2">
-                <label class="form-label small">Java 路径</label>
-                <input type="text" class="form-control form-control-sm" id="newInstance_javaPath" placeholder="留空用默认 java" />
+        <div id="iwBody" style="min-height:280px;max-height:60vh;overflow-y:auto;"></div>
+        <div class="d-flex justify-content-between align-items-center mt-3">
+            <button class="btn btn-sm btn-secondary" id="iwPrevBtn" onclick="iwPrev()">← 上一步</button>
+            <div>
+                <button class="btn btn-sm btn-secondary" onclick="closeModal('instanceWizardModal')">取消</button>
+                <button class="btn btn-sm btn-primary" id="iwNextBtn" onclick="iwNext()">下一步 →</button>
             </div>
-            <div class="col-md-6 mb-2">
-                <label class="form-label small">分析模式</label>
-                <select class="form-select form-select-sm" id="newInstance_analyzerMode">
-                    <option value="Management">Management</option>
-                    <option value="Run">Run</option>
-                    <option value="Rcon">Rcon</option>
-                    <option value="OnlyRcon">OnlyRcon</option>
-                </select>
-            </div>
-        </div>
-        <div class="mb-3">
-            <label class="form-label small">启动参数</label>
-            <textarea class="form-control form-control-sm" id="newInstance_runFlags" rows="2" placeholder="留空使用默认参数"></textarea>
-        </div>
-        <div class="text-end">
-            <button class="btn btn-sm btn-secondary" onclick="closeModal('createInstanceModal')">取消</button>
-            <button class="btn btn-sm btn-primary" onclick="createInstance()">创建</button>
         </div>
     </div>
 </div>
 
-<!-- 创建群组弹窗 -->
-<div class="modal-overlay" id="createGroupModal" style="display:none;">
-    <div class="modal-box" style="max-width:480px;">
-        <h5>创建群组服</h5>
-        <div class="mb-2">
-            <label class="form-label small">群组名称 *</label>
-            <input type="text" class="form-control form-control-sm" id="newGroup_name" placeholder="如: 主群组" />
+<!-- 群组构建向导 -->
+<div class="modal-overlay" id="groupWizardModal" style="display:none;">
+    <div class="modal-box" style="max-width:680px;">
+        <h5 id="gwTitle">群组服务器构建向导</h5>
+        <div class="wizard-steps mb-3" id="gwStepsBar">
+            <span class="wizard-step active" data-step="1">1. 群组</span>
+            <span class="wizard-step" data-step="2">2. 成员</span>
+            <span class="wizard-step" data-step="3">3. 代理</span>
+            <span class="wizard-step" data-step="4">4. 端口</span>
+            <span class="wizard-step" data-step="5">5. 构建</span>
         </div>
-        <div class="mb-3">
-            <label class="form-label small">选择成员(可多选)</label>
-            <div id="newGroup_members" class="border rounded p-2" style="max-height:240px;overflow-y:auto;"></div>
-        </div>
-        <div class="text-end">
-            <button class="btn btn-sm btn-secondary" onclick="closeModal('createGroupModal')">取消</button>
-            <button class="btn btn-sm btn-primary" onclick="createGroup()">创建</button>
+        <div id="gwBody" style="min-height:280px;max-height:60vh;overflow-y:auto;"></div>
+        <div class="d-flex justify-content-between align-items-center mt-3">
+            <button class="btn btn-sm btn-secondary" id="gwPrevBtn" onclick="gwPrev()">← 上一步</button>
+            <div>
+                <button class="btn btn-sm btn-secondary" onclick="closeModal('groupWizardModal')">取消</button>
+                <button class="btn btn-sm btn-primary" id="gwNextBtn" onclick="gwNext()">下一步 →</button>
+            </div>
         </div>
     </div>
 </div>
@@ -206,7 +187,7 @@
                         <span class="badge bg-info">${members.length}</span>
                         <strong>${escapeHtml(g.name)}</strong>
                         <small class="text-muted">群组 ID: ${escapeHtml(g.id)}</small>
-                        <button class="btn btn-sm btn-outline-info py-0 px-1" title="建立群组服务器(暂未开发)" disabled>建立群组服务器</button>
+                        <button class="btn btn-sm btn-outline-info py-0 px-1" title="用向导为此群组构建代理服务器" onclick="openGroupWizard('${g.id}')">建立群组服务器</button>
                     </div>
                     <div class="d-flex gap-1 flex-wrap">
                         <button class="btn btn-sm btn-outline-success" onclick="groupAction('${g.id}','start')" title="启动全部">▶ 全部启动</button>
@@ -354,59 +335,504 @@
         document.getElementById('confirmInput').focus();
     }
 
-    // === 创建实例 ===
-    function showCreateInstanceModal() {
-        ['newInstance_identifier','newInstance_name','newInstance_workPath','newInstance_javaPath','newInstance_runFlags']
-            .forEach(id => document.getElementById(id).value = '');
-        openModal('createInstanceModal');
-    }
+    // ================================================================
+    // === 实例创建向导 (对应 RtCli .guide 能力) ===
+    // ================================================================
+    let iw = { step: 1, types: [], type: null, versions: [], allVersions: [], version: '', loading: false };
 
-    async function createInstance() {
-        const payload = {
-            identifier: document.getElementById('newInstance_identifier').value.trim(),
-            name: document.getElementById('newInstance_name').value.trim(),
-            workPath: document.getElementById('newInstance_workPath').value.trim(),
-            javaPath: document.getElementById('newInstance_javaPath').value.trim(),
-            runFlags: document.getElementById('newInstance_runFlags').value.trim(),
-            analyzerMode: document.getElementById('newInstance_analyzerMode').value
-        };
-        if (!payload.identifier) { showStatus('请输入实例标识', 'warning'); return; }
-        const resp = await fetch('/api/instances/create', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify(payload)
-        }).then(r => r.json());
-        showStatus(resp.message, resp.success ? 'success' : 'danger');
-        if (resp.success) { closeModal('createInstanceModal'); loadInstances(); }
-    }
-
-    // === 创建群组 ===
-    function showCreateGroupModal() {
-        document.getElementById('newGroup_name').value = '';
-        const container = document.getElementById('newGroup_members');
-        container.innerHTML = '';
-        allInstances.filter(i => !i.groupId).forEach(inst => {
-            const div = document.createElement('div');
-            div.className = 'form-check';
-            div.innerHTML = `<input type="checkbox" class="form-check-input" value="${escapeHtml(inst.id)}" id="gc_${escapeHtml(inst.id)}" />
-                <label class="form-check-label" for="gc_${escapeHtml(inst.id)}">${escapeHtml(inst.name)} <small class="text-muted">(${escapeHtml(inst.id)})</small></label>`;
-            container.appendChild(div);
-        });
-        if (container.children.length === 0) {
-            container.innerHTML = '<div class="text-muted small">没有可用的独立实例</div>';
+    async function openInstanceWizard() {
+        iw = { step: 1, types: [], type: null, versions: [], allVersions: [], version: '', loading: false };
+        openModal('instanceWizardModal');
+        iwRender();
+        // 加载服务端类型列表
+        const resp = await fetch('/api/instances/wizard/types').then(r => r.json()).catch(() => ({ success: false }));
+        if (resp.success) { iw.types = resp.types || []; iwRender(); }
+        else if (iw.step === 1) {
+            document.getElementById('iwBody').innerHTML =
+                `<div class="text-danger small p-2">${escapeHtml(resp.message || '获取服务端类型列表失败,可直接跳过使用手动配置')}</div>
+                 <button class="btn btn-sm btn-outline-secondary mt-2" onclick="iwSelectType(null)">跳过 (我已有服务端文件)</button>`;
         }
-        openModal('createGroupModal');
     }
 
-    async function createGroup() {
-        const name = document.getElementById('newGroup_name').value.trim();
-        if (!name) { showStatus('请输入群组名称', 'warning'); return; }
-        const memberIds = Array.from(document.querySelectorAll('#newGroup_members input:checked')).map(cb => cb.value);
-        const resp = await fetch('/api/instances/group/create', {
-            method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ name, memberIds })
-        }).then(r => r.json());
-        showStatus(resp.message, resp.success ? 'success' : 'danger');
-        if (resp.success) { closeModal('createGroupModal'); loadInstances(); }
+    function iwRender() {
+        // 步骤指示器
+        document.querySelectorAll('#iwStepsBar .wizard-step').forEach(el => {
+            el.classList.toggle('active', parseInt(el.dataset.step) <= iw.step);
+        });
+        document.getElementById('iwPrevBtn').style.visibility = iw.step > 1 ? '' : 'hidden';
+        const nextBtn = document.getElementById('iwNextBtn');
+        nextBtn.textContent = iw.step === 4 ? '✓ 创建实例' : '下一步 →';
+        const body = document.getElementById('iwBody');
+        if (iw.step === 1) body.innerHTML = iwRenderStep1();
+        else if (iw.step === 2) body.innerHTML = iwRenderStep2();
+        else if (iw.step === 3) body.innerHTML = iwRenderStep3();
+        else body.innerHTML = iwRenderStep4();
+    }
+
+    function iwRenderStep1() {
+        if (iw.loading) return '<div class="text-muted p-4 text-center"><span class="spinner-border spinner-border-sm me-2"></span>正在获取服务端类型列表...</div>';
+        if (iw.types.length === 0) return '<div class="text-muted p-4 text-center">暂无类型数据</div>';
+        const cards = iw.types.map((t, idx) => `
+            <div class="wizard-type-card ${iw.type === t ? 'selected' : ''}" onclick="iwSelectType(${idx})">
+                <div class="d-flex justify-content-between align-items-center">
+                    <strong>${escapeHtml(t.name)}</strong>
+                    ${t.downloadable ? '<span class="badge bg-success">可下载</span>' : '<span class="badge bg-secondary">手动下载</span>'}
+                </div>
+                ${!t.downloadable && t.website ? `<small class="text-muted d-block mt-1 wizard-url">需手动下载: ${escapeHtml(t.website)}</small>` : ''}
+            </div>`).join('');
+        return `
+            <p class="small text-muted mb-2">选择要使用的 Minecraft 服务端类型(与 RtCli <code>.guide</code> 引导一致):</p>
+            <div class="wizard-type-grid">${cards}</div>
+            <div class="wizard-type-card mt-2 ${iw.type === null ? 'selected' : ''}" onclick="iwSelectType(null)">
+                <div class="d-flex justify-content-between align-items-center">
+                    <strong>跳过 (我已有服务端文件)</strong>
+                    <span class="badge bg-info">手动</span>
+                </div>
+                <small class="text-muted d-block mt-1">直接配置实例, 不自动下载服务端</small>
+            </div>`;
+    }
+
+    function iwSelectType(idx) {
+        iw.type = idx === null ? null : iw.types[idx];
+        iw.version = '';
+        iwRender();
+    }
+
+    function iwRenderStep2() {
+        if (iw.type === null || !iw.type.downloadable) {
+            if (iw.type && iw.type.website) {
+                return `
+                    <p class="small">${escapeHtml(iw.type.name)} 需要手动下载:</p>
+                    <div class="alert alert-warning py-2 small wizard-url">
+                        请从 <a href="${escapeHtml(iw.type.website)}" target="_blank" class="text-info wizard-url">${escapeHtml(iw.type.website)}</a>
+                        下载 jar 文件, 并在下一步的工作目录中放置 ${escapeHtml(iw.type.defaultJar || '服务端 jar')}。
+                    </div>`;
+            }
+            return '<div class="alert alert-info py-2 small">已选择跳过下载, 请直接进入下一步配置实例。</div>';
+        }
+        if (iw.loading) return '<div class="text-muted p-4 text-center"><span class="spinner-border spinner-border-sm me-2"></span>正在获取版本列表...</div>';
+        if (iw.versions.length === 0) return '<div class="text-muted p-4 text-center">暂无版本数据</div>';
+        const mk = (v, label) => `
+            <button type="button" class="wizard-version-btn ${iw.version === v ? 'selected' : ''}" onclick="iwSetVersion('${escapeHtml(v)}')">
+                ${escapeHtml(label || v)} ${iw.version === v ? '✓' : ''}
+            </button>`;
+        let html = `<p class="small text-muted mb-2">选择 ${escapeHtml(iw.type.name)} 版本:</p>`;
+        html += `<div class="d-flex gap-1 flex-wrap mb-2">${mk(iw.versions[0], '最新版 ' + iw.versions[0])}`;
+        iw.versions.slice(1).forEach(v => html += mk(v));
+        html += '</div>';
+        if (iw.allVersions.length > iw.versions.length) {
+            html += `<details class="mt-2"><summary class="small text-muted" style="cursor:pointer;">显示全部 ${iw.allVersions.length} 个版本</summary>
+                <div class="d-flex gap-1 flex-wrap mt-2" style="max-height:220px;overflow-y:auto;">
+                    ${iw.allVersions.filter(v => !iw.versions.includes(v)).map(v => mk(v)).join('')}
+                </div></details>`;
+        }
+        return html;
+    }
+
+    async function iwLoadVersions() {
+        if (!iw.type || !iw.type.downloadable) return;
+        iw.loading = true; iw.versions = []; iw.allVersions = []; iwRender();
+        const resp = await fetch(`/api/instances/wizard/versions?typeKey=${encodeURIComponent(iw.type.typeKey)}`).then(r => r.json()).catch(() => ({ success: false }));
+        iw.loading = false;
+        if (resp.success) {
+            iw.versions = resp.versions || [];
+            iw.allVersions = resp.allVersions || resp.versions || [];
+            if (iw.versions.length > 0) iw.version = iw.versions[0];
+        } else {
+            showStatus(resp.message || '获取版本列表失败', 'danger');
+        }
+        iwRender();
+    }
+
+    function iwSetVersion(v) { iw.version = v; iwRender(); }
+
+    function iwRenderStep3() {
+        const jar = iw.type && iw.type.downloadable && iw.jarName ? iw.jarName : (iw.type ? (iw.type.defaultJar || 'server.jar') : 'server.jar');
+        return `
+            <div class="row">
+                <div class="col-md-6 mb-2">
+                    <label class="form-label small">实例标识 *</label>
+                    <input type="text" class="form-control form-control-sm" id="iw_identifier" placeholder="如: survival" oninput="iwSyncWorkPath()" value="${escapeHtml(iw.identifier || '')}" />
+                    <small class="text-muted">唯一标识, 用于 config.yml server_list 的键</small>
+                </div>
+                <div class="col-md-6 mb-2">
+                    <label class="form-label small">显示名称</label>
+                    <input type="text" class="form-control form-control-sm" id="iw_name" placeholder="如: 生存服" value="${escapeHtml(iw.name || '')}" />
+                </div>
+            </div>
+            <div class="mb-2">
+                <label class="form-label small">工作目录 *</label>
+                <input type="text" class="form-control form-control-sm" id="iw_workPath" placeholder="如: servers/survival (留空自动生成)" value="${escapeHtml(iw.workPath || '')}" oninput="this.dataset.touched='1'" />
+                <small class="text-muted">${iw.type && iw.type.downloadable ? '服务端 jar 将下载到此目录' : '服务端 jar 文件所在目录'}</small>
+            </div>
+            <div class="row">
+                <div class="col-md-6 mb-2">
+                    <label class="form-label small">Java 路径</label>
+                    <input type="text" class="form-control form-control-sm" id="iw_javaPath" placeholder="留空用默认 java" />
+                </div>
+                <div class="col-md-6 mb-2">
+                    <label class="form-label small">分析模式</label>
+                    <select class="form-select form-select-sm" id="iw_analyzerMode">
+                        <option value="RM">RM - 管理(推荐)</option>
+                        <option value="RUN">RUN - 子进程</option>
+                        <option value="RR">RR - 子进程+Rcon</option>
+                        <option value="RCON">RCON - 纯远程</option>
+                    </select>
+                    <small class="text-muted">RM 可用服务端管理协议(MC 1.21.9+); RCON 不启动服务端</small>
+                </div>
+            </div>
+            <div class="mb-2">
+                <label class="form-label small">启动参数</label>
+                <textarea class="form-control form-control-sm" id="iw_runFlags" rows="2" placeholder="-Xms1024M -Xmx1024M -jar ${escapeHtml(jar)} --nogui"></textarea>
+                <small class="text-muted">留空自动生成: -Xms1024M -Xmx1024M -jar ${escapeHtml(jar)} --nogui</small>
+            </div>`;
+    }
+
+    function iwSyncWorkPath() {
+        const id = document.getElementById('iw_identifier')?.value.trim() || '';
+        iw.identifier = id;
+        iw.workPath = id ? `servers/${id}` : '';
+        const wp = document.getElementById('iw_workPath');
+        if (wp && !wp.dataset.touched) wp.value = iw.workPath;
+    }
+
+    function iwRenderStep4() {
+        const id = iw.identifier || document.getElementById('iw_identifier')?.value || '';
+        const t = iw.type;
+        return `
+            <div class="alert ${t && t.downloadable ? 'alert-info' : 'alert-warning'} py-2 small mb-3">
+                ${t && t.downloadable
+                    ? `将下载 <strong>${escapeHtml(t.name)}</strong> ${iw.version ? escapeHtml(iw.version) : '最新版'} 到 <code>${escapeHtml(iw.workPath || 'servers/' + id)}</code>, 然后创建实例。`
+                    : '不会自动下载服务端, 创建后请将 jar 文件放入工作目录。'}
+            </div>
+            <table class="table table-sm small mb-0">
+                <tbody>
+                    <tr><td class="text-muted" style="width:120px;">实例标识</td><td>${escapeHtml(id)}</td></tr>
+                    <tr><td class="text-muted">服务端类型</td><td>${t ? escapeHtml(t.name) : '跳过 (手动配置)'}</td></tr>
+                    <tr><td class="text-muted">版本</td><td>${t && t.downloadable ? escapeHtml(iw.version || '最新版') : '-'}</td></tr>
+                    <tr><td class="text-muted">工作目录</td><td>${escapeHtml(iw.workPath || 'servers/' + id)}</td></tr>
+                </tbody>
+            </table>`;
+    }
+
+    async function iwNext() {
+        if (iw.step === 1) {
+            if (iw.loading) { showStatus('正在加载, 请稍候', 'info'); return; }
+            if (iw.type === undefined) { showStatus('请选择服务端类型', 'warning'); return; }
+            iw.step = 2;
+            iwRender();
+            if (iw.type && iw.type.downloadable) await iwLoadVersions();
+            return;
+        }
+        if (iw.step === 2) {
+            if (iw.type && iw.type.downloadable && !iw.version) { showStatus('请选择版本', 'warning'); return; }
+            iw.step = 3;
+            iwRender();
+            // 自动预填
+            setTimeout(() => { iwSyncWorkPath(); }, 0);
+            return;
+        }
+        if (iw.step === 3) {
+            iw.identifier = document.getElementById('iw_identifier').value.trim();
+            iw.name = document.getElementById('iw_name').value.trim();
+            iw.workPath = document.getElementById('iw_workPath').value.trim() || (iw.identifier ? `servers/${iw.identifier}` : '');
+            iw.javaPath = document.getElementById('iw_javaPath').value.trim();
+            iw.runFlags = document.getElementById('iw_runFlags').value.trim();
+            iw.analyzerMode = document.getElementById('iw_analyzerMode').value;
+            if (!iw.identifier) { showStatus('请输入实例标识', 'warning'); return; }
+            if (!iw.workPath) { showStatus('请输入工作目录', 'warning'); return; }
+            iw.step = 4;
+            iwRender();
+            return;
+        }
+        // step 4: 执行创建
+        await iwFinish();
+    }
+
+    function iwPrev() {
+        if (iw.step > 1) { iw.step--; iwRender(); }
+    }
+
+    async function iwFinish() {
+        const nextBtn = document.getElementById('iwNextBtn');
+        nextBtn.disabled = true;
+        try {
+            // 1. 下载服务端 (如需要)
+            if (iw.type && iw.type.downloadable) {
+                nextBtn.textContent = '⬇ 正在下载服务端...';
+                const dResp = await fetch('/api/instances/wizard/download', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ typeKey: iw.type.typeKey, version: iw.version, workPath: iw.workPath })
+                }).then(r => r.json());
+                if (!dResp.success) {
+                    showStatus(dResp.message || '服务端下载失败', 'danger');
+                    nextBtn.disabled = false; nextBtn.textContent = '✓ 创建实例';
+                    return;
+                }
+                iw.jarName = dResp.jarName;
+                showStatus(`服务端已下载: ${dResp.jarName}`, 'success');
+            }
+            // 2. 创建实例
+            nextBtn.textContent = '✓ 正在创建实例...';
+            const jar = iw.jarName || (iw.type ? (iw.type.defaultJar || 'server.jar') : 'server.jar');
+            const runFlags = iw.runFlags || `-Xms1024M -Xmx1024M -jar ${jar} --nogui`;
+            const resp = await fetch('/api/instances/create', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({
+                    identifier: iw.identifier, name: iw.name,
+                    workPath: iw.workPath, javaPath: iw.javaPath,
+                    runFlags, analyzerMode: iw.analyzerMode
+                })
+            }).then(r => r.json());
+            showStatus(resp.message, resp.success ? 'success' : 'danger');
+            if (resp.success) { closeModal('instanceWizardModal'); loadInstances(); }
+        } catch (e) {
+            showStatus('创建失败: ' + e.message, 'danger');
+        } finally {
+            nextBtn.disabled = false;
+            if (document.getElementById('instanceWizardModal').style.display !== 'none') nextBtn.textContent = '✓ 创建实例';
+        }
+    }
+
+    // ================================================================
+    // === 群组服务器构建向导 (对应 RtCli .group build 能力) ===
+    // ================================================================
+    let gw = { step: 1, groupName: '', members: [], proxyType: 'velocity', proxyId: '', proxyPort: 25565,
+               autoPorts: true, portStart: 25566, portEnd: 25570, onlineMode: true, lobby: '' };
+
+    function openGroupWizard(existingGroupId) {
+        gw = { step: 1, groupName: '', members: [], proxyType: 'velocity', proxyId: '', proxyPort: 25565,
+               autoPorts: true, portStart: 25566, portEnd: 25570, onlineMode: true, lobby: '' };
+        if (existingGroupId) {
+            // 从已有群组进入: 预填群组名与成员
+            const g = allGroups.find(x => x.id === existingGroupId);
+            if (g) {
+                gw.groupName = g.name;
+                gw.members = [...(g.memberIds || [])];
+                gw.proxyId = 'proxy';
+                document.getElementById('gwTitle').textContent = `为群组「${g.name}」构建代理服务器`;
+            }
+        } else {
+            document.getElementById('gwTitle').textContent = '群组服务器构建向导';
+        }
+        openModal('groupWizardModal');
+        gwRender();
+    }
+
+    function gwRender() {
+        document.querySelectorAll('#gwStepsBar .wizard-step').forEach(el => {
+            el.classList.toggle('active', parseInt(el.dataset.step) <= gw.step);
+        });
+        document.getElementById('gwPrevBtn').style.visibility = gw.step > 1 ? '' : 'hidden';
+        const nextBtn = document.getElementById('gwNextBtn');
+        nextBtn.textContent = gw.step === 5 ? '⚡ 开始构建' : '下一步 →';
+        const body = document.getElementById('gwBody');
+        if (gw.step === 1) body.innerHTML = gwRenderStep1();
+        else if (gw.step === 2) body.innerHTML = gwRenderStep2();
+        else if (gw.step === 3) body.innerHTML = gwRenderStep3();
+        else if (gw.step === 4) body.innerHTML = gwRenderStep4();
+        else body.innerHTML = gwRenderStep5();
+    }
+
+    function gwRenderStep1() {
+        return `
+            <p class="small text-muted mb-2">输入群组名称, 向导将自动完成: 群组创建 → 代理服务端 → 端口分配 → 代理配置生成。</p>
+            <label class="form-label small">群组名称 *</label>
+            <input type="text" class="form-control form-control-sm" id="gw_groupName" placeholder="如: 主群组"
+                   value="${escapeHtml(gw.groupName)}" oninput="gw.groupName = this.value" />
+            <div class="alert alert-info py-2 small mt-3 mb-0">
+                <strong>提示:</strong> 此向导对应 RtCli 的 <code>.group build</code> 命令, 构建完成后可在实例列表中启动代理与子服务器。
+            </div>`;
+    }
+
+    function gwRenderStep2() {
+        const available = allInstances.filter(i => !gw.members.includes(i.id));
+        const selected = allInstances.filter(i => gw.members.includes(i.id));
+        return `
+            <p class="small text-muted mb-2">选择要加入群组的子服务器 (已选 ${selected.length} 个):</p>
+            <div class="border rounded p-2 mb-2" style="max-height:220px;overflow-y:auto;">
+                ${allInstances.length === 0 ? '<div class="text-muted small">暂无实例, 可先创建实例后再构建群组</div>' :
+                    allInstances.map(inst => `
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="gwm_${escapeHtml(inst.id)}"
+                                   ${gw.members.includes(inst.id) ? 'checked' : ''} onchange="gwToggleMember('${escapeHtml(inst.id)}', this.checked)" />
+                            <label class="form-check-label" for="gwm_${escapeHtml(inst.id)}">
+                                ${escapeHtml(inst.name)} <small class="text-muted">(${escapeHtml(inst.id)})</small>
+                                ${inst.groupId ? '<span class="badge bg-warning text-dark ms-1">已在其他群组</span>' : ''}
+                            </label>
+                        </div>`).join('')}
+            </div>
+            ${selected.length > 0 ? `<small class="text-info">已选: ${selected.map(m => escapeHtml(m.id)).join(', ')}</small>` : '<small class="text-muted">可以不选, 之后通过群组「+ 添加」加入</small>'}`;
+    }
+
+    function gwToggleMember(id, checked) {
+        if (checked) { if (!gw.members.includes(id)) gw.members.push(id); }
+        else { gw.members = gw.members.filter(m => m !== id); }
+    }
+
+    function gwRenderStep3() {
+        const proxies = [
+            { key: 'velocity', name: 'Velocity', desc: '推荐 · 高性能现代代理, 自动下载', badge: 'success' },
+            { key: 'bungeecord', name: 'BungeeCord', desc: '老牌代理, 需手动下载 jar', badge: 'secondary' },
+            { key: 'manual', name: '手动配置', desc: '使用已有代理端, 不自动下载', badge: 'info' },
+        ];
+        return `
+            <p class="small text-muted mb-2">选择代理服务端类型:</p>
+            <div class="wizard-type-grid mb-3">
+                ${proxies.map(p => `
+                    <div class="wizard-type-card ${gw.proxyType === p.key ? 'selected' : ''}" onclick="gwSetProxy('${p.key}')">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <strong>${p.name}</strong><span class="badge bg-${p.badge}">${p.key === 'velocity' ? '推荐' : (p.key === 'bungeecord' ? '手动下载' : '已有')}</span>
+                        </div>
+                        <small class="text-muted d-block mt-1">${p.desc}</small>
+                    </div>`).join('')}
+            </div>
+            <div class="row">
+                <div class="col-md-7 mb-2">
+                    <label class="form-label small">代理实例标识 * (英文)</label>
+                    <input type="text" class="form-control form-control-sm" id="gw_proxyId" placeholder="如: proxy"
+                           value="${escapeHtml(gw.proxyId)}" oninput="gw.proxyId = this.value" />
+                </div>
+                <div class="col-md-5 mb-2">
+                    <label class="form-label small">玩家连接端口</label>
+                    <input type="number" class="form-control form-control-sm" id="gw_proxyPort" min="1" max="65535"
+                           value="${gw.proxyPort}" oninput="gw.proxyPort = parseInt(this.value) || 25565" />
+                </div>
+            </div>
+            <small class="text-muted">玩家通过此端口连接群组服; 子服务器仅监听本机, 由代理转发。</small>`;
+    }
+
+    function gwSetProxy(key) { gw.proxyType = key; gwRender(); }
+
+    function gwRenderStep4() {
+        return `
+            <p class="small text-muted mb-2">子服务器端口分配方式:</p>
+            <div class="form-check mb-2">
+                <input type="radio" class="form-check-input" id="gw_autoPorts" name="gwPorts" ${gw.autoPorts ? 'checked' : ''} onchange="gw.autoPorts = true; gwRender()" />
+                <label class="form-check-label small" for="gw_autoPorts">
+                    <strong>自动分配端口</strong> <span class="text-muted">(推荐, 按范围依次分配并写入 server.properties)</span>
+                </label>
+            </div>
+            ${gw.autoPorts ? `
+            <div class="row mb-3 ms-4">
+                <div class="col-5">
+                    <label class="form-label small mb-1">范围起</label>
+                    <input type="number" class="form-control form-control-sm" id="gw_portStart" min="1" max="65535"
+                           value="${gw.portStart}" oninput="gw.portStart = parseInt(this.value) || 25566" />
+                </div>
+                <div class="col-5">
+                    <label class="form-label small mb-1">范围止</label>
+                    <input type="number" class="form-control form-control-sm" id="gw_portEnd" min="1" max="65535"
+                           value="${gw.portEnd}" oninput="gw.portEnd = parseInt(this.value) || 25570" />
+                </div>
+            </div>` : ''}
+            <div class="form-check">
+                <input type="radio" class="form-check-input" id="gw_manualPorts" name="gwPorts" ${!gw.autoPorts ? 'checked' : ''} onchange="gw.autoPorts = false; gwRender()" />
+                <label class="form-check-label small" for="gw_manualPorts">
+                    <strong>使用服务器现有端口</strong> <span class="text-muted">(读取各子服务器 server.properties, 冲突自动递增)</span>
+                </label>
+            </div>`;
+    }
+
+    function gwRenderStep5() {
+        const lobbyOptions = gw.members.length > 0
+            ? gw.members.map(m => `<option value="${escapeHtml(m)}" ${gw.lobby === m ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('')
+            : '<option value="">(无成员)</option>';
+        return `
+            <div class="mb-3">
+                <label class="form-label small mb-2">验证模式:</label>
+                <div class="d-flex gap-2">
+                    <div class="wizard-type-card flex-fill ${gw.onlineMode ? 'selected' : ''}" onclick="gw.onlineMode = true; gwRender()">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <strong>在线模式</strong><span class="badge bg-success">正版验证</span>
+                        </div>
+                        <small class="text-muted d-block mt-1">代理端验证正版账号</small>
+                    </div>
+                    <div class="wizard-type-card flex-fill ${!gw.onlineMode ? 'selected' : ''}" onclick="gw.onlineMode = false; gwRender()">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <strong>离线模式</strong><span class="badge bg-warning text-dark">兼容盗版</span>
+                        </div>
+                        <small class="text-muted d-block mt-1">建议安装防盗号插件 (如 AuthMe)</small>
+                    </div>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label small">玩家首次进入的服务器</label>
+                <select class="form-select form-select-sm" id="gw_lobby" onchange="gw.lobby = this.value">
+                    ${gw.members.length > 0 ? `<option value="">默认 (${escapeHtml(gw.members[0])})</option>` : ''}
+                    ${lobbyOptions}
+                </select>
+            </div>
+            <div class="alert alert-secondary py-2 small mb-0">
+                <strong>构建摘要:</strong> 群组「${escapeHtml(gw.groupName)}」 · 成员 ${gw.members.length} 个 · 代理 ${escapeHtml(gw.proxyId || '(待填)')} (${escapeHtml(gw.proxyType)})
+                · 端口 ${gw.proxyPort} · ${gw.autoPorts ? `自动分配 ${gw.portStart}-${gw.portEnd}` : '使用现有端口'} · ${gw.onlineMode ? '在线' : '离线'}模式
+            </div>`;
+    }
+
+    async function gwNext() {
+        if (gw.step === 1) {
+            gw.groupName = document.getElementById('gw_groupName').value.trim();
+            if (!gw.groupName) { showStatus('请输入群组名称', 'warning'); return; }
+            if (!gw.proxyId) gw.proxyId = 'proxy';
+            gw.step = 2; gwRender(); return;
+        }
+        if (gw.step === 2) { gw.step = 3; gwRender(); return; }
+        if (gw.step === 3) {
+            gw.proxyId = document.getElementById('gw_proxyId').value.trim();
+            gw.proxyPort = parseInt(document.getElementById('gw_proxyPort').value) || 25565;
+            if (!gw.proxyId) { showStatus('请输入代理实例标识', 'warning'); return; }
+            if (allInstances.some(i => i.id === gw.proxyId)) { showStatus(`标识 '${gw.proxyId}' 已被占用`, 'warning'); return; }
+            gw.step = 4; gwRender(); return;
+        }
+        if (gw.step === 4) { gw.step = 5; gwRender(); return; }
+        await gwFinish();
+    }
+
+    function gwPrev() {
+        if (gw.step > 1) { gw.step--; gwRender(); }
+    }
+
+    async function gwFinish() {
+        const nextBtn = document.getElementById('gwNextBtn');
+        nextBtn.disabled = true;
+        nextBtn.textContent = gw.proxyType === 'velocity' ? '⬇ 正在下载代理端并构建...' : '⚡ 正在构建群组...';
+        try {
+            const resp = await fetch('/api/instances/wizard/group-build', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({
+                    groupName: gw.groupName, memberIds: gw.members,
+                    proxyType: gw.proxyType, proxyId: gw.proxyId, proxyPort: gw.proxyPort,
+                    autoPorts: gw.autoPorts, portRangeStart: gw.portStart, portRangeEnd: gw.portEnd,
+                    onlineMode: gw.onlineMode, lobbyServer: gw.lobby
+                })
+            }).then(r => r.json());
+            if (resp.success) {
+                const ports = (resp.serverPorts || []).map(p => `${escapeHtml(p.id)} → 127.0.0.1:${p.port}`).join('<br/>');
+                document.getElementById('gwBody').innerHTML = `
+                    <div class="alert alert-success py-2 small">${escapeHtml(resp.message)}</div>
+                    <table class="table table-sm small">
+                        <tbody>
+                            <tr><td class="text-muted" style="width:130px;">群组 ID</td><td>${escapeHtml(resp.groupId)}</td></tr>
+                            <tr><td class="text-muted">代理实例</td><td>${escapeHtml(resp.proxyInstanceId)}</td></tr>
+                            <tr><td class="text-muted">玩家连接端口</td><td>${gw.proxyPort}</td></tr>
+                            <tr><td class="text-muted">端口分配</td><td>${ports || '无子服务器'}</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="alert alert-info py-2 small mb-0">代理配置已生成, 可在实例列表启动代理与子服务器。${gw.proxyType === 'bungeecord' ? ' BungeeCord 需手动下载 jar 放入代理目录后才能启动。' : ''}</div>`;
+                nextBtn.textContent = '完成';
+                nextBtn.onclick = () => { closeModal('groupWizardModal'); loadInstances(); nextBtn.onclick = gwNext; };
+                loadInstances();
+                showStatus(resp.message, 'success');
+            } else {
+                showStatus(resp.message || '构建失败', 'danger');
+                nextBtn.disabled = false;
+                nextBtn.textContent = '⚡ 开始构建';
+            }
+        } catch (e) {
+            showStatus('构建失败: ' + e.message, 'danger');
+            nextBtn.disabled = false;
+            nextBtn.textContent = '⚡ 开始构建';
+        }
     }
 
     // === 群组操作 ===
@@ -535,7 +961,15 @@
                 <div class="col-md-6">
                     <label class="form-label small">分析模式</label>
                     <select class="form-select form-select-sm" id="mg_inst_mode">
-                        ${['Management','Run','Rcon','OnlyRcon'].map(m => `<option value="${m}" ${m===inst.analyzerMode?'selected':''}>${m}</option>`).join('')}
+                        ${(() => {
+                            // 与 RtCli Analyzer 的模式规范一致: RM/RUN/RR/RCON(旧名自动映射)
+                            const legacy = { MANAGEMENT:'RM', RUN:'RUN', RCON:'RR', ONLYRCON:'RCON' };
+                            const cur = (inst.analyzerMode || 'RM').toUpperCase();
+                            const val = legacy[cur] || cur;
+                            const modes = [['RM','RM - 管理(推荐)'],['RUN','RUN - 子进程'],['RR','RR - 子进程+Rcon'],['RCON','RCON - 纯远程']];
+                            if (!modes.some(m => m[0] === val)) modes.push([val, val]);
+                            return modes.map(m => `<option value="${m[0]}" ${m[0]===val?'selected':''}>${m[1]}</option>`).join('');
+                        })()}
                     </select>
                 </div>
             </div>
@@ -835,6 +1269,19 @@
     .instance-icon-btn { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 0.95rem; line-height: 1; }
     .instance-group-header { background: rgba(56, 189, 248, 0.12); }
 
+    /* ===== 向导样式 ===== */
+    .wizard-steps { display: flex; gap: 4px; flex-wrap: wrap; }
+    .wizard-step { flex: 1; min-width: 70px; text-align: center; padding: 6px 4px; font-size: 0.78rem; color: var(--color-text-muted, #94a3b8); background: rgba(255,255,255,0.04); border-radius: 6px; border: 1px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wizard-step.active { color: #fff; background: linear-gradient(135deg, rgba(56,189,248,0.35), rgba(14,165,233,0.25)); border-color: rgba(56,189,248,0.6); font-weight: 600; }
+    .wizard-type-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+    .wizard-url { word-break: break-all; overflow-wrap: anywhere; }
+    .wizard-type-card { padding: 10px 12px; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; background: rgba(255,255,255,0.03); cursor: pointer; transition: all 0.15s; }
+    .wizard-type-card:hover { border-color: rgba(56,189,248,0.5); background: rgba(56,189,248,0.08); }
+    .wizard-type-card.selected { border-color: #38bdf8; background: rgba(56,189,248,0.15); box-shadow: 0 0 0 1px rgba(56,189,248,0.4); }
+    .wizard-version-btn { padding: 5px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04); color: inherit; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; }
+    .wizard-version-btn:hover { border-color: rgba(56,189,248,0.5); }
+    .wizard-version-btn.selected { border-color: #38bdf8; background: rgba(56,189,248,0.2); color: #fff; font-weight: 600; }
+
     /* 亮色主题适配 */
     [data-theme="light"] .instance-row { background: rgba(0,0,0,0.02); }
     [data-theme="light"] .instance-row:hover { background: rgba(2, 132, 199, 0.08); }
@@ -846,6 +1293,13 @@
     [data-theme="light"] .btn-outline-warning { border-color: var(--color-warning); }
     [data-theme="light"] .btn-outline-success { border-color: var(--color-success); }
     [data-theme="light"] .btn-outline-danger { border-color: var(--color-danger); }
+    /* 亮色主题: 向导 */
+    [data-theme="light"] .wizard-step { background: rgba(0,0,0,0.05); color: #64748b; }
+    [data-theme="light"] .wizard-step.active { color: #0c4a6e; background: rgba(14,165,233,0.18); }
+    [data-theme="light"] .wizard-type-card { border-color: rgba(0,0,0,0.12); background: rgba(0,0,0,0.02); }
+    [data-theme="light"] .wizard-type-card.selected { border-color: #0ea5e9; background: rgba(14,165,233,0.12); }
+    [data-theme="light"] .wizard-version-btn { border-color: rgba(0,0,0,0.15); background: rgba(0,0,0,0.03); }
+    [data-theme="light"] .wizard-version-btn.selected { border-color: #0ea5e9; background: rgba(14,165,233,0.18); color: #0c4a6e; }
 
     /* disabled 按钮在两个主题下都清晰可辨 */
     .instance-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }

@@ -108,13 +108,13 @@ namespace RtCli.Modules.Function
 
             if (!NeedsRunServer)
             {
-                Output.Log("当前模式为 Rcon，无法启动服务端。请在配置文件中设置 analyzer_mode 为 Run/RR/RM。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_rcon_mode_cannot_start"), 2, ThisProgramName);
                 return;
             }
 
             if (_isRunModeActive)
             {
-                Output.Log("服务端已在运行中。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_server_already_running"), 2, ThisProgramName);
                 return;
             }
 
@@ -126,20 +126,20 @@ namespace RtCli.Modules.Function
                 workPath = FindServerPathFromScan();
                 if (string.IsNullOrEmpty(workPath))
                 {
-                    Output.Log("未配置工作目录且无法自动检测。请在配置文件中设置 work_path。", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_workpath_not_configured"), 2, ThisProgramName);
                     return;
                 }
             }
 
             if (string.IsNullOrWhiteSpace(flags))
             {
-                Output.Log("未配置启动参数。请在配置文件中设置 run_server_flags。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_flags_not_configured"), 2, ThisProgramName);
                 return;
             }
 
             if (!Directory.Exists(workPath))
             {
-                Output.Log($"工作目录不存在: {workPath}", 3, ThisProgramName);
+                Output.Log(I18n.Get("anz_workpath_not_exists", workPath), 3, ThisProgramName);
                 return;
             }
 
@@ -156,22 +156,22 @@ namespace RtCli.Modules.Function
                         {
                             eulaContent = eulaContent.Replace("eula=false", "eula=true");
                             File.WriteAllText(eulaPath, eulaContent);
-                            Output.Log("已自动同意 EULA（配置: auto_agree_eula = true）。", 1, ThisProgramName);
+                            Output.Log(I18n.Get("anz_eula_auto_agreed_config"), 1, ThisProgramName);
                         }
                         else
                         {
-                            Output.Log("检测到 EULA 未同意。", 2, ThisProgramName);
-                            Output.Log("Minecraft EULA 说明: https://www.minecraft.net/eula", 1, ThisProgramName);
-                            bool agree = AnsiConsole.Confirm("是否同意 Minecraft EULA？(阅读 https://www.minecraft.net/eula)", false);
+                            Output.Log(I18n.Get("anz_eula_not_agreed_detected"), 2, ThisProgramName);
+                            Output.Log(I18n.Get("anz_eula_notice"), 1, ThisProgramName);
+                            bool agree = AnsiConsole.Confirm(I18n.Get("anz_eula_confirm"), false);
                             if (agree)
                             {
                                 eulaContent = eulaContent.Replace("eula=false", "eula=true");
                                 File.WriteAllText(eulaPath, eulaContent);
-                                Output.Log("已同意 EULA。", 1, ThisProgramName);
+                                Output.Log(I18n.Get("anz_eula_agreed"), 1, ThisProgramName);
                             }
                             else
                             {
-                                Output.Log("未同意 EULA，服务端无法启动。", 2, ThisProgramName);
+                                Output.Log(I18n.Get("anz_eula_refused_cannot_start"), 2, ThisProgramName);
                                 return;
                             }
                         }
@@ -179,7 +179,7 @@ namespace RtCli.Modules.Function
                 }
                 catch (Exception ex)
                 {
-                    Output.Log($"EULA 检查失败: {ex.Message}", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_eula_check_failed", ex.Message), 2, ThisProgramName);
                 }
             }
 
@@ -237,7 +237,7 @@ namespace RtCli.Modules.Function
                                                 // auto_agree_eula=true: 自动同意并自动重启
                                                 content = content.Replace("eula=false", "eula=true");
                                                 File.WriteAllText(eulaPath, content);
-                                                Output.Log("已自动同意 EULA，正在重启服务端...", 1, "Analyzer");
+                                                Output.Log(I18n.Get("anz_eula_auto_agreed_restarting"), 1, "Analyzer");
                                                 _ = Task.Run(async () =>
                                                 {
                                                     await Task.Delay(2000);
@@ -252,9 +252,9 @@ namespace RtCli.Modules.Function
                                                 _ = Task.Run(async () =>
                                                 {
                                                     await Task.Delay(2000); // 等待服务端退出
-                                                    Output.Log("服务端因 EULA 未同意而关闭。", 2, "Analyzer");
-                                                    Output.Log("Minecraft EULA 说明: https://www.minecraft.net/eula", 1, "Analyzer");
-                                                    bool agree = AnsiConsole.Confirm("是否同意 Minecraft EULA？(阅读 https://www.minecraft.net/eula)", false);
+                                                    Output.Log(I18n.Get("anz_eula_refused_closed"), 2, "Analyzer");
+                                                    Output.Log(I18n.Get("anz_eula_notice"), 1, "Analyzer");
+                                                    bool agree = AnsiConsole.Confirm(I18n.Get("anz_eula_confirm"), false);
                                                     if (agree)
                                                     {
                                                         try
@@ -262,23 +262,23 @@ namespace RtCli.Modules.Function
                                                             content = File.ReadAllText(eulaPath);
                                                             content = content.Replace("eula=false", "eula=true");
                                                             File.WriteAllText(eulaPath, content);
-                                                            Output.Log("已同意 EULA。", 1, "Analyzer");
+                                                            Output.Log(I18n.Get("anz_eula_agreed"), 1, "Analyzer");
 
-                                                            bool restart = AnsiConsole.Confirm("是否重新启动服务端？", true);
+                                                            bool restart = AnsiConsole.Confirm(I18n.Get("anz_confirm_restart_server"), true);
                                                             if (restart)
                                                             {
                                                                 StartServer();
-                                                                Output.Log("服务端已重新启动。", 1, "Analyzer");
+                                                                Output.Log(I18n.Get("anz_server_restarted"), 1, "Analyzer");
                                                             }
                                                         }
                                                         catch (Exception ex)
                                                         {
-                                                            Output.Log($"同意EULA失败: {ex.Message}", 2, "Analyzer");
+                                                            Output.Log(I18n.Get("anz_eula_agree_failed", ex.Message), 2, "Analyzer");
                                                         }
                                                     }
                                                     else
                                                     {
-                                                        Output.Log("未同意 EULA，服务端无法运行。稍后可手动修改 eula.txt 后使用 .server start 启动。", 2, "Analyzer");
+                                                        Output.Log(I18n.Get("anz_eula_refused_hint"), 2, "Analyzer");
                                                     }
                                                 });
                                             }
@@ -286,7 +286,7 @@ namespace RtCli.Modules.Function
                                     }
                                     catch (Exception ex)
                                     {
-                                        Output.Log($"EULA处理失败: {ex.Message}", 2, "Analyzer");
+                                        Output.Log(I18n.Get("anz_eula_handle_failed", ex.Message), 2, "Analyzer");
                                     }
                                 }
                             }
@@ -325,7 +325,7 @@ namespace RtCli.Modules.Function
                 _outputCts = new CancellationTokenSource();
                 _ = Task.Run(() => MonitorServerProcess(_outputCts.Token), _outputCts.Token);
 
-                Output.Log($"已启动服务端 (PID: {_serverProcess.Id}) 模式: {_currentMode}", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_server_started", _serverProcess.Id, _currentMode), 1, ThisProgramName);
                 EventBus.Publish(new ServerStartEvent(Config.App.GrpcPort, Config.App.CurrentServer));
 
                 // Little备份：服务端启动时触发首次完整备份
@@ -341,14 +341,14 @@ namespace RtCli.Modules.Function
                         catch { }
                     });
                 }
-                Output.Log($"工作目录: {workPath}", 1, ThisProgramName);
-                Output.Log($"启动参数: java {flags}", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_workdir_label", workPath), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_flags_label", flags), 1, ThisProgramName);
 
                 // RR模式：启动后尝试RCON连接
                 if (UsesRconCommands)
                 {
                     _rconClient = new RconClient();
-                    Output.Log("RR模式：将在服务端启动完成后自动连接RCON...", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_rr_auto_connect_rcon"), 1, ThisProgramName);
                     _ = Task.Run(() =>
                     {
                         // 等待服务端启动完成（最多等待5分钟）
@@ -363,34 +363,34 @@ namespace RtCli.Modules.Function
                                     Config.CurrentServer.RconPort,
                                     Config.CurrentServer.RconPassword))
                                 {
-                                    Output.Log($"RCON 已连接 ({Config.CurrentServer.RconHost}:{Config.CurrentServer.RconPort})", 1, ThisProgramName);
+                                    Output.Log(I18n.Get("anz_rcon_connected", Config.CurrentServer.RconHost, Config.CurrentServer.RconPort), 1, ThisProgramName);
                                     break;
                                 }
                             }
                             catch { }
                         }
                     });
-                    Output.Log("使用 / 开头的命令通过RCON发送到服务端。", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_cmd_via_rcon_hint"), 1, ThisProgramName);
                 }
                 else if (IsRunMode)
                 {
-                    Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_cmd_hint"), 1, ThisProgramName);
                 }
                 else if (IsRMMode)
                 {
                     // RM模式: 通过日志文件获取控制台信息流
-                    Output.Log("RM模式：正在启动日志文件监控...", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_rm_log_monitor_starting"), 1, ThisProgramName);
                     _ = Task.Run(() => StartRMLogFileMonitor(workPath, _outputCts.Token));
-                    Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_cmd_hint"), 1, ThisProgramName);
                 }
 
-                Output.Log("输入 .server stop 停止服务端。", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_input_stop_hint"), 1, ThisProgramName);
 
                 Intelligence.StartAutoTips();
             }
             catch (Exception ex)
             {
-                Output.ReportError(ex, false, "启动服务端失败");
+                Output.ReportError(ex, false, I18n.Get("anz_start_server_failed"));
                 CleanupRunMode();
             }
         }
@@ -401,7 +401,7 @@ namespace RtCli.Modules.Function
 
             if (!_isRunModeActive)
             {
-                Output.Log("服务端未在运行。", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_server_not_running"), 1, ThisProgramName);
                 return;
             }
 
@@ -425,7 +425,7 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"停止服务端时出错: {ex.Message}", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_stop_server_error", ex.Message), 2, ThisProgramName);
             }
 
             CleanupRunMode();
@@ -441,7 +441,7 @@ namespace RtCli.Modules.Function
                     if (_serverProcess == null || _serverProcess.HasExited)
                     {
                         int exitCode = _serverProcess?.ExitCode ?? -1;
-                        Output.Log($"服务端进程已退出 (退出码: {exitCode})", 0, "Analyzer");
+                        Output.Log(I18n.Get("anz_server_exited", exitCode), 0, "Analyzer");
                         CleanupRunMode();
                         Intelligence.StopAutoTips();
 
@@ -454,7 +454,8 @@ namespace RtCli.Modules.Function
                                 _restartAttemptCount++;
                                 EventBus.Publish(new ServerCrashEvent(Config.App.CurrentServer, exitCode));
                                 EventBus.Publish(new AutoRestartEvent(Config.App.CurrentServer, _restartAttemptCount, maxRetries));
-                                Output.Log($"[yellow]自动重启[/] 第 {_restartAttemptCount} 次{(maxRetries > 0 ? $"/{maxRetries}" : "")}，5秒后重启...", 1, "Analyzer");
+                                string attemptTotal = maxRetries > 0 ? "/" + maxRetries : "";
+                                Output.Log(I18n.Get("anz_auto_restart", _restartAttemptCount, attemptTotal), 1, "Analyzer");
                                 Thread.Sleep(5000);
                                 if (!_userInitiatedStop)
                                 {
@@ -463,7 +464,7 @@ namespace RtCli.Modules.Function
                             }
                             else
                             {
-                                Output.Log($"已达到最大自动重启次数 ({maxRetries})，不再尝试。", 2, "Analyzer");
+                                Output.Log(I18n.Get("anz_max_retries_reached", maxRetries), 2, "Analyzer");
                                 _restartAttemptCount = 0;
                             }
                         }
@@ -471,7 +472,7 @@ namespace RtCli.Modules.Function
                         {
                             _restartAttemptCount = 0;
                             EventBus.Publish(new ServerStopEvent(Config.App.CurrentServer));
-                            Output.Log("服务端已停止。", 1, "Analyzer");
+                            Output.Log(I18n.Get("anz_server_stopped"), 1, "Analyzer");
                         }
                         break;
                     }
@@ -542,7 +543,7 @@ namespace RtCli.Modules.Function
         public static void ScanAndListServers()
         {
             string ThisProgramName = "Analyzer";
-            Output.Log("正在扫描运行中的 Minecraft 服务端...", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_scanning_servers"), 1, ThisProgramName);
 
             lock (_scanLock)
             {
@@ -550,16 +551,16 @@ namespace RtCli.Modules.Function
             }
             if (_lastScanResults.Count == 0)
             {
-                Output.Log("未找到运行中的 Minecraft 服务端。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_servers_found"), 2, ThisProgramName);
                 return;
             }
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
-                .AddColumn("序号", c => c.Alignment(Justify.Center).Width(6))
-                .AddColumn("进程ID", c => c.Alignment(Justify.Center).Width(10))
-                .AddColumn("窗口标题", c => c.Width(30))
-                .AddColumn("Jar文件路径", c => c.Width(50));
+                .AddColumn(I18n.Get("anz_col_index"), c => c.Alignment(Justify.Center).Width(6))
+                .AddColumn(I18n.Get("anz_col_pid"), c => c.Alignment(Justify.Center).Width(10))
+                .AddColumn(I18n.Get("anz_col_window_title"), c => c.Width(30))
+                .AddColumn(I18n.Get("anz_col_jar_path"), c => c.Width(50));
 
             int index = 1;
             foreach (var server in _lastScanResults)
@@ -574,7 +575,7 @@ namespace RtCli.Modules.Function
             }
 
             AnsiConsole.Write(table);
-            Output.Log($"共找到 {_lastScanResults.Count} 个服务端。使用 .server connect <序号> 连接。", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_servers_found_count", _lastScanResults.Count), 1, ThisProgramName);
         }
 
         public static void ConnectToServer(int index)
@@ -583,7 +584,7 @@ namespace RtCli.Modules.Function
 
             if (!IsRconMode)
             {
-                Output.Log("当前模式不支持 .server connect。Rcon模式下才可连接已运行的服务端。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_connect_mode_unsupported"), 2, ThisProgramName);
                 return;
             }
 
@@ -592,13 +593,13 @@ namespace RtCli.Modules.Function
 
             if (scanResults.Count == 0)
             {
-                Output.Log("没有可用的服务端列表，请先使用 .server get 扫描。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_scan_results"), 2, ThisProgramName);
                 return;
             }
 
             if (index < 1 || index > scanResults.Count)
             {
-                Output.Log($"无效的序号，请输入 1 到 {scanResults.Count} 之间的数字。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_invalid_index", scanResults.Count), 2, ThisProgramName);
                 return;
             }
 
@@ -613,7 +614,7 @@ namespace RtCli.Modules.Function
 
             if (!IsRconMode)
             {
-                Output.Log("当前模式不支持 .server connect。Rcon模式下才可连接已运行的服务端。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_connect_mode_unsupported"), 2, ThisProgramName);
                 return;
             }
 
@@ -641,7 +642,7 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"无法连接到进程 {pid}: {ex.Message}", 3, ThisProgramName);
+                Output.Log(I18n.Get("anz_connect_pid_failed", pid, ex.Message), 3, ThisProgramName);
             }
         }
 
@@ -675,7 +676,7 @@ namespace RtCli.Modules.Function
                             var capturedServerName = _connectedServerName;
                             var capturedLogFile = logFile;
                             _ = Task.Run(() => WatchLogFile(capturedLogFile, capturedServerName, token), token);
-                            Output.Log($"日志文件: {logFile}", 1, ThisProgramName);
+                            Output.Log(I18n.Get("anz_logfile_label", logFile), 1, ThisProgramName);
                         }
                     }
 
@@ -690,20 +691,20 @@ namespace RtCli.Modules.Function
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"RCON 连接失败: {ex.Message}，命令发送将不可用。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_rcon_connect_failed", ex.Message), 2, ThisProgramName);
                     }
 
-                    Output.Log($"已连接服务端: {Path.GetFileName(server.JarPath)} (PID: {server.ProcessId})", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_attached_server", Path.GetFileName(server.JarPath), server.ProcessId), 1, ThisProgramName);
                     if (rconConnected)
                     {
-                        Output.Log($"RCON 已连接 ({Config.CurrentServer.RconHost}:{Config.CurrentServer.RconPort})", 1, ThisProgramName);
+                        Output.Log(I18n.Get("anz_rcon_connected", Config.CurrentServer.RconHost, Config.CurrentServer.RconPort), 1, ThisProgramName);
                     }
                     else
                     {
-                        Output.Log("RCON 未连接，命令发送不可用。请检查 RCON 配置。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_rcon_not_connected"), 2, ThisProgramName);
                     }
-                    Output.Log("使用 / 开头的命令发送到服务端。", 1, ThisProgramName);
-                    Output.Log("输入 .server detach 可断开连接。", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_cmd_hint"), 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_detach_hint"), 1, ThisProgramName);
                 }
                 catch (Exception ex)
                 {
@@ -711,7 +712,7 @@ namespace RtCli.Modules.Function
                     _attachedWindowTitle = "";
                     _connectedServerName = "";
                     Interlocked.Exchange(ref _logFilePosition, 0);
-                    Output.ReportError(ex, false, "连接服务端失败");
+                    Output.ReportError(ex, false, I18n.Get("anz_connect_server_failed"));
                 }
             }
         }
@@ -734,7 +735,7 @@ namespace RtCli.Modules.Function
 
             if (!File.Exists(logFile))
             {
-                Output.Log("RM模式: 日志文件未创建，无法启动监控。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_rm_logfile_missing"), 2, ThisProgramName);
                 return;
             }
 
@@ -742,7 +743,7 @@ namespace RtCli.Modules.Function
             Interlocked.Exchange(ref _logFilePosition, 0);
 
             string serverName = _connectedServerName;
-            Output.Log($"RM模式: 日志文件监控已启动 ({logFile})", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_rm_log_monitor_started", logFile), 1, ThisProgramName);
 
             WatchLogFile(logFile, serverName, cancellationToken);
         }
@@ -869,7 +870,7 @@ namespace RtCli.Modules.Function
 
             if (!_isRunModeActive || _serverInput == null)
             {
-                Output.Log("服务端未运行，请先使用 .server start 启动。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_server_not_running_start_first"), 2, ThisProgramName);
                 return;
             }
 
@@ -881,7 +882,7 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"发送命令失败: {ex.Message}", 3, ThisProgramName);
+                Output.Log(I18n.Get("anz_send_cmd_failed", ex.Message), 3, ThisProgramName);
             }
         }
 
@@ -891,13 +892,13 @@ namespace RtCli.Modules.Function
 
             if (_attachedProcessId == 0)
             {
-                Output.Log("未连接到 Minecraft 服务端，请先使用 .server get 扫描并连接。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_not_attached_hint"), 2, ThisProgramName);
                 return;
             }
 
             if (_rconClient == null || !_rconClient.IsConnected)
             {
-                Output.Log("RCON 未连接，无法发送命令。请检查 RCON 配置后重新连接。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_rcon_not_connected_send"), 2, ThisProgramName);
                 return;
             }
 
@@ -912,7 +913,7 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"RCON 发送命令失败: {ex.Message}", 3, ThisProgramName);
+                Output.Log(I18n.Get("anz_rcon_send_cmd_failed", ex.Message), 3, ThisProgramName);
             }
         }
 
@@ -955,7 +956,7 @@ namespace RtCli.Modules.Function
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"RCON 发送命令失败: {ex.Message}", 3, "Analyzer");
+                        Output.Log(I18n.Get("anz_rcon_send_cmd_failed", ex.Message), 3, "Analyzer");
                     }
                     return result;
                 }
@@ -978,7 +979,7 @@ namespace RtCli.Modules.Function
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"发送命令失败: {ex.Message}", 3, "Analyzer");
+                        Output.Log(I18n.Get("anz_send_cmd_failed", ex.Message), 3, "Analyzer");
                         return result;
                     }
 
@@ -1192,7 +1193,7 @@ namespace RtCli.Modules.Function
 
             if (string.IsNullOrWhiteSpace(handlerPattern))
             {
-                Output.Log("正则表达式配置为空，无法分析。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_regex_empty"), 2, ThisProgramName);
                 return;
             }
 
@@ -1203,7 +1204,7 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"正则表达式无效: {ex.Message}", 3, ThisProgramName);
+                Output.Log(I18n.Get("anz_regex_invalid", ex.Message), 3, ThisProgramName);
                 return;
             }
 
@@ -1213,18 +1214,18 @@ namespace RtCli.Modules.Function
             {
                 if (!File.Exists(filePath))
                 {
-                    Output.Log($"文件不存在: {filePath}", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_file_not_exists", filePath), 2, ThisProgramName);
                     return;
                 }
 
                 try
                 {
                     logLines = File.ReadAllLines(filePath, Encoding.GetEncoding(0)).ToList();
-                    Output.Log($"从外部文件读取了 {logLines.Count} 行: {filePath}", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_read_external_file", logLines.Count, filePath), 1, ThisProgramName);
                 }
                 catch (Exception ex)
                 {
-                    Output.Log($"读取文件失败: {ex.Message}", 3, ThisProgramName);
+                    Output.Log(I18n.Get("anz_read_file_failed", ex.Message), 3, ThisProgramName);
                     return;
                 }
             }
@@ -1232,7 +1233,7 @@ namespace RtCli.Modules.Function
             {
                 if (!IsRunModeActive && !IsAttached)
                 {
-                    Output.Log("未连接到 MC 服务端，无法分析错误日志。使用 .fx get <路径> 分析外部日志文件。", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_not_attached_analyze_hint"), 2, ThisProgramName);
                     return;
                 }
 
@@ -1251,11 +1252,11 @@ namespace RtCli.Modules.Function
                             try
                             {
                                 logLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0)).ToList();
-                                Output.Log($"从日志文件读取了 {logLines.Count} 行。", 1, ThisProgramName);
+                                Output.Log(I18n.Get("anz_read_logfile_lines", logLines.Count), 1, ThisProgramName);
                             }
                             catch (Exception ex)
                             {
-                                Output.Log($"读取日志文件失败: {ex.Message}", 3, ThisProgramName);
+                                Output.Log(I18n.Get("anz_read_logfile_failed", ex.Message), 3, ThisProgramName);
                                 return;
                             }
                         }
@@ -1263,7 +1264,7 @@ namespace RtCli.Modules.Function
 
                     if (logLines.Count == 0)
                     {
-                        Output.Log("没有可分析的日志内容。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_no_log_content"), 2, ThisProgramName);
                         return;
                     }
                 }
@@ -1351,7 +1352,7 @@ namespace RtCli.Modules.Function
 
             if (errors.Count == 0)
             {
-                Output.Log("未检测到错误日志。", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_errors_detected"), 1, ThisProgramName);
                 return;
             }
 
@@ -1359,8 +1360,8 @@ namespace RtCli.Modules.Function
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
-                .AddColumn("编号", c => c.Alignment(Justify.Center).Width(8))
-                .AddColumn("错误摘要", c => c.Width(80));
+                .AddColumn(I18n.Get("anz_col_no"), c => c.Alignment(Justify.Center).Width(8))
+                .AddColumn(I18n.Get("anz_col_error_summary"), c => c.Width(80));
 
             foreach (var kv in errors)
             {
@@ -1372,7 +1373,7 @@ namespace RtCli.Modules.Function
             }
 
             AnsiConsole.Write(table);
-            Output.Log($"共识别 {errors.Count} 个错误（新增 {newCount} 个），结果已保存到 fx_save_error.yml。", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_errors_recognized", errors.Count, newCount), 1, ThisProgramName);
         }
 
         public static void ListErrors(int? index)
@@ -1382,7 +1383,7 @@ namespace RtCli.Modules.Function
 
             if (errors.Count == 0)
             {
-                Output.Log("没有已保存的错误分析结果。", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_saved_errors"), 1, ThisProgramName);
                 return;
             }
 
@@ -1391,21 +1392,21 @@ namespace RtCli.Modules.Function
                 if (errors.TryGetValue(index.Value, out string? errorText))
                 {
                     var panel = new Panel(Markup.Escape(errorText))
-                        .Header($"[[第 {index.Value} 次分析结果]]")
+                        .Header(I18n.Get("anz_analysis_result_header", index.Value))
                         .Border(BoxBorder.Rounded);
                     AnsiConsole.Write(panel);
                 }
                 else
                 {
-                    Output.Log($"没有编号为 {index.Value} 的分析结果。", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_no_such_index_result", index.Value), 2, ThisProgramName);
                 }
                 return;
             }
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
-                .AddColumn("编号", c => c.Alignment(Justify.Center).Width(8))
-                .AddColumn("错误摘要", c => c.Width(80));
+                .AddColumn(I18n.Get("anz_col_no"), c => c.Alignment(Justify.Center).Width(8))
+                .AddColumn(I18n.Get("anz_col_error_summary"), c => c.Width(80));
 
             foreach (var kv in errors.OrderBy(kv => kv.Key))
             {
@@ -1417,7 +1418,7 @@ namespace RtCli.Modules.Function
             }
 
             AnsiConsole.Write(table);
-            Output.Log($"共 {errors.Count} 条错误分析结果。", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_error_results_count", errors.Count), 1, ThisProgramName);
         }
 
         public static void DeleteErrors()
@@ -1435,14 +1436,14 @@ namespace RtCli.Modules.Function
                 {
                     if (_lastClientGuideMatches.Count == 0)
                     {
-                        Output.Log("没有已匹配的客户端错误结果，请先使用 .fx clientguide 开始诊断。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_no_clientguide_matches"), 2, ThisProgramName);
                         return;
                     }
 
                     int idx = selectedIndex.Value - 1;
                     if (idx < 0 || idx >= _lastClientGuideMatches.Count)
                     {
-                        Output.Log($"无效的序号，请输入 1 到 {_lastClientGuideMatches.Count} 之间的数字。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_invalid_index", _lastClientGuideMatches.Count), 2, ThisProgramName);
                         return;
                     }
 
@@ -1454,7 +1455,7 @@ namespace RtCli.Modules.Function
 
             if (!IsRunModeActive && !IsAttached)
             {
-                Output.Log("未连接到 MC 服务端，无法使用客户端诊断功能。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_clientguide_not_attached"), 2, ThisProgramName);
                 return;
             }
 
@@ -1462,7 +1463,7 @@ namespace RtCli.Modules.Function
 
             if (_clientGuideActive)
             {
-                Output.Log("客户端诊断已在运行中，请等待结果或使用 .fx clientguide <序号> 查看已匹配的结果。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_clientguide_running"), 2, ThisProgramName);
                 return;
             }
 
@@ -1483,8 +1484,8 @@ namespace RtCli.Modules.Function
             }
 
             int timeout = ContentManager.Regex.ClientGuide.Timeout;
-            Output.Log($"正在等待玩家加入服务端... (超时: {timeout}秒)", 1, ThisProgramName);
-            Output.Log("当玩家加入或断开连接时，将自动匹配客户端错误并给出解决方案。", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_clientguide_waiting", timeout), 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_clientguide_wait_hint"), 1, ThisProgramName);
 
             var token = _clientGuideCts.Token;
             _ = Task.Run(() => MonitorClientGuide(startBufferCount, timeout, token), token);
@@ -1512,7 +1513,7 @@ namespace RtCli.Modules.Function
                 {
                     if ((DateTime.Now - startTime).TotalSeconds > timeout)
                     {
-                        Output.Log("似乎玩家未加入已经超时，请看下表检查服务端方面问题：", 2, "ClientGuide");
+                        Output.Log(I18n.Get("anz_clientguide_timeout"), 2, "ClientGuide");
                         ShowTimeoutTroubleshootTable();
                         return;
                     }
@@ -1535,13 +1536,13 @@ namespace RtCli.Modules.Function
                     {
                         if (joinRegex.IsMatch(line))
                         {
-                            Output.Log($"[[检测到玩家加入]] {Markup.Escape(line)}", 1, "ClientGuide");
+                            Output.Log(I18n.Get("anz_clientguide_player_join", Markup.Escape(line)), 1, "ClientGuide");
                         }
 
                         if (disconnectRegex.IsMatch(line) || clientErrorRegex.IsMatch(line) || errorHandlerRegex.IsMatch(line))
                         {
                             capturedMessages.Add(line);
-                            Output.Log($"[[检测到断开/错误]] {Markup.Escape(line)}", 1, "ClientGuide");
+                            Output.Log(I18n.Get("anz_clientguide_disconnect_error", Markup.Escape(line)), 1, "ClientGuide");
                         }
                     }
 
@@ -1561,7 +1562,7 @@ namespace RtCli.Modules.Function
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Output.ReportError(ex, false, "客户端诊断出错");
+                Output.ReportError(ex, false, I18n.Get("anz_clientguide_error"));
             }
             finally
             {
@@ -1606,8 +1607,8 @@ namespace RtCli.Modules.Function
 
             if (matches.Count == 0)
             {
-                Output.Log("未匹配到已知的客户端错误类型。", 2, "ClientGuide");
-                Output.Log("原始消息:", 1, "ClientGuide");
+                Output.Log(I18n.Get("anz_no_client_error_matched"), 2, "ClientGuide");
+                Output.Log(I18n.Get("anz_raw_message_label"), 1, "ClientGuide");
                 foreach (var msg in messages)
                 {
                     Output.Log(msg, 0, "ClientGuide");
@@ -1615,12 +1616,12 @@ namespace RtCli.Modules.Function
                 return;
             }
 
-            Output.Log($"共匹配 {matches.Count} 个可能的错误：", 1, "ClientGuide");
+            Output.Log(I18n.Get("anz_clientguide_match_count", matches.Count), 1, "ClientGuide");
             foreach (var match in matches)
             {
-                Output.Log($"  {match.Index}. {Markup.Escape(match.Entry.Keyword)} (匹配度: {match.Similarity:P0}) - {Markup.Escape(match.Entry.Description)}", 1, "ClientGuide");
+                Output.Log(I18n.Get("anz_clientguide_match_item", match.Index, Markup.Escape(match.Entry.Keyword), match.Similarity.ToString("P0"), Markup.Escape(match.Entry.Description)), 1, "ClientGuide");
             }
-            Output.Log("使用 .fx clientguide <序号> 查看详细解决方案。", 1, "ClientGuide");
+            Output.Log(I18n.Get("anz_clientguide_view_solution"), 1, "ClientGuide");
         }
 
         private static double CalculateSimilarity(string message, string keyword)
@@ -1647,36 +1648,36 @@ namespace RtCli.Modules.Function
 
         private static void ShowClientGuideSolution(ClientGuideMatch match)
         {
-            var rule = new Rule($"[cyan]客户端错误诊断 - 匹配项 {match.Index}[/]");
+            var rule = new Rule(I18n.Get("anz_clientguide_match_title", match.Index));
             AnsiConsole.Write(rule);
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
-                .AddColumn("项目", c => c.Width(15))
-                .AddColumn("内容", c => c.Width(65));
+                .AddColumn(I18n.Get("anz_col_item"), c => c.Width(15))
+                .AddColumn(I18n.Get("anz_col_content"), c => c.Width(65));
 
-            table.AddRow("错误关键词", Markup.Escape(match.Entry.Keyword));
-            table.AddRow("错误描述", Markup.Escape(match.Entry.Description));
-            table.AddRow("解决方案", Markup.Escape(match.Entry.Solution));
-            table.AddRow("匹配度", $"{match.Similarity:P0}");
+            table.AddRow(I18n.Get("anz_row_keyword"), Markup.Escape(match.Entry.Keyword));
+            table.AddRow(I18n.Get("anz_row_error_desc"), Markup.Escape(match.Entry.Description));
+            table.AddRow(I18n.Get("anz_row_solution"), Markup.Escape(match.Entry.Solution));
+            table.AddRow(I18n.Get("anz_row_similarity"), $"{match.Similarity:P0}");
 
             string displayMessage = match.MatchedMessage.Length > 200
                 ? match.MatchedMessage.Substring(0, 197) + "..."
                 : match.MatchedMessage;
-            table.AddRow("原始消息", Markup.Escape(displayMessage));
+            table.AddRow(I18n.Get("anz_row_raw_message"), Markup.Escape(displayMessage));
 
             AnsiConsole.Write(table);
         }
 
         private static void ShowTimeoutTroubleshootTable()
         {
-            var root = new Tree("[yellow]服务端方面问题检查[/]");
+            var root = new Tree(I18n.Get("anz_troubleshoot_tree_title"));
 
             foreach (var item in ContentManager.GetAllTroubleshoot())
             {
                 var node = root.AddNode($"[cyan]{Markup.Escape(item.Title)}[/]");
-                node.AddNode($"[white]问题:[/] {Markup.Escape(item.Problem)}");
-                node.AddNode($"[green]解决:[/] {Markup.Escape(item.Solution)}");
+                node.AddNode(I18n.Get("anz_tree_problem", Markup.Escape(item.Problem)));
+                node.AddNode(I18n.Get("anz_tree_solution", Markup.Escape(item.Solution)));
             }
 
             AnsiConsole.Write(root);
@@ -1691,23 +1692,23 @@ namespace RtCli.Modules.Function
             var errors = ContentManager.LoadErrorLog();
             if (errors.Count == 0)
             {
-                Output.Log("没有错误分析结果，请先使用 .fx get 分析错误日志。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_errors_analyze_first"), 2, ThisProgramName);
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(rangeArg))
             {
-                Output.Log("用法: .fx base <n> 或 .fx base <n-m>", 1, ThisProgramName);
-                Output.Log("  n   - 分析第n个错误", 1, ThisProgramName);
-                Output.Log("  n-m - 合并第n到m个错误后分析", 1, ThisProgramName);
-                Output.Log($"当前共有 {errors.Count} 条错误记录，使用 .fx list 查看。", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_base_usage"), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_base_usage_n"), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_base_usage_nm"), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_error_records_count", errors.Count), 1, ThisProgramName);
                 return;
             }
 
             List<int>? targetIndices = ParseRange(rangeArg, errors.Keys.ToList());
             if (targetIndices == null || targetIndices.Count == 0)
             {
-                Output.Log($"无效的范围参数: {rangeArg}", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_invalid_range", rangeArg), 2, ThisProgramName);
                 return;
             }
 
@@ -1721,13 +1722,13 @@ namespace RtCli.Modules.Function
                 }
                 else
                 {
-                    Output.Log($"编号 {idx} 的错误记录不存在。", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_error_index_missing", idx), 2, ThisProgramName);
                     return;
                 }
             }
 
             string combinedError = sb.ToString();
-            Output.Log($"正在分析 {targetIndices.Count} 条错误记录...", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_analyzing_records", targetIndices.Count), 1, ThisProgramName);
 
             var baseEntries = ContentManager.GetAllBaseEntries();
             var matches = new List<(BaseEntry Entry, Match Match, double Score)>();
@@ -1746,7 +1747,7 @@ namespace RtCli.Modules.Function
                 }
                 catch (Exception ex)
                 {
-                    Output.Log($"正则表达式无效 [{entry.Topic}]: {ex.Message}", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_regex_invalid_topic", entry.Topic, ex.Message), 2, ThisProgramName);
                 }
             }
 
@@ -1754,17 +1755,17 @@ namespace RtCli.Modules.Function
 
             if (matches.Count == 0)
             {
-                Output.Log("未匹配到已知的基础错误模式。", 2, ThisProgramName);
-                Output.Log("原始错误内容:", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_base_pattern_matched"), 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_raw_error_content"), 1, ThisProgramName);
 
                 var panel = new Panel(Markup.Escape(combinedError.Length > 500 ? combinedError.Substring(0, 497) + "..." : combinedError))
-                    .Header("[yellow]未识别的错误[/]")
+                    .Header(I18n.Get("anz_unrecognized_error"))
                     .Border(BoxBorder.Rounded);
                 AnsiConsole.Write(panel);
                 return;
             }
 
-            var rule = new Rule($"[cyan]基础分析结果 - 匹配 {matches.Count} 个模式[/]");
+            var rule = new Rule(I18n.Get("anz_base_result_title", matches.Count));
             AnsiConsole.Write(rule);
 
             for (int i = 0; i < matches.Count; i++)
@@ -1773,18 +1774,18 @@ namespace RtCli.Modules.Function
 
                 var table = new Table()
                     .Border(TableBorder.Rounded)
-                    .AddColumn("项目", c => c.Width(12))
-                    .AddColumn("内容", c => c.Width(68));
+                    .AddColumn(I18n.Get("anz_col_item"), c => c.Width(12))
+                    .AddColumn(I18n.Get("anz_col_content"), c => c.Width(68));
 
-                table.AddRow("序号", $"{i + 1}");
-                table.AddRow("问题主题", $"[cyan]{Markup.Escape(entry.Topic)}[/]");
-                table.AddRow("解决方案", Markup.Escape(entry.Solution));
+                table.AddRow(I18n.Get("anz_row_index"), $"{i + 1}");
+                table.AddRow(I18n.Get("anz_row_topic"), $"[cyan]{Markup.Escape(entry.Topic)}[/]");
+                table.AddRow(I18n.Get("anz_row_solution"), Markup.Escape(entry.Solution));
 
                 string matchedText = match.Value.Length > 200
                     ? match.Value.Substring(0, 197) + "..."
                     : match.Value;
-                table.AddRow("匹配内容", Markup.Escape(matchedText));
-                table.AddRow("匹配长度", $"{match.Value.Length} 字符");
+                table.AddRow(I18n.Get("anz_row_matched_content"), Markup.Escape(matchedText));
+                table.AddRow(I18n.Get("anz_row_matched_length"), I18n.Get("anz_length_chars", match.Value.Length));
 
                 if (!string.IsNullOrEmpty(entry.Action))
                 {
@@ -1840,7 +1841,7 @@ namespace RtCli.Modules.Function
             {
                 if (_aiRunning)
                 {
-                    Output.Log("AI分析正在执行中，请等待当前分析完成。", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_ai_running"), 2, ThisProgramName);
                     return;
                 }
                 _aiRunning = true;
@@ -1852,23 +1853,23 @@ namespace RtCli.Modules.Function
             var errors = ContentManager.LoadErrorLog();
             if (errors.Count == 0)
             {
-                Output.Log("没有错误分析结果，请先使用 .fx get 分析错误日志。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_errors_analyze_first"), 2, ThisProgramName);
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(rangeArg))
             {
-                Output.Log("用法: .fx ai <n> 或 .fx ai <n-m>", 1, ThisProgramName);
-                Output.Log("  n   - 将第n个错误发送给AI分析", 1, ThisProgramName);
-                Output.Log("  n-m - 合并第n到m个错误后发送给AI分析", 1, ThisProgramName);
-                Output.Log($"当前共有 {errors.Count} 条错误记录，使用 .fx list 查看。", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_ai_usage"), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_ai_usage_n"), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_ai_usage_nm"), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_error_records_count", errors.Count), 1, ThisProgramName);
                 return;
             }
 
             List<int>? targetIndices = ParseRange(rangeArg, errors.Keys.ToList());
             if (targetIndices == null || targetIndices.Count == 0)
             {
-                Output.Log($"无效的范围参数: {rangeArg}", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_invalid_range", rangeArg), 2, ThisProgramName);
                 return;
             }
 
@@ -1882,23 +1883,23 @@ namespace RtCli.Modules.Function
                 }
                 else
                 {
-                    Output.Log($"编号 {idx} 的错误记录不存在。", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_error_index_missing", idx), 2, ThisProgramName);
                     return;
                 }
             }
 
             string combinedError = sb.ToString();
-            Output.Log($"正在将 {targetIndices.Count} 条错误发送给AI分析...", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_ai_sending", targetIndices.Count), 1, ThisProgramName);
 
             string? aiResponse = await Intelligence.AnalyzeWithAi(combinedError);
 
             if (string.IsNullOrWhiteSpace(aiResponse))
             {
-                Output.Log("AI分析未返回结果。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_ai_no_result"), 2, ThisProgramName);
                 return;
             }
 
-            var rule = new Rule("[cyan]AI 分析结果[/]");
+            var rule = new Rule(I18n.Get("anz_ai_result_title"));
             AnsiConsole.Write(rule);
 
             var lines = aiResponse.Split('\n').Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
@@ -1921,11 +1922,11 @@ namespace RtCli.Modules.Function
 
         public static void FilterInfo()
         {
-            Output.Log("[yellow].fx filter 是帮助过滤问题的备份工具[/]", 1, "Filter");
-            Output.Log("推荐在问题发生前使用，可备份配置文件并在修改后对照差异。", 1, "Filter");
-            Output.Log("子命令：", 1, "Filter");
-            Output.Log("  config  - 备份/对照/还原配置文件", 1, "Filter");
-            Output.Log("  plugin  - 列出/禁用/启用插件", 1, "Filter");
+            Output.Log(I18n.Get("anz_filter_intro"), 1, "Filter");
+            Output.Log(I18n.Get("anz_filter_intro_hint"), 1, "Filter");
+            Output.Log(I18n.Get("anz_filter_subcommands"), 1, "Filter");
+            Output.Log(I18n.Get("anz_filter_config_desc"), 1, "Filter");
+            Output.Log(I18n.Get("anz_filter_plugin_desc"), 1, "Filter");
         }
 
         public static void FilterConfig(int? selectedIndex)
@@ -1937,11 +1938,11 @@ namespace RtCli.Modules.Function
                 if (Directory.Exists(ConfigBackupDir))
                 {
                     Directory.Delete(ConfigBackupDir, true);
-                    Output.Log("已删除配置备份。", 1, ThisProgramName);
+                    Output.Log(I18n.Get("anz_config_backup_deleted"), 1, ThisProgramName);
                 }
                 else
                 {
-                    Output.Log("没有配置备份可删除。", 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_no_config_backup"), 2, ThisProgramName);
                 }
                 return;
             }
@@ -1952,14 +1953,14 @@ namespace RtCli.Modules.Function
                 {
                     if (_lastConfigDiffs.Count == 0)
                     {
-                        Output.Log("没有配置差异记录，请先使用 .fx filter config 对照。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_no_config_diffs"), 2, ThisProgramName);
                         return;
                     }
 
                     int idx = selectedIndex.Value - 1;
                     if (idx >= _lastConfigDiffs.Count)
                     {
-                        Output.Log($"无效的序号，请输入 1 到 {_lastConfigDiffs.Count} 之间的数字。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_invalid_index", _lastConfigDiffs.Count), 2, ThisProgramName);
                         return;
                     }
 
@@ -1971,11 +1972,11 @@ namespace RtCli.Modules.Function
                             Directory.CreateDirectory(dir);
 
                         File.Copy(diff.BackupPath, diff.CurrentPath, true);
-                        Output.Log($"已还原: {Markup.Escape(diff.RelativePath)}", 1, ThisProgramName);
+                        Output.Log(I18n.Get("anz_restored", Markup.Escape(diff.RelativePath)), 1, ThisProgramName);
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"还原失败: {ex.Message}", 3, ThisProgramName);
+                        Output.Log(I18n.Get("anz_restore_failed", ex.Message), 3, ThisProgramName);
                     }
                 }
                 return;
@@ -1984,7 +1985,7 @@ namespace RtCli.Modules.Function
             string workPath = GetWorkPath();
             if (string.IsNullOrEmpty(workPath) || !Directory.Exists(workPath))
             {
-                Output.Log("无法获取 MC 服务端工作目录。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_workdir"), 2, ThisProgramName);
                 return;
             }
 
@@ -2020,12 +2021,12 @@ namespace RtCli.Modules.Function
                     count += CopyConfigFiles(pluginsDir, backupPluginsDir, extensions, 2);
                 }
 
-                Output.Log($"配置文件备份完成，共备份 {count} 个文件到 {ConfigBackupDir}", 1, ThisProgramName);
-                Output.Log("请修改配置文件后再次输入 .fx filter config 来对照差异。", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_config_backup_done", count, ConfigBackupDir), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_config_backup_hint"), 1, ThisProgramName);
             }
             catch (Exception ex)
             {
-                Output.Log($"备份失败: {ex.Message}", 3, ThisProgramName);
+                Output.Log(I18n.Get("anz_backup_failed", ex.Message), 3, ThisProgramName);
             }
         }
 
@@ -2092,24 +2093,24 @@ namespace RtCli.Modules.Function
 
             if (diffs.Count == 0)
             {
-                Output.Log("配置文件与备份一致，没有发现差异。", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_config_no_diff"), 1, ThisProgramName);
                 return;
             }
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
-                .AddColumn("序号", c => c.Alignment(Justify.Center).Width(6))
-                .AddColumn("文件路径", c => c.Width(60))
-                .AddColumn("状态", c => c.Alignment(Justify.Center).Width(12));
+                .AddColumn(I18n.Get("anz_col_index"), c => c.Alignment(Justify.Center).Width(6))
+                .AddColumn(I18n.Get("anz_col_file_path"), c => c.Width(60))
+                .AddColumn(I18n.Get("anz_col_status"), c => c.Alignment(Justify.Center).Width(12));
 
             foreach (var diff in diffs)
             {
-                string status = !File.Exists(diff.CurrentPath) ? "[red]已删除[/]" : "[yellow]已修改[/]";
+                string status = !File.Exists(diff.CurrentPath) ? I18n.Get("anz_status_deleted") : I18n.Get("anz_status_modified");
                 table.AddRow(diff.Index.ToString(), Markup.Escape(diff.RelativePath), status);
             }
 
             AnsiConsole.Write(table);
-            Output.Log($"共发现 {diffs.Count} 个差异。使用 .fx filter config <序号> 还原，输入.fx filter config 0 删除备份。", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_config_diff_count", diffs.Count), 1, ThisProgramName);
         }
 
         private static void CompareDirectory(string backupDir, string currentDir, string relativePrefix, ref List<ConfigDiffEntry> diffs, ref int diffIndex)
@@ -2171,7 +2172,7 @@ namespace RtCli.Modules.Function
 
             if (selectedIndex.HasValue && selectedIndex.Value == 0)
             {
-                Output.Log("正在重启 MC 服务端...", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_restarting_server"), 1, ThisProgramName);
                 StopServer();
                 Thread.Sleep(2000);
                 StartServer();
@@ -2184,14 +2185,14 @@ namespace RtCli.Modules.Function
                 {
                     if (_lastPluginList.Count == 0)
                     {
-                        Output.Log("没有插件列表，请先使用 .fx filter plugin 查看。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_no_plugin_list"), 2, ThisProgramName);
                         return;
                     }
 
                     int idx = selectedIndex.Value - 1;
                     if (idx >= _lastPluginList.Count)
                     {
-                        Output.Log($"无效的序号，请输入 1 到 {_lastPluginList.Count} 之间的数字。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_invalid_index", _lastPluginList.Count), 2, ThisProgramName);
                         return;
                     }
 
@@ -2202,20 +2203,20 @@ namespace RtCli.Modules.Function
                         {
                             string newPath = plugin.FullPath.Substring(0, plugin.FullPath.Length - 7) + ".jar";
                             File.Move(plugin.FullPath, newPath);
-                            Output.Log($"已启用插件: {Markup.Escape(plugin.FileName)} -> {Markup.Escape(Path.GetFileName(newPath))}", 1, ThisProgramName);
+                            Output.Log(I18n.Get("anz_plugin_enabled", Markup.Escape(plugin.FileName), Markup.Escape(Path.GetFileName(newPath))), 1, ThisProgramName);
                         }
                         else
                         {
                             string newPath = plugin.FullPath.Substring(0, plugin.FullPath.Length - 4) + ".disjar";
                             File.Move(plugin.FullPath, newPath);
-                            Output.Log($"已禁用插件: {Markup.Escape(plugin.FileName)} -> {Markup.Escape(Path.GetFileName(newPath))}", 1, ThisProgramName);
+                            Output.Log(I18n.Get("anz_plugin_disabled", Markup.Escape(plugin.FileName), Markup.Escape(Path.GetFileName(newPath))), 1, ThisProgramName);
                         }
 
                         ListPlugins();
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"操作失败: {ex.Message}", 3, ThisProgramName);
+                        Output.Log(I18n.Get("anz_operation_failed", ex.Message), 3, ThisProgramName);
                     }
                 }
                 return;
@@ -2230,14 +2231,14 @@ namespace RtCli.Modules.Function
             string workPath = GetWorkPath();
             if (string.IsNullOrEmpty(workPath) || !Directory.Exists(workPath))
             {
-                Output.Log("无法获取 MC 服务端工作目录。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_workdir"), 2, ThisProgramName);
                 return;
             }
 
             string pluginsDir = Path.Combine(workPath, "plugins");
             if (!Directory.Exists(pluginsDir))
             {
-                Output.Log("plugins 目录不存在。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_plugins_dir_missing"), 2, ThisProgramName);
                 return;
             }
 
@@ -2256,13 +2257,13 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"读取插件目录失败: {ex.Message}", 3, ThisProgramName);
+                Output.Log(I18n.Get("anz_read_plugins_dir_failed", ex.Message), 3, ThisProgramName);
                 return;
             }
 
             if (jarFiles.Count == 0)
             {
-                Output.Log("plugins 目录中没有找到插件文件。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_plugin_files"), 2, ThisProgramName);
                 return;
             }
 
@@ -2288,18 +2289,18 @@ namespace RtCli.Modules.Function
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
-                .AddColumn("序号", c => c.Alignment(Justify.Center).Width(6))
-                .AddColumn("插件文件名", c => c.Width(50))
-                .AddColumn("状态", c => c.Alignment(Justify.Center).Width(12));
+                .AddColumn(I18n.Get("anz_col_index"), c => c.Alignment(Justify.Center).Width(6))
+                .AddColumn(I18n.Get("anz_col_plugin_file"), c => c.Width(50))
+                .AddColumn(I18n.Get("anz_col_status"), c => c.Alignment(Justify.Center).Width(12));
 
             foreach (var plugin in plugins)
             {
-                string status = plugin.IsDisabled ? "[red]已禁用[/]" : "[green]正常[/]";
+                string status = plugin.IsDisabled ? I18n.Get("anz_status_disabled") : I18n.Get("anz_status_normal");
                 table.AddRow(plugin.Index.ToString(), Markup.Escape(plugin.FileName), status);
             }
 
             AnsiConsole.Write(table);
-            Output.Log($"共 {plugins.Count} 个插件。使用 .fx filter plugin <序号> 切换启用/禁用，使用.fx filter plugin 0 重启服务端。", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_plugin_count", plugins.Count), 1, ThisProgramName);
         }
 
         // ===== fx filter mod (模组启用/禁用, 参考 filter plugin) =====
@@ -2311,7 +2312,7 @@ namespace RtCli.Modules.Function
 
             if (selectedIndex.HasValue && selectedIndex.Value == 0)
             {
-                Output.Log("正在重启 MC 服务端...", 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_restarting_server"), 1, ThisProgramName);
                 StopServer();
                 Thread.Sleep(2000);
                 StartServer();
@@ -2324,14 +2325,14 @@ namespace RtCli.Modules.Function
                 {
                     if (_lastModList.Count == 0)
                     {
-                        Output.Log("没有模组列表，请先使用 .fx filter mod 查看。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_no_mod_list"), 2, ThisProgramName);
                         return;
                     }
 
                     int idx = selectedIndex.Value - 1;
                     if (idx >= _lastModList.Count)
                     {
-                        Output.Log($"无效的序号，请输入 1 到 {_lastModList.Count} 之间的数字。", 2, ThisProgramName);
+                        Output.Log(I18n.Get("anz_invalid_index", _lastModList.Count), 2, ThisProgramName);
                         return;
                     }
 
@@ -2343,20 +2344,20 @@ namespace RtCli.Modules.Function
                         {
                             string newPath = mod.FullPath.Substring(0, mod.FullPath.Length - ".disabled".Length);
                             File.Move(mod.FullPath, newPath);
-                            Output.Log($"已启用模组: {Markup.Escape(mod.FileName)} -> {Markup.Escape(Path.GetFileName(newPath))}", 1, ThisProgramName);
+                            Output.Log(I18n.Get("anz_mod_enabled", Markup.Escape(mod.FileName), Markup.Escape(Path.GetFileName(newPath))), 1, ThisProgramName);
                         }
                         else
                         {
                             string newPath = mod.FullPath + ".disabled";
                             File.Move(mod.FullPath, newPath);
-                            Output.Log($"已禁用模组: {Markup.Escape(mod.FileName)} -> {Markup.Escape(Path.GetFileName(newPath))}", 1, ThisProgramName);
+                            Output.Log(I18n.Get("anz_mod_disabled", Markup.Escape(mod.FileName), Markup.Escape(Path.GetFileName(newPath))), 1, ThisProgramName);
                         }
 
                         ListMods();
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"操作失败: {ex.Message}", 3, ThisProgramName);
+                        Output.Log(I18n.Get("anz_operation_failed", ex.Message), 3, ThisProgramName);
                     }
                 }
                 return;
@@ -2371,14 +2372,14 @@ namespace RtCli.Modules.Function
             string workPath = GetWorkPath();
             if (string.IsNullOrEmpty(workPath) || !Directory.Exists(workPath))
             {
-                Output.Log("无法获取 MC 服务端工作目录。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_workdir"), 2, ThisProgramName);
                 return;
             }
 
             string modsDir = Path.Combine(workPath, "mods");
             if (!Directory.Exists(modsDir))
             {
-                Output.Log("mods 目录不存在。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_mods_dir_missing"), 2, ThisProgramName);
                 return;
             }
 
@@ -2397,13 +2398,13 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"读取模组目录失败: {ex.Message}", 3, ThisProgramName);
+                Output.Log(I18n.Get("anz_read_mods_dir_failed", ex.Message), 3, ThisProgramName);
                 return;
             }
 
             if (jarFiles.Count == 0)
             {
-                Output.Log("mods 目录中没有找到模组文件。", 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_no_mod_files"), 2, ThisProgramName);
                 return;
             }
 
@@ -2429,18 +2430,18 @@ namespace RtCli.Modules.Function
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
-                .AddColumn("序号", c => c.Alignment(Justify.Center).Width(6))
-                .AddColumn("模组文件名", c => c.Width(50))
-                .AddColumn("状态", c => c.Alignment(Justify.Center).Width(12));
+                .AddColumn(I18n.Get("anz_col_index"), c => c.Alignment(Justify.Center).Width(6))
+                .AddColumn(I18n.Get("anz_col_mod_file"), c => c.Width(50))
+                .AddColumn(I18n.Get("anz_col_status"), c => c.Alignment(Justify.Center).Width(12));
 
             foreach (var mod in mods)
             {
-                string status = mod.IsDisabled ? "[red]已禁用[/]" : "[green]正常[/]";
+                string status = mod.IsDisabled ? I18n.Get("anz_status_disabled") : I18n.Get("anz_status_normal");
                 table.AddRow(mod.Index.ToString(), Markup.Escape(mod.FileName), status);
             }
 
             AnsiConsole.Write(table);
-            Output.Log($"共 {mods.Count} 个模组。使用 .fx filter mod <序号> 切换启用/禁用，使用.fx filter mod 0 重启服务端。", 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_mod_count", mods.Count), 1, ThisProgramName);
         }
 
         private static string GetWorkPath()
@@ -2497,7 +2498,7 @@ namespace RtCli.Modules.Function
                 _lastCrashSignalTime = DateTime.Now;
             }
 
-            Output.Log($"检测到服务器崩溃信号: {line}", 2, "Analyzer");
+            Output.Log(I18n.Get("anz_crash_signal_detected", line), 2, "Analyzer");
             EventBus.Publish(new ServerCrashEvent(Config.App.CurrentServer, -1));
 
             // 触发 AI 崩溃检测任务(延迟2秒等待崩溃报告文件写入完成)
@@ -2512,7 +2513,7 @@ namespace RtCli.Modules.Function
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"触发崩溃检测AI任务失败: {ex.Message}", 2, "Analyzer");
+                        Output.Log(I18n.Get("anz_crash_detect_task_failed", ex.Message), 2, "Analyzer");
                     }
                 });
             }
@@ -2620,7 +2621,7 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"玩家事件监听异常: {ex.Message}", 2, "PlayerEvent");
+                Output.Log(I18n.Get("anz_player_event_error", ex.Message), 2, "PlayerEvent");
             }
         }
 
@@ -2672,7 +2673,7 @@ namespace RtCli.Modules.Function
 
             if (!_isRunModeActive && NeedsRunServer)
             {
-                Output.Log("断开与 Minecraft 服务端的连接。", 1, "Analyzer");
+                Output.Log(I18n.Get("anz_detached"), 1, "Analyzer");
             }
         }
 
@@ -2842,7 +2843,7 @@ namespace RtCli.Modules.Function
             }
             catch (Exception ex)
             {
-                Output.Log($"WMI 查询失败: {ex.Message}", 3, "Analyzer");
+                Output.Log(I18n.Get("anz_wmi_query_failed", ex.Message), 3, "Analyzer");
             }
 
             // 计算配置的 Java 路径目录(用于优先级匹配)
@@ -2925,9 +2926,10 @@ namespace RtCli.Modules.Function
                     var top = results[0];
                     var others = results.Skip(1).Select(r => $"PID={r.ProcessId}({r.JavaExePath},score={r.MatchScore})");
                     Output.Log(
-                        $"扫描到 {results.Count} 个候选 Java 进程, 已按 JavaPath 优先级排序. " +
-                        $"首选: PID={top.ProcessId} java={top.JavaExePath} score={top.MatchScore}; " +
-                        $"其他: {string.Join(", ", others)}",
+                        I18n.Get("anz_scan_candidates",
+                        results.Count,
+                        $"PID={top.ProcessId} java={top.JavaExePath} score={top.MatchScore}",
+                        string.Join(", ", others)),
                         1, "Analyzer");
                 }
                 catch { }

@@ -54,6 +54,7 @@ namespace RtCli.Modules.Unit
         private static readonly string AiSaveFile = "ai_save.yml";
         private static readonly string ScriptsSettingsFile = "scripts_settings.yml";
         private static readonly string SchedulerSettingsFile = "scheduler_settings.yml";
+        private static readonly string SupportSettingsFile = "support.yml";
         private static bool _isInitialized = false;
 
         public static RegexSettings Regex { get; private set; } = new RegexSettings();
@@ -857,7 +858,7 @@ namespace RtCli.Modules.Unit
                 sb.AppendLine();
             }
 
-            File.WriteAllText(filePath, sb.ToString());
+            AtomicFile.WriteAllText(filePath, sb.ToString());
             Output.Log($"错误分析结果已保存: {filePath}", 1, "ContentManager");
         }
 
@@ -1027,7 +1028,7 @@ namespace RtCli.Modules.Unit
                 sb.AppendLine(line.TrimEnd('\r'));
             }
 
-            File.WriteAllText(filePath, sb.ToString());
+            AtomicFile.WriteAllText(filePath, sb.ToString());
         }
 
         /// <summary>
@@ -1076,6 +1077,61 @@ namespace RtCli.Modules.Unit
         }
 
         /// <summary>
+        /// 加载 Support 扩展配置(support.yml)
+        /// </summary>
+        public static SupportSettings LoadSupportSettings()
+        {
+            string filePath = Path.Combine(Config.DataPath, SupportSettingsFile);
+
+            if (!File.Exists(filePath))
+            {
+                SaveDefaultSupportSettings(filePath);
+                return new SupportSettings();
+            }
+
+            return Config.LoadYamlConfig<SupportSettings>(filePath, new SupportSettings(), "support.yml");
+        }
+
+        /// <summary>
+        /// 保存默认 Support 配置文件(support.yml)
+        /// </summary>
+        private static void SaveDefaultSupportSettings(string filePath)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# ==============================================================================");
+            sb.AppendLine("#                     RtCli Support 扩展配置文件");
+            sb.AppendLine("# ==============================================================================");
+            sb.AppendLine("#");
+            sb.AppendLine("#  Support 扩展配置说明:");
+            sb.AppendLine("#    luckperms                    - LuckPerms 权限变更监测配置");
+            sb.AppendLine("#");
+            sb.AppendLine("#  luckperms 配置说明:");
+            sb.AppendLine("#    enabled                      - 是否启用 LuckPerms 变更监测 (true/false)");
+            sb.AppendLine("#    mysql                        - MySQL 数据库连接配置");
+            sb.AppendLine("#      address                    - MySQL 地址(主机:端口)");
+            sb.AppendLine("#      database                   - 数据库名");
+            sb.AppendLine("#      username                   - 用户名");
+            sb.AppendLine("#      password                   - 密码");
+            sb.AppendLine("#      table_prefix               - LuckPerms 表前缀(默认 luckperms_)");
+            sb.AppendLine("#");
+            sb.AppendLine("#  当 enabled=true 时，程序会轮询 LuckPerms 的 actions 表，");
+            sb.AppendLine("#  检测到新记录后发布 LuckPermsChangeEvent 事件，");
+            sb.AppendLine("#  该事件可用于脚本(scripts_settings.yml)和调度器(scheduler_settings.yml)的触发与条件。");
+            sb.AppendLine("#");
+            sb.AppendLine("#  事件变量: actor_uuid, actor_name, type, acted_uuid, acted_name, action");
+            sb.AppendLine("#");
+            sb.AppendLine("# ==============================================================================");
+            sb.AppendLine();
+
+            var serializer = new SerializerBuilder()
+                .WithNamingConvention(UnderscoredNamingConvention.Instance)
+                .Build();
+            var yaml = serializer.Serialize(new SupportSettings());
+
+            File.WriteAllText(filePath, sb.ToString() + yaml, Encoding.UTF8);
+        }
+
+        /// <summary>
         /// 保存默认调度器配置文件
         /// </summary>
         private static void SaveDefaultSchedulerSettings(string filePath)
@@ -1105,6 +1161,7 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#                      PlayerJoinEvent, PlayerConnectEvent, PlayerLostEvent,");
             sb.AppendLine("#                      PlayerLeaveEvent, PlayerCommandEvent, PlayerChatEvent,");
             sb.AppendLine("#                      PlayerSetModeEvent, CustomPlayerEvent(需在player_event.customs中定义)");
+            sb.AppendLine("#                      LuckPermsChangeEvent(需在support.yml中启用LuckPerms监测)");
             sb.AppendLine("#                      组合条件: every: 30 and event: ServerStartEvent");
             sb.AppendLine("#                      组合条件: daily: \"08:00\" or event: ServerStartEvent");
             sb.AppendLine("#    condition     - 执行前置条件(trigger满足后、execute执行前检查，留空则不检查):");
@@ -1117,6 +1174,8 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#                      可用{rt.xxx}变量: server_running, server_key, player_count,");
             sb.AppendLine("#                      uptime_minutes, tps, memory_usage_mb, cpu_usage,");
             sb.AppendLine("#                      auto_backup_enabled, scheduler_running, time, date");
+            sb.AppendLine("#                      LuckPermsChangeEvent 事件变量: actor_uuid, actor_name,");
+            sb.AppendLine("#                      type, acted_uuid, acted_name, action");
             sb.AppendLine("#    execute        - 执行内容:");
             sb.AppendLine("#                      script:脚本名称  - 执行Scripts中已配置的脚本");
             sb.AppendLine("#                      backup            - 执行当前服务端备份");
@@ -1307,7 +1366,7 @@ namespace RtCli.Modules.Unit
                 sb.AppendLine(line.TrimEnd('\r'));
             }
 
-            File.WriteAllText(filePath, sb.ToString());
+            AtomicFile.WriteAllText(filePath, sb.ToString());
         }
 
         /// <summary>

@@ -36,6 +36,13 @@ namespace RtCli.Modules.Unit
             (".server add", "添加服务端"),
             (".server del", "删除服务端"),
             (".server status", "查看MC服务端状态"),
+            (".group", "群组服务器管理"),
+            (".group add", "创建群组"),
+            (".group del", "删除群组"),
+            (".group list", "列出所有群组信息"),
+            (".group set", "设置服务器到群组"),
+            (".group unset", "解除服务器群组设置"),
+            (".group build", "自动构建群组向导"),
             (".server start", "启动MC服务端"),
             (".server stop", "停止MC服务端"),
             (".server detach", "断开MC服务端连接(Rcon)"),
@@ -130,6 +137,7 @@ namespace RtCli.Modules.Unit
                         table.AddRow("[grey].server list[/]", "查看服务端列表");
                         table.AddRow("[grey].server change X[/]", "切换当前服务端");
                         table.AddRow("[grey].server status[/]", "查看MC服务端状态");
+                        table.AddRow("[grey].group[/]", "群组服务器管理");
                         table.AddRow("[grey].auto[/]", "查看计划任务");
                         table.AddRow("[grey]/<命令>[/]", "发送命令到MC服务端");
                         AnsiConsole.Write(table);
@@ -145,6 +153,7 @@ namespace RtCli.Modules.Unit
                             ".server list     - 查看服务端列表\n" +
                             ".server change X - 切换当前服务端\n" +
                             ".server status   - 查看MC服务端状态\n" +
+                            ".group            - 群组服务器管理(add/del/list/set/unset/build)\n" +
                             ".auto            - 查看计划任务\n" +
                             "/<命令>          - 发送命令到MC服务端");
                         return (true, "命令列表已输出");
@@ -708,6 +717,7 @@ namespace RtCli.Modules.Unit
             ("ai_settings.yml", "AI配置", "AI 自动化管理配置：模型、提示词、自动监测任务"),
             ("scheduler_settings.yml", "调度器配置", "计划任务调度器配置：定时与事件触发的自动化任务"),
             ("scripts_settings.yml", "脚本配置", "脚本引擎配置：C#/Python 脚本项与触发事件"),
+            ("support.yml", "Support配置", "Support扩展配置：LuckPerms权限变更监测(MySQL轮询)"),
         };
 
         /// <summary>
@@ -761,7 +771,7 @@ namespace RtCli.Modules.Unit
                     File.Copy(filePath, backupPath, true);
                 }
 
-                File.WriteAllText(filePath, content);
+                AtomicFile.WriteAllText(filePath, content);
                 Output.Log($"配置文件 [{Markup.Escape(fileName)}] 已由面板保存，正在热重载...", 1, "Backend");
 
                 Config.ReloadAll();
@@ -983,6 +993,15 @@ namespace RtCli.Modules.Unit
             return Path.GetFullPath(entry.WorkPath);
         }
 
+        /// <summary>判断 fullPath 是否位于 root 目录内(带目录边界校验，防止 ../server2 之类前缀误匹配)。</summary>
+        private static bool IsWithinRoot(string root, string fullPath)
+        {
+            var rootFull = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return string.Equals(fullPath, rootFull, StringComparison.OrdinalIgnoreCase)
+                || fullPath.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// 列出指定 MC 服务端工作目录下已知的配置文件(只列出实际存在的)。
         /// </summary>
@@ -1062,7 +1081,7 @@ namespace RtCli.Modules.Unit
         /// <summary>
         /// 读取 MC 服务端的配置文件内容。
         /// </summary>
-        public static (bool Success, string Message, string Content, string Category) GetServerFile(string serverKey, string fileName)
+        public static (bool Success, string Message, string Content, string Category) GetServerFile(string serverKey, string fileName, int tailLines = 0)
         {
             try
             {
@@ -1075,18 +1094,65 @@ namespace RtCli.Modules.Unit
                     return (false, $"{fileName} 是二进制文件，无法在面板编辑", "", category);
 
                 var fullPath = Path.GetFullPath(Path.Combine(workPath, fileName));
-                if (!fullPath.StartsWith(workPath, StringComparison.OrdinalIgnoreCase))
+                if (!IsWithinRoot(workPath, fullPath))
                     return (false, "非法路径", "", category);
                 if (!File.Exists(fullPath))
                     return (false, $"文件不存在: {fileName}", "", category);
 
-                var content = File.ReadAllText(fullPath);
+                // 大日志文件仅在服务端截取尾部 N 行，避免整个文件经 gRPC 传输
+                var content = tailLines > 0
+                    ? ReadTailLines(fullPath, tailLines)
+                    : File.ReadAllText(fullPath);
                 return (true, "OK", content, category);
             }
             catch (Exception ex)
             {
                 return (false, $"读取失败: {ex.Message}", "", "");
             }
+        }
+
+        /// <summary>
+        /// 从文件末尾倒读块定位第 N 个换行符，仅读取文件尾部 N 行(用于大日志文件)。
+        /// 使用 FileShare.ReadWrite 以兼容正被 MC 服务端写入的日志文件。
+        /// </summary>
+        private static string ReadTailLines(string fullPath, int tailLines)
+        {
+            using var fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (fs.Length == 0) return "";
+
+            const int blockSize = 8192;
+            var buffer = new byte[blockSize];
+            long position = fs.Length;
+            int newlines = 0;
+
+            while (position > 0)
+            {
+                int read = (int)Math.Min(blockSize, position);
+                position -= read;
+                fs.Position = position;
+                fs.ReadExactly(buffer, 0, read);
+
+                for (int i = read - 1; i >= 0; i--)
+                {
+                    if (buffer[i] != '\n') continue;
+                    newlines++;
+                    // 文件末尾换行不占一行；找到第 N+1 个换行符时其后即为目标内容起点
+                    if (newlines > tailLines)
+                    {
+                        var tailStart = position + i + 1;
+                        fs.Position = tailStart;
+                        using var reader = new StreamReader(fs, System.Text.Encoding.UTF8,
+                            detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
+                        return reader.ReadToEnd();
+                    }
+                }
+            }
+
+            // 整个文件不足 N 行，返回全部内容
+            fs.Position = 0;
+            using var fullReader = new StreamReader(fs, System.Text.Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
+            return fullReader.ReadToEnd();
         }
 
         /// <summary>
@@ -1105,7 +1171,7 @@ namespace RtCli.Modules.Unit
                     return (false, $"{fileName} 不可编辑");
 
                 var fullPath = Path.GetFullPath(Path.Combine(workPath, fileName));
-                if (!fullPath.StartsWith(workPath, StringComparison.OrdinalIgnoreCase))
+                if (!IsWithinRoot(workPath, fullPath))
                     return (false, "非法路径");
 
                 // 备份
@@ -1115,7 +1181,7 @@ namespace RtCli.Modules.Unit
                     File.Copy(fullPath, backupPath, true);
                 }
 
-                File.WriteAllText(fullPath, content);
+                AtomicFile.WriteAllText(fullPath, content);
                 Output.Log($"MC 配置文件 [{Markup.Escape(fileName)}] 已由面板保存", 1, "Backend");
                 return (true, $"{fileName} 已保存(部分配置需服务端重启生效)");
             }

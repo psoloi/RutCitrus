@@ -55,8 +55,8 @@
     }
 
     async function logout() {
-        if (!await RtPanel.showConfirm('登出', '确定要登出并断开与服务器的连接吗？')) return;
-        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {}
+        if (!await RtPanel.showConfirm('登出并断开', '确定要登出并断开与服务器的连接吗？')) return;
+        try { await fetch('/api/auth/disconnect', { method: 'POST' }); } catch {}
         window.location.href = '/Login';
     }
 

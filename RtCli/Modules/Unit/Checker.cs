@@ -234,7 +234,7 @@ namespace RtCli.Modules.Unit
         public static void CheckOSBit()
         {
             bool is64Bit = Environment.Is64BitOperatingSystem;
-            Output.Log($"{(is64Bit ? "当前系统为64位" : $"{I18n.Get("checker_osbit")}")}", 1, "Checker");
+            Output.Log(is64Bit ? I18n.Get("checker_osbit_64") : I18n.Get("checker_osbit"), 1, "Checker");
         }
         public static void CheckAll()
         {

@@ -368,5 +368,19 @@ namespace RtCli.Modules.Extension
                 ["management-server-tls-keystore-password"] = "管理服务器 TLS 密钥库密码。\n也可通过环境变量 MINECRAFT_MANAGEMENT_TLS_KEYSTORE_PASSWORD 设置。",
             };
         }
+
+        /// <summary>support.yml(RtCli Support 扩展)配置项注释</summary>
+        internal Dictionary<string, string> Doc_root_support_yml()
+        {
+            return new Dictionary<string, string>
+            {
+                ["luckperms.enabled"] = "是否启用 LuckPerms 权限变更监测。\n启用后程序会轮询 LuckPerms 的 actions 表，检测到新记录时发布 LuckPermsChangeEvent 事件。",
+                ["luckperms.mysql.address"] = "LuckPerms 使用的 MySQL 地址(主机:端口)。",
+                ["luckperms.mysql.database"] = "LuckPerms 使用的数据库名。",
+                ["luckperms.mysql.username"] = "MySQL 连接用户名。",
+                ["luckperms.mysql.password"] = "MySQL 连接密码。",
+                ["luckperms.mysql.table_prefix"] = "LuckPerms 数据表前缀(默认 luckperms_)。\n实际轮询表为 {table_prefix}actions。",
+            };
+        }
     }
 }

@@ -46,6 +46,8 @@ namespace RtCli.Modules.Unit
         public int GrpcPort { get; set; } = 7789;
         // gRPC认证密钥（RtPanel登录时需输入此密钥，留空则自动生成）
         public string GrpcAuthKey { get; set; } = "";
+        // Bridge REST API 监听地址（默认仅本机回环；需外部访问时改为 "+" 或 "0.0.0.0"）
+        public string BridgeBind { get; set; } = "localhost";
 
         public Dictionary<string, ServerEntry> ServerList { get; set; } = new Dictionary<string, ServerEntry>
         {
@@ -234,13 +236,13 @@ namespace RtCli.Modules.Unit
             if (!Directory.Exists(absoluteDataPath))
             {
                 Directory.CreateDirectory(absoluteDataPath);
-                Output.Log($"创建数据目录: {absoluteDataPath}", 1, "Config");
+                Output.Log(I18n.Get("conf_create_data_dir", absoluteDataPath), 1, "Config");
             }
 
             if (!Directory.Exists(absoluteLogsPath))
             {
                 Directory.CreateDirectory(absoluteLogsPath);
-                Output.Log($"创建日志目录: {absoluteLogsPath}", 1, "Config");
+                Output.Log(I18n.Get("conf_create_logs_dir", absoluteLogsPath), 1, "Config");
             }
 
             LoadConfig();
@@ -249,7 +251,7 @@ namespace RtCli.Modules.Unit
             if (string.IsNullOrWhiteSpace(App.GrpcAuthKey) || App.GrpcAuthKey.Length < 12)
             {
                 App.GrpcAuthKey = GenerateAuthKey();
-                Output.Log($"已生成gRPC认证密钥: {App.GrpcAuthKey}", 1, "Config");
+                Output.Log(I18n.Get("conf_grpc_key_generated", App.GrpcAuthKey), 1, "Config");
                 SaveCurrentConfig();
             }
 
@@ -263,7 +265,7 @@ namespace RtCli.Modules.Unit
             if (!File.Exists(configPath))
             {
                 SaveConfig(configPath);
-                Output.Log($"创建配置文件: {configPath}", 1, "Config");
+                Output.Log(I18n.Get("conf_create_config_file", configPath), 1, "Config");
                 return;
             }
 
@@ -310,6 +312,7 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#    current_server  - 当前选中的服务端标识(对应server_list中的键名)");
             sb.AppendLine("#    grpc_port       - gRPC管理端口（RtPanel面板连接此端口，全局共享）");
             sb.AppendLine("#    grpc_auth_key   - gRPC认证密钥（RtPanel登录时需输入此密钥，留空则自动生成）");
+            sb.AppendLine("#    bridge_bind     - Bridge REST API 监听地址（默认 localhost 仅本机，\"+\" 为所有网卡）");
             sb.AppendLine("#");
             sb.AppendLine("#  server_list 中的每个服务端配置:");
             sb.AppendLine("#    server_name       - 服务器名称，用于标识");
@@ -590,18 +593,19 @@ namespace RtCli.Modules.Unit
                 sb.AppendLine(line.TrimEnd('\r'));
             }
 
-            File.WriteAllText(configPath, sb.ToString());
+            AtomicFile.WriteAllText(configPath, sb.ToString());
         }
 
         public static void ReloadAll()
         {
-            Output.Log("正在热重载所有配置文件...", 1, "Config");
+            Output.Log(I18n.Get("conf_reloading_all"), 1, "Config");
 
             Intelligence.StopAutoBackup();
             Scheduler.Reload();
             LoadConfig();
             ContentManager.ReloadAll();
             Scripts.Reload();
+            Support.Reload();
             Intelligence.StartAutoBackup();
 
             // 若AI自动化管理正在运行，则重载任务配置
@@ -610,7 +614,7 @@ namespace RtCli.Modules.Unit
                 try { Intelligence.AiAutoRunner.Reload(); } catch { }
             }
 
-            Output.Log("所有配置文件已热重载完成。", 1, "Config");
+            Output.Log(I18n.Get("conf_reload_done"), 1, "Config");
             EventBus.Publish(new ConfigReloadEvent());
         }
 
@@ -618,7 +622,7 @@ namespace RtCli.Modules.Unit
         {
             string configPath = Path.Combine(absoluteDataPath, ConfigFileName);
             SaveConfig(configPath);
-            Output.Log("配置文件已保存。", 1, "Config");
+            Output.Log(I18n.Get("conf_saved"), 1, "Config");
         }
 
         /// <summary>
@@ -644,17 +648,17 @@ namespace RtCli.Modules.Unit
             }
             catch (YamlException yex)
             {
-                string location = $"行 {yex.Start.Line}, 列 {yex.Start.Column}";
+                string location = I18n.Get("conf_yaml_error_location", yex.Start.Line, yex.Start.Column);
                 string detail = yex.InnerException?.Message ?? yex.Message;
-                Output.Log($"{configName} 解析失败 [{location}]: {detail}", 3, "Config");
-                Output.Log($"错误文件已备份，请修正后使用 .reload 重载", 2, "Config");
+                Output.Log(I18n.Get("conf_yaml_parse_failed_at", configName, location, detail), 3, "Config");
+                Output.Log(I18n.Get("conf_error_file_backed_up"), 2, "Config");
                 BackupConfigFile(filePath);
                 return defaultValue;
             }
             catch (Exception ex)
             {
-                Output.Log($"{configName} 解析失败: {ex.Message}", 3, "Config");
-                Output.Log($"错误文件已备份，请修正后使用 .reload 重载", 2, "Config");
+                Output.Log(I18n.Get("conf_yaml_parse_failed", configName, ex.Message), 3, "Config");
+                Output.Log(I18n.Get("conf_error_file_backed_up"), 2, "Config");
                 BackupConfigFile(filePath);
                 return defaultValue;
             }
@@ -679,11 +683,11 @@ namespace RtCli.Modules.Unit
                 } while (File.Exists(backupPath));
 
                 File.Copy(filePath, backupPath, true);
-                Output.Log($"已备份错误配置文件: {backupPath}", 2, "Config");
+                Output.Log(I18n.Get("conf_error_config_backed_up", backupPath), 2, "Config");
             }
             catch (Exception ex)
             {
-                Output.Log($"备份配置文件失败: {ex.Message}", 3, "Config");
+                Output.Log(I18n.Get("conf_backup_config_failed", ex.Message), 3, "Config");
             }
         }
 
@@ -693,21 +697,21 @@ namespace RtCli.Modules.Unit
 
             if (!Directory.Exists(contentPath))
             {
-                Output.Log("Content 文件夹不存在。", 2, "Config");
+                Output.Log(I18n.Get("conf_content_not_exist"), 2, "Config");
                 return;
             }
 
-            bool confirm = Spectre.Console.AnsiConsole.Confirm("[red]确定要删除 Content 文件夹吗？这将清除所有配置、数据和脚本。[/]", false);
+            bool confirm = Spectre.Console.AnsiConsole.Confirm(I18n.Get("conf_confirm_delete_content"), false);
             if (!confirm)
             {
-                Output.Log("已取消删除。", 1, "Config");
+                Output.Log(I18n.Get("conf_delete_cancelled"), 1, "Config");
                 return;
             }
 
-            bool confirmAgain = Spectre.Console.AnsiConsole.Confirm("[red]再次确认：删除 Content 文件夹后程序将冷重载，是否继续？[/]", false);
+            bool confirmAgain = Spectre.Console.AnsiConsole.Confirm(I18n.Get("conf_confirm_delete_content_again"), false);
             if (!confirmAgain)
             {
-                Output.Log("已取消删除。", 1, "Config");
+                Output.Log(I18n.Get("conf_delete_cancelled"), 1, "Config");
                 return;
             }
 
@@ -717,15 +721,15 @@ namespace RtCli.Modules.Unit
                 DeleteDirectoryRecursive(contentPath, ref failedCount);
 
                 if (failedCount > 0)
-                    Output.Log($"Content 文件夹已删除（{failedCount} 个文件被占用无法删除），正在冷重载...", 2, "Config");
+                    Output.Log(I18n.Get("conf_content_deleted_with_failures", failedCount), 2, "Config");
                 else
-                    Output.Log("Content 文件夹已删除，正在冷重载...", 1, "Config");
+                    Output.Log(I18n.Get("conf_content_deleted"), 1, "Config");
 
                 Reload.Restart();
             }
             catch (Exception ex)
             {
-                Output.Log($"删除 Content 文件夹失败: {ex.Message}，正在冷重载...", 3, "Config");
+                Output.Log(I18n.Get("conf_delete_content_failed", ex.Message), 3, "Config");
                 Reload.Restart();
             }
         }
@@ -757,6 +761,42 @@ namespace RtCli.Modules.Unit
                 key[i] = chars[random.Next(chars.Length)];
             }
             return new string(key);
+        }
+    }
+
+    /// <summary>
+    /// 原子文件写入辅助：先写临时文件再原子替换目标文件，
+    /// 避免写入中途崩溃/断电导致配置与数据文件(如 server_data.json、config.yml)损坏。
+    /// </summary>
+    public static class AtomicFile
+    {
+        /// <summary>
+        /// 原子写入文本文件。目标已存在时使用 File.Replace 原子替换(保留原文件内容直到替换成功)；
+        /// 平台不支持 Replace 时回退为覆盖式 Move。
+        /// </summary>
+        public static void WriteAllText(string path, string content, Encoding? encoding = null)
+        {
+            encoding ??= Encoding.UTF8;
+
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            var tmpPath = path + ".tmp";
+            File.WriteAllText(tmpPath, content, encoding);
+
+            try
+            {
+                if (File.Exists(path))
+                    File.Replace(tmpPath, path, null);
+                else
+                    File.Move(tmpPath, path);
+            }
+            catch (PlatformNotSupportedException)
+            {
+                // 部分平台不支持 Replace，回退为覆盖式移动
+                File.Move(tmpPath, path, overwrite: true);
+            }
         }
     }
 }

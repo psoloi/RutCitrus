@@ -8,15 +8,12 @@ namespace RtCli.Modules.Function
 {
     internal class Validator
     {
-
+        // Lite
     }
 
-    internal class Watchdog
+    internal class Optimizer()  
     {
         public static void Container()
-        {
-        }
-        public static void Optimizer()
         {
         }
         public static void Reactor()

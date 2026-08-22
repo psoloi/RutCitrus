@@ -157,12 +157,15 @@
                 <span id="btnText">登录</span>
                 <span id="btnSpinner" class="spinner-border spinner-border-sm ms-1" role="status" style="display:none;"></span>
             </button>
+            <button type="button" class="btn btn-warning mt-2 w-100" id="retrustBtn" style="display:none;" onclick="doLogin(true)">
+                &#128273; 服务器证书已变更 - 重新信任并重连
+            </button>
         </form>
         <div class="footer-note">连接到运行 RtCli 的服务器以开始管理</div>
     </div>
 
     <script>
-        async function doLogin() {
+        async function doLogin(retrust) {
             const host = document.getElementById('host').value.trim();
             const port = parseInt(document.getElementById('port').value) || 7789;
             const authKey = document.getElementById('authKey').value.trim();
@@ -170,6 +173,7 @@
             const btn = document.getElementById('loginBtn');
             const btnText = document.getElementById('btnText');
             const btnSpinner = document.getElementById('btnSpinner');
+            const retrustBtn = document.getElementById('retrustBtn');
 
             if (!host) { errorMsg.textContent = '请输入主机地址'; errorMsg.style.display = 'block'; return; }
             if (!authKey) { errorMsg.textContent = '请输入认证密钥'; errorMsg.style.display = 'block'; return; }
@@ -178,20 +182,33 @@
             btnText.textContent = '连接中...';
             btnSpinner.style.display = 'inline-block';
             errorMsg.style.display = 'none';
+            retrustBtn.style.display = 'none';
 
             try {
+                const csrf = document.querySelector('meta[name="csrf-token"]');
                 const res = await fetch('/api/auth/login', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ host, port, authKey })
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': csrf ? csrf.getAttribute('content') : ''
+                    },
+                    body: JSON.stringify({ host, port, authKey, retrust: retrust === true })
                 });
                 const data = await res.json();
+
+                if (!res.ok) {
+                    errorMsg.textContent = `登录请求被拒绝 (HTTP ${res.status})：${data.title || data.detail || res.statusText}`;
+                    errorMsg.style.display = 'block';
+                    return;
+                }
 
                 if (data.success) {
                     window.location.href = '/Console';
                 } else {
                     errorMsg.textContent = data.message || '登录失败';
                     errorMsg.style.display = 'block';
+                    // 证书指纹不匹配时提供"重新信任"入口(确认安全后一键重连)
+                    if (data.certMismatch) retrustBtn.style.display = 'block';
                 }
             } catch (e) {
                 errorMsg.textContent = '网络错误: ' + e.message;

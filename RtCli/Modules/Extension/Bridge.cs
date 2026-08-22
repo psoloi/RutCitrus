@@ -44,10 +44,12 @@ namespace RtCli.Modules.Extension
                 {
                     _cts = new CancellationTokenSource();
                     _listener = new HttpListener();
-                    _listener.Prefixes.Add($"http://+:{ApiPort}/");
+                    // 默认仅监听本机回环(bridge_bind 配置, 需外部访问时改为 "+" 或 "0.0.0.0")
+                    var bind = string.IsNullOrWhiteSpace(Config.App.BridgeBind) ? "localhost" : Config.App.BridgeBind.Trim();
+                    _listener.Prefixes.Add($"http://{bind}:{ApiPort}/");
                     _listener.Start();
                     _ = Task.Run(() => ListenLoop(_cts.Token));
-                    Output.Log($"REST API 服务器已启动端口: {ApiPort} (OpenAPI: /api/openapi.json, 文档: /api/docs)", 1, "Bridge");
+                    Output.Log($"REST API 服务器已启动: {bind}:{ApiPort} (OpenAPI: /api/openapi.json, 文档: /api/docs)", 1, "Bridge");
                 }
                 catch (Exception ex)
                 {

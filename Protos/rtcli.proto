@@ -60,6 +60,12 @@ service RtCliService {
   rpc UploadJarFile (UploadJarFileRequest) returns (SimpleResponse);
   // 玩家管理
   rpc ManagePlayer (ManagePlayerRequest) returns (SimpleResponse);
+  // 面板向导: 服务端类型/版本列表与下载(对应 .guide 引导能力)
+  rpc GetServerTypes (Empty) returns (ServerTypeListResponse);
+  rpc GetServerVersions (ServerVersionRequest) returns (ServerVersionListResponse);
+  rpc DownloadServerJar (DownloadServerJarRequest) returns (DownloadServerJarResponse);
+  // 面板向导: 群组服务器一键构建(对应 .group build 向导能力)
+  rpc GroupBuild (GroupBuildRequest) returns (GroupBuildResponse);
 }
 
 message Empty {}
@@ -280,6 +286,7 @@ message ServerFileListResponse {
 message ServerFileRequest {
   string server_key = 1;          // ServerList 中的键，留空则用 current_server
   string file_name = 2;           // 文件名
+  int32 tail_lines = 3;           // >0 时仅返回文件尾部 N 行(用于大日志文件，服务端截取)
 }
 
 message ServerFileResponse {
@@ -505,4 +512,64 @@ message ManagePlayerRequest {
 message SimpleResponse {
   bool success = 1;
   string message = 2;
+}
+
+// ===== 面板向导: 服务端下载 =====
+message ServerTypeInfoMsg {
+  string name = 1;          // 显示名: "Paper (高性能)"
+  string type_key = 2;      // 类型键: paper / vanilla / velocity ...
+  bool downloadable = 3;    // 是否支持自动下载
+  string website = 4;       // 手动下载地址(downloadable=false 时使用)
+  string default_jar = 5;   // 默认 jar 文件名
+}
+
+message ServerTypeListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated ServerTypeInfoMsg server_types = 3;  // 注: 字段名避开 types(C# 生成器保留字)
+}
+
+message ServerVersionRequest {
+  string type_key = 1;
+}
+
+message ServerVersionListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string versions = 3;    // 常用版本列表(首个为最新)
+  repeated string all_versions = 4; // 全部版本(前端可展开更多)
+}
+
+message DownloadServerJarRequest {
+  string type_key = 1;
+  string version = 2;              // 留空 = 最新版
+  string work_path = 3;            // 下载目标目录(不存在则创建)
+}
+
+message DownloadServerJarResponse {
+  bool success = 1;
+  string message = 2;
+  string jar_name = 3;             // 下载后的 jar 文件名(用于启动参数 -jar)
+}
+
+// ===== 面板向导: 群组一键构建 =====
+message GroupBuildRequest {
+  string group_name = 1;
+  repeated string member_ids = 2;  // 加入群组的子服务器实例 ID
+  string proxy_type = 3;           // velocity / bungeecord / manual
+  string proxy_id = 4;             // 代理实例标识
+  int32 proxy_port = 5;            // 玩家连接端口(默认 25565)
+  bool auto_ports = 6;             // 是否自动分配子服务器端口
+  int32 port_range_start = 7;      // 自动分配端口范围起
+  int32 port_range_end = 8;        // 自动分配端口范围止
+  bool online_mode = 9;            // 在线模式(正版验证)
+  string lobby_server = 10;        // 玩家首入服务器(实例 ID, 可空)
+}
+
+message GroupBuildResponse {
+  bool success = 1;
+  string message = 2;
+  string group_id = 3;
+  string proxy_instance_id = 4;
+  map<string, int32> server_ports = 5;  // 分配结果: 实例ID -> 端口
 }

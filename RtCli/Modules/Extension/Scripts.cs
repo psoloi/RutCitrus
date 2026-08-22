@@ -241,6 +241,7 @@ if __name__ == ""__main__"":
                 { "PlayerChatEvent", e => ExecuteScript(scriptName, item, e) },
                 { "PlayerSetModeEvent", e => ExecuteScript(scriptName, item, e) },
                 { "CustomPlayerEvent", e => ExecuteScript(scriptName, item, e) },
+                { "LuckPermsChangeEvent", e => ExecuteScript(scriptName, item, e) },
             };
 
             // 支持自定义事件名（player_event.customs中定义的事件名）
@@ -329,6 +330,9 @@ if __name__ == ""__main__"":
                 case "PlayerSetModeEvent":
                     EventBus.Subscribe<PlayerSetModeEvent>(e => handler(e), ThisName);
                     break;
+                case "LuckPermsChangeEvent":
+                    EventBus.Subscribe<LuckPermsChangeEvent>(e => handler(e), ThisName);
+                    break;
                 case "CustomPlayerEvent":
                 default:
                     // 自定义事件名和CustomPlayerEvent都通过CustomPlayerEvent订阅
@@ -371,6 +375,7 @@ if __name__ == ""__main__"":
                 "PlayerChatEvent" => typeof(PlayerChatEvent),
                 "PlayerSetModeEvent" => typeof(PlayerSetModeEvent),
                 "CustomPlayerEvent" => typeof(CustomPlayerEvent),
+                "LuckPermsChangeEvent" => typeof(LuckPermsChangeEvent),
                 _ => typeof(CustomPlayerEvent) // 自定义事件名也映射为CustomPlayerEvent
             };
         }
@@ -581,7 +586,8 @@ if __name__ == ""__main__"":
         {
             return e is PlayerJoinEvent or PlayerConnectEvent or PlayerLostEvent
                 or PlayerLeaveEvent or PlayerCommandEvent or PlayerChatEvent
-                or PlayerSetModeEvent or CustomPlayerEvent;
+                or PlayerSetModeEvent or CustomPlayerEvent
+                or LuckPermsChangeEvent;
         }
 
         /// <summary>
@@ -632,6 +638,14 @@ if __name__ == ""__main__"":
                     dict["player_trigger_time"] = cpe.PlayerTriggerTime;
                     foreach (var kvp in cpe.Parameters)
                         dict[kvp.Key] = kvp.Value;
+                    break;
+                case LuckPermsChangeEvent lpe:
+                    dict["actor_uuid"] = lpe.ActorUuid;
+                    dict["actor_name"] = lpe.ActorName;
+                    dict["type"] = lpe.Type;
+                    dict["acted_uuid"] = lpe.ActedUuid;
+                    dict["acted_name"] = lpe.ActedName;
+                    dict["action"] = lpe.Action;
                     break;
             }
 

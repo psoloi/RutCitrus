@@ -96,7 +96,6 @@ namespace RtPanel.Controllers
 
         /// <summary>获取 RtCli 运行状态(底层方法, 非命令执行)</summary>
         [HttpGet("rtstatus")]
-        [AllowAnonymous]
         public async Task<IActionResult> GetRtStatus()
         {
             if (!_client.IsConnected)
@@ -125,7 +124,6 @@ namespace RtPanel.Controllers
 
         /// <summary>获取面板设置</summary>
         [HttpGet("paneldata")]
-        [AllowAnonymous]
         public async Task<IActionResult> GetPanelData()
         {
             if (!_client.IsConnected)
@@ -140,7 +138,6 @@ namespace RtPanel.Controllers
 
         /// <summary>保存面板设置</summary>
         [HttpPost("paneldata")]
-        [AllowAnonymous]
         public async Task<IActionResult> SavePanelData()
         {
             if (!_client.IsConnected)

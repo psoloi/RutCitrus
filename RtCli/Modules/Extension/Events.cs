@@ -326,4 +326,87 @@ namespace RtCli.Modules.Extension
     }
 
     #endregion
+
+    #region LuckPerms 事件
+
+    /// <summary>
+    /// LuckPerms 权限变更事件 - 当 LuckPerms actions 表出现新记录时触发
+    /// 变量: actor_uuid, actor_name, type, acted_uuid, acted_name, action
+    /// </summary>
+    public class LuckPermsChangeEvent : RtEvent
+    {
+        public string ActorUuid { get; set; }
+        public string ActorName { get; set; }
+        public string Type { get; set; }
+        public string ActedUuid { get; set; }
+        public string ActedName { get; set; }
+        public string Action { get; set; }
+
+        public LuckPermsChangeEvent(string actorUuid, string actorName, string type,
+            string actedUuid, string actedName, string action)
+        {
+            ActorUuid = actorUuid ?? "";
+            ActorName = actorName ?? "";
+            Type = type ?? "";
+            ActedUuid = actedUuid ?? "";
+            ActedName = actedName ?? "";
+            Action = action ?? "";
+        }
+    }
+
+    #endregion
+
+    #region 数据包事件(PacketEvent)
+
+    /// <summary>
+    /// 数据包事件功能初始化启动后触发。
+    /// </summary>
+    public class PacketInitializeEvent : RtEvent
+    {
+        public string Message { get; set; }
+        public PacketInitializeEvent(string message = "") { Message = message; }
+    }
+
+    /// <summary>
+    /// 数据包事件功能关闭时触发。
+    /// </summary>
+    public class PacketStopEvent : RtEvent
+    {
+        public string Message { get; set; }
+        public PacketStopEvent(string message = "") { Message = message; }
+    }
+
+    /// <summary>
+    /// 当一个 tick 周期内客户端→服务端数据包发生变化时触发。
+    /// Json 为解码后的 MC 数据包 JSON 详细信息(数组)。
+    /// </summary>
+    public class PacketClientEvent : RtEvent
+    {
+        /// <summary>本次事件对应的检测触发周期(毫秒)</summary>
+        public int TickMs { get; set; }
+        /// <summary>本周期内发生变化的客户端数据包数量</summary>
+        public int PacketCount { get; set; }
+        /// <summary>解码后的 MC 数据包 JSON 详细信息</summary>
+        public string Json { get; set; }
+        public PacketClientEvent(int tickMs = 0, int packetCount = 0, string json = "")
+        { TickMs = tickMs; PacketCount = packetCount; Json = json ?? ""; }
+    }
+
+    /// <summary>
+    /// 当一个 tick 周期内服务端→客户端数据包发生变化时触发。
+    /// Json 为解码后的 MC 数据包 JSON 详细信息(数组)。
+    /// </summary>
+    public class PacketServerEvent : RtEvent
+    {
+        /// <summary>本次事件对应的检测触发周期(毫秒)</summary>
+        public int TickMs { get; set; }
+        /// <summary>本周期内发生变化的服务端数据包数量</summary>
+        public int PacketCount { get; set; }
+        /// <summary>解码后的 MC 数据包 JSON 详细信息</summary>
+        public string Json { get; set; }
+        public PacketServerEvent(int tickMs = 0, int packetCount = 0, string json = "")
+        { TickMs = tickMs; PacketCount = packetCount; Json = json ?? ""; }
+    }
+
+    #endregion
 }

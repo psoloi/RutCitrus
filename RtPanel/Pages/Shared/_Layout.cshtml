@@ -1,8 +1,10 @@
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Antiforgery
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="csrf-token" content="@Antiforgery.GetAndStoreTokens(Context).RequestToken" />
     <title>@ViewData["Title"] - RtPanel</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon" />
     <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon" />
@@ -17,6 +19,25 @@
         } catch (e) {
             document.documentElement.setAttribute('data-theme', 'dark');
         }
+    </script>
+    <script>
+        // 防 CSRF：为所有非安全方法(GET/HEAD 除外)的 fetch 请求自动注入 X-CSRF-TOKEN 头
+        (function () {
+            var meta = document.querySelector('meta[name="csrf-token"]');
+            var token = meta ? meta.getAttribute('content') : '';
+            if (!window.fetch || !token) return;
+            var orig = window.fetch;
+            window.fetch = function (input, init) {
+                init = init || {};
+                var method = (init.method || (input && input.method) || 'GET').toUpperCase();
+                if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+                    var headers = new Headers(init.headers || {});
+                    if (!headers.has('X-CSRF-TOKEN')) headers.set('X-CSRF-TOKEN', token);
+                    init.headers = headers;
+                }
+                return orig.call(this, input, init);
+            };
+        })();
     </script>
     <style>
         .toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; }
@@ -225,7 +246,7 @@
         };
 
         async function logout() {
-            if (!await RtPanel.showConfirm('登出', '确定要登出并断开与服务器的连接吗？')) return;
+            if (!await RtPanel.showConfirm('登出', '确定要登出吗？(服务器连接将保持，其他会话不受影响)')) return;
             try {
                 await fetch('/api/auth/logout', { method: 'POST' });
             } catch {}

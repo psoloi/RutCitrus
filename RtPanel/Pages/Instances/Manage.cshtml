@@ -49,9 +49,9 @@
                     <div class="col-md-6">
                         <label class="form-label small">分析模式</label>
                         <select class="form-select form-select-sm" id="mg_inst_mode">
-                            @foreach (var m in new[] { "Management", "Run", "Rcon", "OnlyRcon" })
+                            @foreach (var m in new[] { ("RM", "RM - 管理(推荐)"), ("RUN", "RUN - 子进程"), ("RR", "RR - 子进程+Rcon"), ("RCON", "RCON - 纯远程") })
                             {
-                                <option value="@m">@m</option>
+                                <option value="@m.Item1">@m.Item2</option>
                             }
                         </select>
                     </div>
@@ -306,7 +306,11 @@
         statusBadge.textContent = inst.isRunning ? '运行中' : '已停止';
 
         document.getElementById('mg_inst_name').value = inst.name;
-        document.getElementById('mg_inst_mode').value = inst.analyzerMode;
+        // 与 RtCli Analyzer 模式规范一致: 旧名自动映射到 RM/RUN/RR/RCON
+        document.getElementById('mg_inst_mode').value = ({
+            MANAGEMENT: 'RM', RUN: 'RUN', RCON: 'RR', ONLYRCON: 'RCON',
+            RM: 'RM', RR: 'RR'
+        })[(inst.analyzerMode || 'RM').toUpperCase()] || 'RM';
         document.getElementById('mg_inst_workPath').value = inst.workPath;
         document.getElementById('mg_inst_javaPath').value = inst.javaPath;
         document.getElementById('mg_inst_runFlags').value = inst.runFlags;
