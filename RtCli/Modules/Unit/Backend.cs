@@ -512,22 +512,31 @@ namespace RtCli.Modules.Unit
                     // .fx 系列命令 - 错误分析/客户端诊断/过滤工具
                     if (cmd == ".fx")
                     {
-                        const string msg = ".fx 命令: get/list/del/filter config/filter plugin/clientguide/base/ai";
+                        const string msg = ".fx 命令: add/list/del/filter config/filter plugin/clientguide/base/ai";
                         Output.Log(msg, 1, "Backend");
                         return (true, msg);
                     }
 
-                    if (cmd == ".fx get")
+                    if (cmd == ".fx add")
                     {
-                        Analyzer.AnalyzeErrors();
-                        return (true, "错误日志分析已完成，详情见日志");
+                        const string msg = "用法: .fx add <日志文件路径> (添加外部日志并自动识别错误)";
+                        Output.Log(msg, 1, "Backend");
+                        return (true, msg);
                     }
 
-                    if (cmd.StartsWith(".fx get "))
+                    if (cmd.StartsWith(".fx add "))
                     {
-                        var path = cmd[".fx get ".Length..].Trim().Trim('"');
-                        Analyzer.AnalyzeErrors(path);
-                        return (true, $"已分析外部日志: {path}");
+                        var path = cmd[".fx add ".Length..].Trim().Trim('"');
+                        var (ok, message) = Analyzer.AddExternalLog(path);
+                        return (ok, message);
+                    }
+
+                    // 兼容旧命令: .fx get 已改为 .fx add(服务器日志自动识别,无需手动获取)
+                    if (cmd == ".fx get" || cmd.StartsWith(".fx get "))
+                    {
+                        const string msg = ".fx get 已移除: 服务器日志已自动识别保存, 使用 .fx list 查看结果, 外部日志请用 .fx add <路径>";
+                        Output.Log(msg, 1, "Backend");
+                        return (true, msg);
                     }
 
                     if (cmd == ".fx list")
@@ -538,9 +547,9 @@ namespace RtCli.Modules.Unit
                         sb.AppendLine($"共 {errors.Count} 条错误分析结果");
                         foreach (var kv in errors.OrderBy(kv => kv.Key))
                         {
-                            string summary = (kv.Value.Split('\n').FirstOrDefault() ?? "");
+                            string summary = (kv.Value.Content.Split('\n').FirstOrDefault() ?? "");
                             if (summary.Length > 80) summary = summary.Substring(0, 77) + "...";
-                            sb.AppendLine($"  [{kv.Key}] {summary}");
+                            sb.AppendLine($"  [{kv.Key}] ({kv.Value.SourceDisplay}) {summary}");
                         }
                         BroadcastToPanel(sb.ToString());
                         return (true, "错误分析结果列表已输出");

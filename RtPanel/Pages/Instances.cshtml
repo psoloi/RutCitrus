@@ -1269,18 +1269,18 @@
     .instance-icon-btn { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 0.95rem; line-height: 1; }
     .instance-group-header { background: rgba(56, 189, 248, 0.12); }
 
-    /* ===== 向导样式 ===== */
+    /* ===== 向导样式（MC 方块风） ===== */
     .wizard-steps { display: flex; gap: 4px; flex-wrap: wrap; }
-    .wizard-step { flex: 1; min-width: 70px; text-align: center; padding: 6px 4px; font-size: 0.78rem; color: var(--color-text-muted, #94a3b8); background: rgba(255,255,255,0.04); border-radius: 6px; border: 1px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .wizard-step.active { color: #fff; background: linear-gradient(135deg, rgba(56,189,248,0.35), rgba(14,165,233,0.25)); border-color: rgba(56,189,248,0.6); font-weight: 600; }
+    .wizard-step { flex: 1; min-width: 70px; text-align: center; padding: 6px 4px; font-size: 0.78rem; font-family: var(--font-pixel, sans-serif); color: var(--text-muted, #6b6b78); background: var(--bg-input, #16161e); border-radius: 0; border: 2px solid var(--border-color, #3a3a49); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wizard-step.active { color: #fff; background: linear-gradient(180deg, #fb923c, #f97316 55%, #e86a0c); border-color: var(--btn-outline, #0c0c12); font-weight: 700; box-shadow: inset 2px 2px 0 rgba(255,255,255,0.28), inset -2px -2px 0 rgba(0,0,0,0.42); text-shadow: 0 1px 0 rgba(0,0,0,0.35); }
     .wizard-type-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
     .wizard-url { word-break: break-all; overflow-wrap: anywhere; }
-    .wizard-type-card { padding: 10px 12px; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; background: rgba(255,255,255,0.03); cursor: pointer; transition: all 0.15s; }
-    .wizard-type-card:hover { border-color: rgba(56,189,248,0.5); background: rgba(56,189,248,0.08); }
-    .wizard-type-card.selected { border-color: #38bdf8; background: rgba(56,189,248,0.15); box-shadow: 0 0 0 1px rgba(56,189,248,0.4); }
-    .wizard-version-btn { padding: 5px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.04); color: inherit; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; }
-    .wizard-version-btn:hover { border-color: rgba(56,189,248,0.5); }
-    .wizard-version-btn.selected { border-color: #38bdf8; background: rgba(56,189,248,0.2); color: #fff; font-weight: 600; }
+    .wizard-type-card { padding: 10px 12px; border: 2px solid var(--border-color, #3a3a49); border-radius: 0; background: var(--bg-input, #16161e); cursor: pointer; transition: none; box-shadow: 2px 2px 0 rgba(0,0,0,0.3); }
+    .wizard-type-card:hover { border-color: var(--accent-2, #38bdf8); box-shadow: 3px 3px 0 var(--accent-2-soft, rgba(56,189,248,0.14)); }
+    .wizard-type-card.selected { border-color: var(--accent-2, #38bdf8); background: var(--accent-2-soft, rgba(56,189,248,0.14)); box-shadow: inset 0 0 0 1px var(--accent-2, #38bdf8); }
+    .wizard-version-btn { padding: 5px 12px; border-radius: 0; border: 2px solid var(--border-color, #3a3a49); background: var(--bg-input, #16161e); color: inherit; font-size: 0.82rem; font-family: var(--font-pixel, sans-serif); cursor: pointer; transition: none; }
+    .wizard-version-btn:hover { border-color: var(--accent-2, #38bdf8); }
+    .wizard-version-btn.selected { border-color: var(--accent-2, #38bdf8); background: var(--accent-2, #38bdf8); color: #0c1220; font-weight: 700; }
 
     /* 亮色主题适配 */
     [data-theme="light"] .instance-row { background: rgba(0,0,0,0.02); }
@@ -1294,12 +1294,12 @@
     [data-theme="light"] .btn-outline-success { border-color: var(--color-success); }
     [data-theme="light"] .btn-outline-danger { border-color: var(--color-danger); }
     /* 亮色主题: 向导 */
-    [data-theme="light"] .wizard-step { background: rgba(0,0,0,0.05); color: #64748b; }
-    [data-theme="light"] .wizard-step.active { color: #0c4a6e; background: rgba(14,165,233,0.18); }
-    [data-theme="light"] .wizard-type-card { border-color: rgba(0,0,0,0.12); background: rgba(0,0,0,0.02); }
-    [data-theme="light"] .wizard-type-card.selected { border-color: #0ea5e9; background: rgba(14,165,233,0.12); }
-    [data-theme="light"] .wizard-version-btn { border-color: rgba(0,0,0,0.15); background: rgba(0,0,0,0.03); }
-    [data-theme="light"] .wizard-version-btn.selected { border-color: #0ea5e9; background: rgba(14,165,233,0.18); color: #0c4a6e; }
+    [data-theme="light"] .wizard-step { background: var(--bg-input, #fff); color: var(--text-muted, #8d8a7d); border-color: var(--border-color, #c9c5b4); }
+    [data-theme="light"] .wizard-step.active { color: #fff; background: linear-gradient(180deg, #f0812e, #e5690b 55%, #c9580a); border-color: #55503f; }
+    [data-theme="light"] .wizard-type-card { border-color: var(--border-color, #c9c5b4); background: var(--bg-input, #fff); }
+    [data-theme="light"] .wizard-type-card.selected { border-color: #0284c7; background: rgba(2, 132, 199, 0.12); }
+    [data-theme="light"] .wizard-version-btn { border-color: var(--border-color, #c9c5b4); background: var(--bg-input, #fff); }
+    [data-theme="light"] .wizard-version-btn.selected { border-color: #0284c7; background: #38bdf8; color: #0c1220; }
 
     /* disabled 按钮在两个主题下都清晰可辨 */
     .instance-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }

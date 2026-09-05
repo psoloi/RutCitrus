@@ -128,7 +128,7 @@ namespace RtCli.Modules
                 Directory.CreateDirectory(proxyWorkPath);
 
             // 下载代理端
-            string jarName = "";
+            string? jarName = "";
             if (isVelocity)
             {
                 Output.Log(Unit.I18n.Get("hub_downloading_velocity"), 1, ThisName);
@@ -1000,7 +1000,7 @@ namespace RtCli.Modules
         }
 
         public static (bool Success, string Message) UpdateGroup(string operation, string groupId,
-            string name, List<string> memberIds)
+            string? name, List<string> memberIds)
         {
             lock (_lock)
             {

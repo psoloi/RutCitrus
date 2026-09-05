@@ -462,7 +462,10 @@ namespace RtCli.Modules.Unit
                 Message = message,
                 CpuUsage = cpu,
                 MemoryUsedMb = memUsed,
-                MemoryTotalMb = memTotal
+                MemoryTotalMb = memTotal,
+                CurrentServerKey = Config.App.CurrentServer,
+                AiRunning = Intelligence.AiAutoRunner.IsRunning,
+                SchedulerRunning = Function.Scheduler.IsRunning
             };
             foreach (var s in servers)
             {
@@ -474,7 +477,13 @@ namespace RtCli.Modules.Unit
                     Tps = s.Tps,
                     TpsStatus = s.TpsStatus,
                     McPid = s.Pid,
-                    McMemoryMb = s.McMemMb
+                    McMemoryMb = s.McMemMb,
+                    Tps1M = s.Tps1m,
+                    Tps5M = s.Tps5m,
+                    Tps15M = s.Tps15m,
+                    McCpuUsage = s.McCpuUsage,
+                    PlayerCount = s.PlayerCount,
+                    PlayerMax = s.PlayerMax
                 });
             }
             return Task.FromResult(response);

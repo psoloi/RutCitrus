@@ -40,7 +40,6 @@
                     <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="showTaskInfo('ai','AI任务列表')">AI任务列表</button></div>
                     <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="showTaskInfo('auto','计划任务列表')">计划任务列表</button></div>
                     <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('.fx list')">.fx list - 错误分析结果</button></div>
-                    <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('.fx get')">.fx get - 分析错误日志</button></div>
                     <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('.fx filter plugin')">.fx filter plugin - 插件列表</button></div>
                     <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('.server list')">.server list - 服务端列表</button></div>
                     <div class="col-md-6"><button class="btn btn-outline-primary btn-sm w-100 text-start" onclick="quickCmd('rt extensions')">rt extensions - 扩展列表</button></div>
@@ -435,24 +434,27 @@
 </script>
 
 <style>
-    /* ===== AI 自动化明星功能卡片 ===== */
-    .ai-hero-card { position: relative; border-radius: 12px; color: #e2e8f0; border: 1px solid rgba(16,185,129,0.30); background: linear-gradient(160deg, rgba(16,185,129,0.10), rgba(56,189,248,0.05)), rgba(13,20,36,0.9); box-shadow: 0 0 16px rgba(16,185,129,0.10); transition: box-shadow 0.3s, border-color 0.3s; }
-    .ai-hero-card.running { border-color: rgba(16,185,129,0.65); box-shadow: 0 0 24px rgba(16,185,129,0.22); }
-    .ai-hero-icon { font-size: 1.6rem; line-height: 1; filter: drop-shadow(0 0 6px rgba(52,211,153,0.45)); }
-    .ai-hero-title { font-size: 1.05rem; font-weight: 700; background: linear-gradient(90deg, #34d399, #38bdf8); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-    .ai-hero-btn { border: none; border-radius: 10px; padding: 10px 12px; font-weight: 700; color: #fff; background: linear-gradient(135deg, #059669, #10b981); box-shadow: 0 4px 14px rgba(16,185,129,0.35); transition: filter 0.15s, transform 0.1s; }
-    .ai-hero-btn:hover { filter: brightness(1.12); color: #fff; }
-    .ai-hero-btn:active { transform: scale(0.98); }
-    .ai-hero-btn.stop { background: linear-gradient(135deg, #dc2626, #ef4444); box-shadow: 0 4px 14px rgba(239,68,68,0.35); }
-    .ai-status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; padding: 3px 10px; border-radius: 999px; background: rgba(100,116,139,0.18); color: #94a3b8; border: 1px solid rgba(100,116,139,0.35); }
-    .ai-status-badge.running { background: rgba(16,185,129,0.15); color: #34d399; border-color: rgba(16,185,129,0.5); }
-    .ai-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #64748b; display: inline-block; }
-    .ai-status-badge.running .ai-status-dot { background: #10b981; animation: aiPulse 1.6s infinite; }
-    @@keyframes aiPulse { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,0.55); } 70% { box-shadow: 0 0 0 8px rgba(16,185,129,0); } 100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); } }
+    /* ===== AI 自动化明星功能卡片（MC 方块风·草绿主题） ===== */
+    .ai-hero-card { position: relative; border-radius: 0; color: var(--text-primary, #ecebe4); border: 2px solid var(--btn-outline, #0c0c12); outline: 1px solid rgba(74, 222, 128, 0.35); outline-offset: -5px; background: linear-gradient(180deg, rgba(74, 222, 128, 0.10), rgba(56, 189, 248, 0.04)), var(--bg-card, #1f1f28); box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.35); transition: outline-color 0.2s, box-shadow 0.2s; }
+    .ai-hero-card.running { outline-color: rgba(74, 222, 128, 0.8); box-shadow: 4px 4px 0 rgba(74, 222, 128, 0.35); }
+    .ai-hero-icon { font-size: 1.6rem; line-height: 1; filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.5)); }
+    .ai-hero-title { font-size: 1.05rem; font-weight: 700; font-family: var(--font-pixel, sans-serif); letter-spacing: 0.5px; color: var(--color-success, #4ade80); text-shadow: 0 0 12px rgba(74, 222, 128, 0.4); }
+    .ai-hero-btn { border: 2px solid var(--btn-outline, #0c0c12); border-radius: 0; padding: 10px 12px; font-weight: 700; font-family: var(--font-pixel, sans-serif); color: #0c1a0e; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3); background: linear-gradient(180deg, #5ede8a, #4ade80 55%, #34b968); box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.3), inset -2px -2px 0 rgba(0, 0, 0, 0.42); transition: filter 0.12s, transform 0.05s, box-shadow 0.05s; }
+    .ai-hero-btn:hover { filter: brightness(1.12); color: #0c1a0e; }
+    .ai-hero-btn:active { transform: translateY(2px); box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.42), inset -2px -2px 0 rgba(255, 255, 255, 0.3); }
+    .ai-hero-btn.stop { color: #fff; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35); background: linear-gradient(180deg, #f66b6b, #f05252 55%, #d43c3c); }
+    .ai-status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; font-family: var(--font-pixel, sans-serif); padding: 3px 10px; border-radius: 0; background: var(--bg-input, #16161e); color: var(--text-secondary, #a8a89b); border: 2px solid var(--border-color, #3a3a49); }
+    .ai-status-badge.running { color: var(--color-success, #4ade80); border-color: var(--color-success, #4ade80); }
+    .ai-status-dot { width: 8px; height: 8px; border-radius: 0; background: #6b6b78; display: inline-block; }
+    .ai-status-badge.running .ai-status-dot { background: var(--color-success, #4ade80); animation: aiPulse 1.6s infinite; }
+    @@keyframes aiPulse { 0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55); } 70% { box-shadow: 0 0 0 8px rgba(74, 222, 128, 0); } 100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); } }
 
     /* 亮色主题适配 */
-    [data-theme="light"] .ai-hero-card { color: #1e293b; background: linear-gradient(160deg, rgba(16,185,129,0.10), rgba(56,189,248,0.06)), #fff; }
-    [data-theme="light"] .ai-status-badge { background: rgba(100,116,139,0.10); color: #64748b; }
-    [data-theme="light"] .ai-status-badge.running { background: rgba(16,185,129,0.12); color: #047857; }
+    [data-theme="light"] .ai-hero-card { color: var(--text-primary, #26241c); background: linear-gradient(180deg, rgba(74, 222, 128, 0.10), rgba(56, 189, 248, 0.05)), var(--bg-card, #faf9f3); box-shadow: 4px 4px 0 rgba(90, 80, 50, 0.15); }
+    [data-theme="light"] .ai-hero-title { color: #16a34a; text-shadow: none; }
+    [data-theme="light"] .ai-hero-btn { color: #fff; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.25); background: linear-gradient(180deg, #22c55e, #16a34a 55%, #15803d); border-color: #55503f; }
+    [data-theme="light"] .ai-hero-btn.stop { background: linear-gradient(180deg, #ef4444, #dc2626 55%, #b91c1c); }
+    [data-theme="light"] .ai-status-badge { background: var(--bg-input, #fff); color: var(--text-secondary, #565246); border-color: var(--border-color, #c9c5b4); }
+    [data-theme="light"] .ai-status-badge.running { color: #16a34a; border-color: #16a34a; }
 </style>
 }

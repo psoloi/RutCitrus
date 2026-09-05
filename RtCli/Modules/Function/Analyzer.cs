@@ -35,6 +35,9 @@ namespace RtCli.Modules.Function
         internal static readonly List<string> _logBuffer = new List<string>();
         private const int MaxLogBufferSize = 5000;
 
+        // 当前活跃的日志流标识(服务器启动时记录,停止后保留用于 .fx get 分析)
+        private static string _activeStreamKey = "";
+
         // 实时崩溃检测状态(去重用)
         private static DateTime _lastCrashSignalTime = DateTime.MinValue;
         private static readonly object _crashSignalLock = new object();
@@ -322,6 +325,10 @@ namespace RtCli.Modules.Function
                 _restartAttemptCount = 0;
                 _userInitiatedStop = false;
 
+                // 注册日志数据流(服务器启动即开始缓存,停止后保留供 .fx get 分析)
+                _activeStreamKey = Config.App.CurrentServer;
+                LogStreamStore.BeginServerStream(_activeStreamKey, _connectedServerName);
+
                 _outputCts = new CancellationTokenSource();
                 _ = Task.Run(() => MonitorServerProcess(_outputCts.Token), _outputCts.Token);
 
@@ -380,6 +387,9 @@ namespace RtCli.Modules.Function
                 {
                     // RM模式: 通过日志文件获取控制台信息流
                     Output.Log(I18n.Get("anz_rm_log_monitor_starting"), 1, ThisProgramName);
+                    // 注册日志数据流(RM模式由日志文件监控写入缓存)
+                    _activeStreamKey = Config.App.CurrentServer;
+                    LogStreamStore.BeginServerStream(_activeStreamKey, Config.CurrentServer.ServerName);
                     _ = Task.Run(() => StartRMLogFileMonitor(workPath, _outputCts.Token));
                     Output.Log(I18n.Get("anz_cmd_hint"), 1, ThisProgramName);
                 }
@@ -514,6 +524,10 @@ namespace RtCli.Modules.Function
                 _attachedProcessId = 0;
                 _attachedWindowTitle = "";
                 _connectedServerName = "";
+
+                // 标记日志流停止(流与数据保留, .fx get 仍可分析异常关闭前的日志)
+                if (!string.IsNullOrEmpty(_activeStreamKey))
+                    LogStreamStore.SetLive(_activeStreamKey, false);
             }
         }
 
@@ -725,12 +739,51 @@ namespace RtCli.Modules.Function
             string ThisProgramName = "Analyzer";
             string logFile = Path.Combine(workPath, "logs", "latest.log");
 
-            // 等待日志文件创建(最多60秒)
-            for (int i = 0; i < 60; i++)
+            // 记录监控开始时已存在的旧日志长度(用于检测轮转,防止重放上一会话的日志)
+            long initialLength = -1;
+            try
+            {
+                if (File.Exists(logFile))
+                    initialLength = new FileInfo(logFile).Length;
+            }
+            catch { }
+
+            // 等待日志文件创建/轮转(最多90秒)。
+            // MC服务端进程启动后需经JVM引导(可达数十秒)才轮转latest.log:
+            // 旧文件归档为日期.gz并新建latest.log。若在轮转前从0读取,会把上一会话的
+            // 完整日志(含其关闭序列)重放到控制台,造成"服务器启动后立即被关闭"的假象。
+            bool waitLogged = false;
+            for (int i = 0; i < 180; i++)
             {
                 if (cancellationToken.IsCancellationRequested) return;
-                if (File.Exists(logFile)) break;
-                Thread.Sleep(1000);
+                try
+                {
+                    if (!File.Exists(logFile))
+                    {
+                        initialLength = -1; // 文件尚不存在,等待创建
+                    }
+                    else
+                    {
+                        long len = new FileInfo(logFile).Length;
+                        if (initialLength < 0)
+                            break; // 全新创建的文件: 从头读取
+                        if (len < initialLength)
+                        {
+                            // 文件比初始长度短: 已轮转,新文件从头读取
+                            initialLength = 0;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+
+                if (i == 20 && !waitLogged && initialLength >= 0)
+                {
+                    // JVM引导中,等待服务端轮转日志文件(旧日志不会重放)
+                    waitLogged = true;
+                    Output.Log(I18n.Get("anz_rm_wait_rotation"), 1, ThisProgramName);
+                }
+                Thread.Sleep(500);
             }
 
             if (!File.Exists(logFile))
@@ -739,8 +792,23 @@ namespace RtCli.Modules.Function
                 return;
             }
 
-            // 从文件开头开始读取(MC服务端每次启动会清空latest.log)
-            Interlocked.Exchange(ref _logFilePosition, 0);
+            if (initialLength > 0)
+            {
+                // 超时未检测到轮转: 从旧文件长度处读取(仅采集新增行,避免重放旧会话日志)
+                long pos = initialLength;
+                try
+                {
+                    using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    if (fs.Length < pos) pos = fs.Length;
+                }
+                catch { }
+                Interlocked.Exchange(ref _logFilePosition, pos);
+                Output.Log(I18n.Get("anz_rm_append_mode", pos), 1, ThisProgramName);
+            }
+            else
+            {
+                Interlocked.Exchange(ref _logFilePosition, 0);
+            }
 
             string serverName = _connectedServerName;
             Output.Log(I18n.Get("anz_rm_log_monitor_started", logFile), 1, ThisProgramName);
@@ -787,8 +855,16 @@ namespace RtCli.Modules.Function
             {
                 using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 long currentPos = Interlocked.Read(ref _logFilePosition);
-                if (fs.Length <= currentPos)
-                    return;
+                if (fs.Length < currentPos)
+                {
+                    // 文件比上次读取位置短: 日志已轮转(旧文件归档、新文件从0开始),从头读取
+                    currentPos = 0;
+                    Interlocked.Exchange(ref _logFilePosition, 0);
+                }
+                else if (fs.Length == currentPos)
+                {
+                    return; // 无新内容
+                }
 
                 fs.Seek(currentPos, SeekOrigin.Begin);
                 using var reader = new StreamReader(fs, Encoding.GetEncoding(0));
@@ -801,6 +877,10 @@ namespace RtCli.Modules.Function
                         if (!ShouldHideConsole())
                             Output.Log(line, 0, serverName);
                         ProcessPlayerEventLine(line);
+
+                        // RM模式: 日志文件行同步写入全局日志流缓存
+                        if (!string.IsNullOrEmpty(_activeStreamKey))
+                            LogStreamStore.Append(_activeStreamKey, line);
                     }
                 }
 
@@ -1182,77 +1262,119 @@ namespace RtCli.Modules.Function
             }
         }
 
-        public static void AnalyzeErrors(string? filePath = null)
+        /// <summary>
+        /// .fx add: 添加外部日志文件为外源数据流,自动识别错误并按来源保存
+        /// </summary>
+        public static (bool Success, string Message) AddExternalLog(string path)
         {
             string ThisProgramName = "Analyzer";
 
-            ContentManager.Initialize();
+            if (string.IsNullOrWhiteSpace(path))
+                return (false, I18n.Get("prog_fx_add_usage_hint"));
 
-            string handlerPattern = ContentManager.Regex.Console_Error.Handler;
-            int limit = ContentManager.Regex.Console_Error.Limit;
+            path = path.Trim().Trim('"');
+            if (!File.Exists(path))
+                return (false, I18n.Get("anz_file_not_exists", path));
 
-            if (string.IsNullOrWhiteSpace(handlerPattern))
-            {
-                Output.Log(I18n.Get("anz_regex_empty"), 2, ThisProgramName);
-                return;
-            }
-
-            Regex handlerRegex;
             try
             {
-                handlerRegex = new Regex(handlerPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                var lines = File.ReadAllLines(path, Encoding.GetEncoding(0)).ToList();
+                string name = Path.GetFileNameWithoutExtension(path);
+
+                // 加入日志流缓存(外部流)并流式识别错误(来源=文件名)
+                LogStreamStore.ImportExternal(name, lines);
+                int newErrors = ErrorStreamDetector.FeedLines(name, lines, "external");
+
+                Output.Log(I18n.Get("prog_fx_add_ok", name, lines.Count, newErrors), 1, ThisProgramName);
+                return (true, I18n.Get("prog_fx_add_ok", name, lines.Count, newErrors));
             }
             catch (Exception ex)
             {
-                Output.Log(I18n.Get("anz_regex_invalid", ex.Message), 3, ThisProgramName);
-                return;
+                Output.Log(I18n.Get("anz_fx_add_failed", ex.Message), 3, ThisProgramName);
+                return (false, I18n.Get("anz_fx_add_failed", ex.Message));
             }
+        }
 
-            List<string> logLines;
+        /// <summary>
+        /// 重扫日志流并识别错误(内部/面板触发):
+        /// 服务器启动时错误已由 ErrorStreamDetector 自动识别保存,
+        /// 此方法用于强制重扫(如正则调整后),按来源逐流分析。
+        /// </summary>
+        public static void AnalyzeErrors(string? filePath = null)
+        {
+            string ThisProgramName = "Analyzer";
+            ContentManager.Initialize();
+
+            // 分析批次: (来源标识, 来源类型, 日志行)
+            var batches = new List<(string Source, string Type, List<string> Lines)>();
 
             if (!string.IsNullOrWhiteSpace(filePath))
             {
-                if (!File.Exists(filePath))
+                if (filePath.Equals("all", StringComparison.OrdinalIgnoreCase))
                 {
-                    Output.Log(I18n.Get("anz_file_not_exists", filePath), 2, ThisProgramName);
-                    return;
+                    foreach (var s in LogStreamStore.GetAll())
+                        batches.Add((s.Key, s.Type == LogStreamType.External ? "external" : "server", s.Lines.ToList()));
+                    if (batches.Count == 0)
+                    {
+                        Output.Log(I18n.Get("anz_fx_no_streams"), 2, ThisProgramName);
+                        return;
+                    }
                 }
-
-                try
+                else if (File.Exists(filePath))
                 {
-                    logLines = File.ReadAllLines(filePath, Encoding.GetEncoding(0)).ToList();
-                    Output.Log(I18n.Get("anz_read_external_file", logLines.Count, filePath), 1, ThisProgramName);
+                    try
+                    {
+                        var lines = File.ReadAllLines(filePath, Encoding.GetEncoding(0)).ToList();
+                        batches.Add((Path.GetFileNameWithoutExtension(filePath), "external", lines));
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log(I18n.Get("anz_read_file_failed", ex.Message), 3, ThisProgramName);
+                        return;
+                    }
                 }
-                catch (Exception ex)
+                else if (LogStreamStore.Contains(filePath))
                 {
-                    Output.Log(I18n.Get("anz_read_file_failed", ex.Message), 3, ThisProgramName);
+                    var s = LogStreamStore.Get(filePath)!;
+                    batches.Add((s.Key, s.Type == LogStreamType.External ? "external" : "server", s.Lines.ToList()));
+                }
+                else
+                {
+                    string available = string.Join(", ", LogStreamStore.GetAll().Select(s => s.Key));
+                    Output.Log(I18n.Get("anz_fx_not_found", filePath, string.IsNullOrEmpty(available) ? "-" : available), 2, ThisProgramName);
                     return;
                 }
             }
             else
             {
-                if (!IsRunModeActive && !IsAttached)
-                {
-                    Output.Log(I18n.Get("anz_not_attached_analyze_hint"), 2, ThisProgramName);
-                    return;
-                }
+                // 无参: 重扫全部缓存流(各标识独立分析,错误记录各自带来源)
+                foreach (var s in LogStreamStore.GetAll())
+                    batches.Add((s.Key, s.Type == LogStreamType.External ? "external" : "server", s.Lines.ToList()));
 
-                lock (_logBufferLock)
+                // 无缓存流时回退: 实时缓冲 / latest.log(来源=当前服务器标识)
+                if (batches.Count == 0)
                 {
-                    logLines = _logBuffer.ToList();
-                }
+                    if (!IsRunModeActive && !IsAttached)
+                    {
+                        Output.Log(I18n.Get("anz_not_attached_analyze_hint"), 2, ThisProgramName);
+                        return;
+                    }
 
-                if (logLines.Count == 0)
-                {
-                    if (IsRunModeActive && !string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
+                    List<string> fallback = new List<string>();
+                    lock (_logBufferLock)
+                    {
+                        fallback = _logBuffer.ToList();
+                    }
+
+                    if (fallback.Count == 0 && IsRunModeActive && !string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
                     {
                         string logFile = Path.Combine(Config.CurrentServer.WorkPath, "logs", "latest.log");
                         if (File.Exists(logFile))
                         {
                             try
                             {
-                                logLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0)).ToList();
-                                Output.Log(I18n.Get("anz_read_logfile_lines", logLines.Count), 1, ThisProgramName);
+                                fallback = File.ReadAllLines(logFile, Encoding.GetEncoding(0)).ToList();
+                                Output.Log(I18n.Get("anz_read_logfile_lines", fallback.Count), 1, ThisProgramName);
                             }
                             catch (Exception ex)
                             {
@@ -1262,118 +1384,36 @@ namespace RtCli.Modules.Function
                         }
                     }
 
-                    if (logLines.Count == 0)
+                    if (fallback.Count == 0)
                     {
                         Output.Log(I18n.Get("anz_no_log_content"), 2, ThisProgramName);
                         return;
                     }
+
+                    batches.Add((Config.App.CurrentServer, "server", fallback));
                 }
             }
 
-            var errors = new Dictionary<int, string>();
-            int errorIndex = 1;
-            var currentError = new StringBuilder();
-            bool inError = false;
-
-            var existingErrors = ContentManager.LoadErrorLog();
-            if (existingErrors.Count > 0)
+            int totalLines = 0;
+            int before = ErrorStreamDetector.TotalCount;
+            foreach (var b in batches)
             {
-                errorIndex = existingErrors.Keys.Max() + 1;
-                foreach (var kv in existingErrors)
-                {
-                    errors[kv.Key] = kv.Value;
-                }
+                if (b.Lines.Count == 0) continue;
+                totalLines += b.Lines.Count;
+                ErrorStreamDetector.FeedLines(b.Source, b.Lines, b.Type);
             }
+            int newErrors = ErrorStreamDetector.TotalCount - before;
 
-            for (int i = 0; i < logLines.Count; i++)
-            {
-                string line = logLines[i];
-
-                if (handlerRegex.IsMatch(line))
-                {
-                    if (inError && currentError.Length > 0)
-                    {
-                        string errorText = currentError.ToString().Trim();
-                        if (errorText.Length > limit)
-                            errorText = errorText.Substring(0, limit) + "...";
-
-                        if (!errors.Values.Contains(errorText))
-                        {
-                            errors[errorIndex++] = errorText;
-                        }
-                        currentError.Clear();
-                    }
-
-                    inError = true;
-                    currentError.AppendLine(line);
-                }
-                else if (inError)
-                {
-                    bool isContinuation = line.TrimStart().StartsWith("at ")
-                        || line.TrimStart().StartsWith("Caused by")
-                        || line.TrimStart().StartsWith("...")
-                        || string.IsNullOrWhiteSpace(line)
-                        || line.Contains("Suppressed")
-                        || handlerRegex.IsMatch(line);
-
-                    if (isContinuation)
-                    {
-                        currentError.AppendLine(line);
-                    }
-                    else
-                    {
-                        string errorText = currentError.ToString().Trim();
-                        if (errorText.Length > limit)
-                            errorText = errorText.Substring(0, limit) + "...";
-
-                        if (!errors.Values.Contains(errorText))
-                        {
-                            errors[errorIndex++] = errorText;
-                        }
-                        currentError.Clear();
-                        inError = false;
-                    }
-                }
-            }
-
-            if (inError && currentError.Length > 0)
-            {
-                string errorText = currentError.ToString().Trim();
-                if (errorText.Length > limit)
-                    errorText = errorText.Substring(0, limit) + "...";
-
-                if (!errors.Values.Contains(errorText))
-                {
-                    errors[errorIndex++] = errorText;
-                }
-            }
-
-            int newCount = errors.Count - existingErrors.Count;
-
-            if (errors.Count == 0)
+            if (ErrorStreamDetector.TotalCount == 0)
             {
                 Output.Log(I18n.Get("anz_no_errors_detected"), 1, ThisProgramName);
                 return;
             }
 
-            ContentManager.SaveErrorLog(errors);
-
-            var table = new Table()
-                .Border(TableBorder.Rounded)
-                .AddColumn(I18n.Get("anz_col_no"), c => c.Alignment(Justify.Center).Width(8))
-                .AddColumn(I18n.Get("anz_col_error_summary"), c => c.Width(80));
-
-            foreach (var kv in errors)
-            {
-                string summary = kv.Value.Split('\n').FirstOrDefault() ?? "";
-                if (summary.Length > 80)
-                    summary = summary.Substring(0, 77) + "...";
-
-                table.AddRow(kv.Key.ToString(), Markup.Escape(summary));
-            }
-
-            AnsiConsole.Write(table);
-            Output.Log(I18n.Get("anz_errors_recognized", errors.Count, newCount), 1, ThisProgramName);
+            if (newErrors > 0)
+                Output.Log(I18n.Get("anz_errors_recognized", ErrorStreamDetector.TotalCount, newErrors), 1, ThisProgramName);
+            else
+                Output.Log(I18n.Get("anz_fx_no_new_errors", totalLines, ErrorStreamDetector.TotalCount), 1, ThisProgramName);
         }
 
         public static void ListErrors(int? index)
@@ -1389,9 +1429,15 @@ namespace RtCli.Modules.Function
 
             if (index.HasValue)
             {
-                if (errors.TryGetValue(index.Value, out string? errorText))
+                if (errors.TryGetValue(index.Value, out var record))
                 {
-                    var panel = new Panel(Markup.Escape(errorText))
+                    var detail = new StringBuilder();
+                    detail.AppendLine(I18n.Get("anz_record_source", record.SourceDisplay));
+                    detail.AppendLine(I18n.Get("anz_record_time", string.IsNullOrEmpty(record.Time) ? "-" : record.Time));
+                    detail.AppendLine();
+                    detail.Append(record.Content);
+
+                    var panel = new Panel(Markup.Escape(detail.ToString()))
                         .Header(I18n.Get("anz_analysis_result_header", index.Value))
                         .Border(BoxBorder.Rounded);
                     AnsiConsole.Write(panel);
@@ -1405,16 +1451,17 @@ namespace RtCli.Modules.Function
 
             var table = new Table()
                 .Border(TableBorder.Rounded)
-                .AddColumn(I18n.Get("anz_col_no"), c => c.Alignment(Justify.Center).Width(8))
-                .AddColumn(I18n.Get("anz_col_error_summary"), c => c.Width(80));
+                .AddColumn(I18n.Get("anz_col_no"), c => c.Alignment(Justify.Center).Width(6))
+                .AddColumn(I18n.Get("anz_col_source"), c => c.Width(24))
+                .AddColumn(I18n.Get("anz_col_error_summary"), c => c.Width(64));
 
             foreach (var kv in errors.OrderBy(kv => kv.Key))
             {
-                string summary = kv.Value.Split('\n').FirstOrDefault() ?? "";
-                if (summary.Length > 80)
-                    summary = summary.Substring(0, 77) + "...";
+                string summary = kv.Value.Content.Split('\n').FirstOrDefault() ?? "";
+                if (summary.Length > 64)
+                    summary = summary.Substring(0, 61) + "...";
 
-                table.AddRow(kv.Key.ToString(), Markup.Escape(summary));
+                table.AddRow(kv.Key.ToString(), Markup.Escape(kv.Value.SourceDisplay), Markup.Escape(summary));
             }
 
             AnsiConsole.Write(table);
@@ -1424,6 +1471,7 @@ namespace RtCli.Modules.Function
         public static void DeleteErrors()
         {
             ContentManager.DeleteErrorLog();
+            ErrorStreamDetector.Reset();
         }
 
         public static void ClientGuide(int? selectedIndex)
@@ -1713,12 +1761,17 @@ namespace RtCli.Modules.Function
             }
 
             var sb = new StringBuilder();
+            var involvedSources = new List<string>();
             foreach (int idx in targetIndices)
             {
-                if (errors.TryGetValue(idx, out string? errorText))
+                if (errors.TryGetValue(idx, out var record))
                 {
-                    sb.AppendLine(errorText);
+                    // 标注数据来源: 供 base 匹配与结果展示
+                    sb.AppendLine($"===== {I18n.Get("anz_record_source", record.SourceDisplay)} =====");
+                    sb.AppendLine(record.Content);
                     sb.AppendLine("---");
+                    if (!involvedSources.Contains(record.SourceDisplay))
+                        involvedSources.Add(record.SourceDisplay);
                 }
                 else
                 {
@@ -1729,6 +1782,7 @@ namespace RtCli.Modules.Function
 
             string combinedError = sb.ToString();
             Output.Log(I18n.Get("anz_analyzing_records", targetIndices.Count), 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_data_sources", string.Join(", ", involvedSources)), 1, ThisProgramName);
 
             var baseEntries = ContentManager.GetAllBaseEntries();
             var matches = new List<(BaseEntry Entry, Match Match, double Score)>();
@@ -1874,12 +1928,17 @@ namespace RtCli.Modules.Function
             }
 
             var sb = new StringBuilder();
+            var involvedSources = new List<string>();
             foreach (int idx in targetIndices)
             {
-                if (errors.TryGetValue(idx, out string? errorText))
+                if (errors.TryGetValue(idx, out var record))
                 {
-                    sb.AppendLine(errorText);
+                    // 标注数据来源: AI 分析可感知错误来自哪个服务器/外部导入
+                    sb.AppendLine($"===== {I18n.Get("anz_record_source", record.SourceDisplay)} =====");
+                    sb.AppendLine(record.Content);
                     sb.AppendLine("---");
+                    if (!involvedSources.Contains(record.SourceDisplay))
+                        involvedSources.Add(record.SourceDisplay);
                 }
                 else
                 {
@@ -1890,6 +1949,7 @@ namespace RtCli.Modules.Function
 
             string combinedError = sb.ToString();
             Output.Log(I18n.Get("anz_ai_sending", targetIndices.Count), 1, ThisProgramName);
+            Output.Log(I18n.Get("anz_data_sources", string.Join(", ", involvedSources)), 1, ThisProgramName);
 
             string? aiResponse = await Intelligence.AnalyzeWithAi(combinedError);
 
@@ -2470,6 +2530,10 @@ namespace RtCli.Modules.Function
                     _logBuffer.RemoveAt(0);
                 }
             }
+
+            // 同步写入全局日志流缓存(.fx get 可分析任意历史流,不受服务器停止影响)
+            if (!string.IsNullOrEmpty(_activeStreamKey))
+                LogStreamStore.Append(_activeStreamKey, line);
         }
 
         /// <summary>
@@ -3061,6 +3125,341 @@ namespace RtCli.Modules.Function
         public string JavaExePath { get; set; } = "";
         /// <summary>与配置 JavaPath 的匹配优先级(越高越优先, 100=完全匹配)</summary>
         public int MatchScore { get; set; }
+    }
+
+    /// <summary>日志流类型</summary>
+    internal enum LogStreamType
+    {
+        /// <summary>MC 服务端实时数据流(服务器启动时开始缓存)</summary>
+        Server,
+        /// <summary>外部导入的日志文件流</summary>
+        External
+    }
+
+    /// <summary>
+    /// 单条日志流缓存条目。
+    /// 生命周期：服务器启动时创建，服务器停止后保留(供 .fx get 分析)，
+    /// 仅当数据流过多(单流/全局超限)或程序重启时清空。
+    /// </summary>
+    internal class LogStreamEntry
+    {
+        public string Key { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public LogStreamType Type { get; set; } = LogStreamType.Server;
+        public List<string> Lines { get; } = new List<string>();
+        public DateTime CreatedAt { get; set; } = DateTime.Now;
+        public DateTime LastAppendedAt { get; set; } = DateTime.Now;
+        public bool IsLive { get; set; }
+        /// <summary>因数据量超限被清空的次数(重置计数)</summary>
+        public int ResetCount { get; set; }
+    }
+
+    /// <summary>
+    /// 全局日志流缓存仓库：按标识(服务器ID/外部流名)缓存各服务器的实时日志数据流。
+    /// 第一个服务器启动时开始缓存；程序重启自然清空(内存缓存)。
+    /// </summary>
+    internal static class LogStreamStore
+    {
+        /// <summary>单流最大行数，超出后清空该流(数据流过多时清空缓存)</summary>
+        private const int MaxLinesPerStream = 5000;
+        /// <summary>全部流合计最大行数，超出后按最久未追加顺序清空</summary>
+        private const int MaxTotalLines = 50000;
+
+        private static readonly object _lock = new object();
+        private static readonly Dictionary<string, LogStreamEntry> _streams = new Dictionary<string, LogStreamEntry>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>确保流存在(已存在则复用并标记运行中)；重启场景在流中插入分段标记</summary>
+        public static LogStreamEntry BeginServerStream(string key, string displayName)
+        {
+            lock (_lock)
+            {
+                if (!_streams.TryGetValue(key, out var entry))
+                {
+                    entry = new LogStreamEntry
+                    {
+                        Key = key,
+                        DisplayName = string.IsNullOrWhiteSpace(displayName) ? key : displayName,
+                        Type = LogStreamType.Server,
+                        IsLive = true
+                    };
+                    _streams[key] = entry;
+                }
+                else
+                {
+                    // 服务器重启: 流保留,插入分段标记便于区分多次启动的日志
+                    if (entry.Lines.Count > 0)
+                        entry.Lines.Add($"===== [{key}] {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====");
+                    entry.IsLive = true;
+                    if (!string.IsNullOrWhiteSpace(displayName))
+                        entry.DisplayName = displayName;
+                }
+                return entry;
+            }
+        }
+
+        /// <summary>向指定流追加一行(容量控制: 单流超限清空该流; 全局超限清空最旧的流)</summary>
+        public static void Append(string key, string line)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrEmpty(line)) return;
+
+            lock (_lock)
+            {
+                if (!_streams.TryGetValue(key, out var entry)) return;
+                entry.Lines.Add(line);
+                entry.LastAppendedAt = DateTime.Now;
+
+                // 同步流式错误识别: 自动检测错误块并按来源保存(服务器启动即自动记录)
+                ErrorStreamDetector.Feed(key, line, entry.Type == LogStreamType.External ? "external" : "server");
+
+                // 单流数据量过多: 清空该流并记录重置
+                if (entry.Lines.Count > MaxLinesPerStream)
+                {
+                    entry.Lines.Clear();
+                    entry.ResetCount++;
+                    entry.Lines.Add($"===== [{key}] {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====");
+                    return;
+                }
+
+                // 全局数据量过多: 从最久未追加的流开始清空
+                TrimTotal();
+            }
+        }
+
+        private static void TrimTotal()
+        {
+            int total = _streams.Values.Sum(s => s.Lines.Count);
+            while (total > MaxTotalLines && _streams.Count > 1)
+            {
+                var oldest = _streams.Values
+                    .Where(s => !s.IsLive && s.Lines.Count > 0)
+                    .OrderBy(s => s.LastAppendedAt)
+                    .FirstOrDefault();
+                if (oldest == null) break;
+                total -= oldest.Lines.Count;
+                oldest.Lines.Clear();
+                oldest.ResetCount++;
+            }
+        }
+
+        /// <summary>标记服务器流停止(流保留,数据仍可分析)</summary>
+        public static void SetLive(string key, bool isLive)
+        {
+            lock (_lock)
+            {
+                if (_streams.TryGetValue(key, out var entry))
+                    entry.IsLive = isLive;
+            }
+        }
+
+        /// <summary>导入外部日志文件为流(同名覆盖旧导入),同时流式识别错误并按来源保存</summary>
+        public static LogStreamEntry ImportExternal(string name, List<string> lines)
+        {
+            lock (_lock)
+            {
+                if (_streams.TryGetValue(name, out var existing) && existing.Type == LogStreamType.External)
+                {
+                    existing.Lines.Clear();
+                    foreach (var l in lines) existing.Lines.Add(l);
+                    existing.LastAppendedAt = DateTime.Now;
+                    return existing;
+                }
+                var entry = new LogStreamEntry
+                {
+                    Key = name,
+                    DisplayName = name,
+                    Type = LogStreamType.External,
+                    IsLive = false
+                };
+                foreach (var l in lines) entry.Lines.Add(l);
+                _streams[name] = entry;
+                return entry;
+            }
+        }
+
+        public static bool Contains(string key)
+        {
+            lock (_lock) { return _streams.ContainsKey(key); }
+        }
+
+        public static LogStreamEntry? Get(string key)
+        {
+            lock (_lock)
+            {
+                return _streams.TryGetValue(key, out var e) ? e : null;
+            }
+        }
+
+        /// <summary>获取全部流的快照(按创建时间排序)</summary>
+        public static List<LogStreamEntry> GetAll()
+        {
+            lock (_lock)
+            {
+                return _streams.Values.OrderBy(s => s.CreatedAt).ToList();
+            }
+        }
+
+        /// <summary>合并全部流的日志行(流之间以空行分隔,供"全部同时分析")</summary>
+        public static List<string> GetMergedLines()
+        {
+            lock (_lock)
+            {
+                var result = new List<string>();
+                foreach (var s in _streams.Values.OrderBy(s => s.CreatedAt))
+                {
+                    if (result.Count > 0) result.Add("");
+                    result.AddRange(s.Lines);
+                }
+                return result;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 流式错误识别器: 日志行流入时按错误正则自动识别错误块,
+    /// 记录数据来源(服务器标识/外部导入)并保存到错误分析结果。
+    /// 服务器启动后自动工作,无需手动触发;服务器异常关闭也不丢失已识别的错误。
+    /// </summary>
+    internal static class ErrorStreamDetector
+    {
+        private class StreamState
+        {
+            public StringBuilder Buffer = new StringBuilder();
+            public bool InError;
+        }
+
+        private static readonly object _lock = new();
+        private static readonly Dictionary<string, StreamState> _states = new(StringComparer.OrdinalIgnoreCase);
+        private static Regex? _handlerRegex;
+        private static int _limit = 500;
+        private static Dictionary<int, ErrorRecord> _records = new();
+        private static bool _loaded;
+
+        private static void EnsureInitialized()
+        {
+            if (_loaded) return;
+            ContentManager.Initialize();
+            string pattern = ContentManager.Regex.Console_Error.Handler;
+            _limit = ContentManager.Regex.Console_Error.Limit;
+            if (!string.IsNullOrWhiteSpace(pattern))
+            {
+                try { _handlerRegex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase); }
+                catch { _handlerRegex = null; }
+            }
+            _records = ContentManager.LoadErrorLog();
+            _loaded = true;
+        }
+
+        /// <summary>流式喂入一行日志,自动识别错误块并保存(带来源)</summary>
+        public static void Feed(string key, string line, string sourceType)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrEmpty(line)) return;
+
+            // 过滤命令噪音: 监控发送的 tps/list 等命令在部分服务端(如Folia无tps)不存在,
+            // "Unknown or incomplete command...error" 会命中 Error 正则造成误记录
+            if (line.Contains("Unknown or incomplete command", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            lock (_lock)
+            {
+                EnsureInitialized();
+                if (_handlerRegex == null) return;
+
+                if (!_states.TryGetValue(key, out var state))
+                {
+                    state = new StreamState();
+                    _states[key] = state;
+                }
+
+                if (_handlerRegex.IsMatch(line))
+                {
+                    // 新错误行: 先收尾上一块
+                    if (state.InError && state.Buffer.Length > 0)
+                        SaveBlock(key, sourceType, state);
+                    state.InError = true;
+                    state.Buffer.AppendLine(line);
+                }
+                else if (state.InError)
+                {
+                    bool isContinuation = line.TrimStart().StartsWith("at ")
+                        || line.TrimStart().StartsWith("Caused by")
+                        || line.TrimStart().StartsWith("...")
+                        || string.IsNullOrWhiteSpace(line)
+                        || line.Contains("Suppressed")
+                        || _handlerRegex.IsMatch(line);
+
+                    if (isContinuation)
+                    {
+                        state.Buffer.AppendLine(line);
+                    }
+                    else
+                    {
+                        SaveBlock(key, sourceType, state);
+                        state.InError = false;
+                    }
+                }
+            }
+        }
+
+        /// <summary>批量喂入并收尾(供 .fx add 外部导入)</summary>
+        public static int FeedLines(string key, IEnumerable<string> lines, string sourceType)
+        {
+            int before = TotalCount;
+            foreach (var line in lines)
+                Feed(key, line, sourceType);
+            Flush(key, sourceType);
+            return TotalCount - before;
+        }
+
+        /// <summary>收尾未闭合的错误块(流结束/导入完成时)</summary>
+        public static void Flush(string key, string sourceType)
+        {
+            lock (_lock)
+            {
+                EnsureInitialized();
+                if (_states.TryGetValue(key, out var state) && state.InError && state.Buffer.Length > 0)
+                {
+                    SaveBlock(key, sourceType, state);
+                    state.InError = false;
+                }
+            }
+        }
+
+        public static int TotalCount
+        {
+            get { lock (_lock) { EnsureInitialized(); return _records.Count; } }
+        }
+
+        /// <summary>重置内存副本(.fx del 删除记录后调用,防止旧记录复活)</summary>
+        public static void Reset()
+        {
+            lock (_lock)
+            {
+                _records = new Dictionary<int, ErrorRecord>();
+                _loaded = false;
+            }
+        }
+
+        private static void SaveBlock(string key, string sourceType, StreamState state)
+        {
+            string text = state.Buffer.ToString().Trim();
+            state.Buffer.Clear();
+            if (text.Length == 0) return;
+            if (text.Length > _limit) text = text.Substring(0, _limit) + "...";
+
+            // 全局内容去重(与手动分析行为一致)
+            if (_records.Values.Any(r => r.Content == text)) return;
+
+            int idx = _records.Count == 0 ? 1 : _records.Keys.Max() + 1;
+            _records[idx] = new ErrorRecord
+            {
+                Content = text,
+                Source = key,
+                SourceType = sourceType,
+                Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            };
+            ContentManager.SaveErrorLog(_records, quiet: true);
+            Output.Log(I18n.Get("anz_fx_auto_saved", idx, key), 1, "Analyzer");
+        }
     }
 
     internal class RconClient

@@ -64,7 +64,7 @@ namespace RtCli
             ".auto start",
             ".auto stop",
             ".fx",
-            ".fx get",
+            ".fx add",
             ".fx list",
             ".fx del",
             ".fx clientguide",
@@ -769,7 +769,7 @@ namespace RtCli
                                 rtStatusTable.AddColumn(I18n.Get("prog_col_item")).AddColumn(I18n.Get("prog_col_status"));
                                 rtStatusTable.AddRow(I18n.Get("prog_status_manage_port"), Connector.IsRunning ? I18n.Get("prog_state_running") : I18n.Get("prog_state_not_running"));
                                 rtStatusTable.AddRow(I18n.Get("prog_status_connected_panels"), Connector.ConnectedClientCount.ToString());
-                                rtStatusTable.AddRow(I18n.Get("prog_status_current_server"), $"[cyan]{Markup.Escape(Config.App.CurrentServer)}[/] ({Markup.Escape(Config.CurrentServer.ServerName)})");
+                                rtStatusTable.AddRow(I18n.Get("prog_status_current_server"), $"[cyan]{Markup.Escape(Config.App.CurrentServer)}[/] ({Markup.Escape(Config.CurrentServer?.ServerName ?? string.Empty)})");
                                 rtStatusTable.AddRow(I18n.Get("prog_status_mc_mode"), $"[cyan]{Analyzer.CurrentMode}[/]");
                                 if (Analyzer.NeedsRunServer)
                                 {
@@ -977,9 +977,9 @@ namespace RtCli
                             case var cmd when cmd == ".fx":
                                 var fxRoot = new Tree(I18n.Get("prog_fx_tree_title"));
 
-                                var getNode = fxRoot.AddNode(I18n.Get("prog_fx_get_desc"));
-                                getNode.AddNode(I18n.Get("prog_fx_get_server_log"));
-                                getNode.AddNode(I18n.Get("prog_fx_get_external_log"));
+                                var addNode = fxRoot.AddNode(I18n.Get("prog_fx_add_desc"));
+                                addNode.AddNode(I18n.Get("prog_fx_add_usage"));
+                                addNode.AddNode(I18n.Get("prog_fx_add_auto_hint"));
 
                                 var listNode = fxRoot.AddNode(I18n.Get("prog_fx_list_desc"));
                                 listNode.AddNode(I18n.Get("prog_fx_list_all"));
@@ -1013,13 +1013,13 @@ namespace RtCli
                                 AnsiConsole.Write(fxRoot);
                                 handled = true;
                                 break;
-                            case var cmd when cmd == ".fx get":
-                                Analyzer.AnalyzeErrors();
+                            case var cmd when cmd == ".fx add":
+                                Output.Log(I18n.Get("prog_fx_add_usage_hint"), 1, ThisProgramName);
                                 handled = true;
                                 break;
-                            case var cmd when cmd != null && cmd.StartsWith(".fx get "):
-                                string getArg = cmd.Substring(".fx get ".Length).Trim().Trim('"');
-                                Analyzer.AnalyzeErrors(getArg);
+                            case var cmd when cmd != null && cmd.StartsWith(".fx add "):
+                                string addArg = cmd.Substring(".fx add ".Length).Trim().Trim('"');
+                                Analyzer.AddExternalLog(addArg);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".fx list":
@@ -1145,7 +1145,7 @@ namespace RtCli
                                     handled = true;
                                     break;
                                 }
-                            case var cmd when cmd.StartsWith(".lang "):
+                            case var cmd when cmd != null && cmd.StartsWith(".lang "):
                                 {
                                     string langArg = cmd.Substring(".lang ".Length).Trim();
                                     if (I18n.SetLanguageAndSave(langArg))
@@ -1274,7 +1274,10 @@ namespace RtCli
                                 else if (Config.SwitchServer(changeArg))
                                 {
                                     Analyzer.Initialize();
-                                    Output.Log(I18n.Get("prog_server_switched", Markup.Escape(changeArg), Markup.Escape(Config.CurrentServer.ServerName), Markup.Escape(Analyzer.CurrentMode)), 1, ThisProgramName);
+                                    Output.Log(I18n.Get("prog_server_switched",
+                                    Markup.Escape(changeArg),
+                                    Markup.Escape(Config.CurrentServer?.ServerName ?? string.Empty),
+                                    Markup.Escape(Analyzer.CurrentMode)), 1, ThisProgramName);
                                 }
                                 else
                                 {
@@ -1602,9 +1605,9 @@ namespace RtCli
             infoTable.AddRow("[yellow]环境[/]", $"[white]{Markup.Escape(runtimeVersion)}[/]");
             infoTable.AddRow("[yellow]系统[/]", $"[white]{Markup.Escape(osDescription)}[/]");
             infoTable.AddRow("[yellow]架构[/]", $"[white]{architecture}[/]");
-            infoTable.AddRow("[yellow]Java[/]", $"[white]{Markup.Escape(Checker.CheckJava())}[/]");
-            infoTable.AddRow("[yellow].NET[/]", $"[white]{Markup.Escape(Checker.CheckDotNet())}[/]");
-            infoTable.AddRow("[yellow]Python[/]", $"[white]{Markup.Escape(Checker.CheckPython())}[/]");
+            infoTable.AddRow("[yellow]Java[/]", $"[white]{Markup.Escape(Checker.CheckJava() ?? string.Empty)}[/]");
+infoTable.AddRow("[yellow].NET[/]", $"[white]{Markup.Escape(Checker.CheckDotNet() ?? string.Empty)}[/]");
+infoTable.AddRow("[yellow]Python[/]", $"[white]{Markup.Escape(Checker.CheckPython() ?? string.Empty)}[/]");
             infoTable.AddRow("[yellow]系统位数[/]", $"[white]{(Environment.Is64BitOperatingSystem ? "64位" : "32位")}[/]");
             AnsiConsole.Write(infoTable);
 

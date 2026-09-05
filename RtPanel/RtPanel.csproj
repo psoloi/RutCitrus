@@ -9,7 +9,12 @@
     <Product>RtPanel</Product>
     <Description>RutCitrus 管理面板</Description>
     <UserSecretsId>c8d00b30-3f96-43fc-bccf-b17609e7773a</UserSecretsId>
+    <ApplicationIcon>rc.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="rc.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Grpc.Net.Client" Version="2.62.0" />

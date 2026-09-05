@@ -15,10 +15,13 @@
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <style>
         body {
-            background: var(--bg-page);
+            background-color: var(--bg-page);
             background-image:
-                radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.12) 0px, transparent 50%),
-                radial-gradient(at 100% 100%, rgba(14, 165, 233, 0.08) 0px, transparent 50%);
+                radial-gradient(at 0% 0%, var(--glow-a, rgba(249,115,22,0.05)) 0px, transparent 55%),
+                radial-gradient(at 100% 100%, var(--glow-b, rgba(56,189,248,0.045)) 0px, transparent 55%),
+                linear-gradient(var(--grid-line, rgba(160,170,200,0.045)) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-line, rgba(160,170,200,0.045)) 1px, transparent 1px);
+            background-size: auto, auto, 28px 28px, 28px 28px;
             background-attachment: fixed;
             min-height: 100vh;
             display: flex;
@@ -27,41 +30,45 @@
             color: var(--text-primary);
         }
         .login-card {
-            background: rgba(18, 34, 54, 0.85);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--border-color);
-            border-radius: 16px;
+            background: var(--bg-card, #1f1f28);
+            border: 2px solid var(--btn-outline, #0c0c12);
+            outline: 1px solid var(--border-color, #3a3a49);
+            outline-offset: -6px;
+            border-radius: 0;
             padding: 40px;
             width: 100%;
             max-width: 420px;
-            box-shadow: 0 12px 50px rgba(0,0,0,0.6), 0 0 0 1px rgba(56, 189, 248, 0.08);
+            box-shadow: 8px 8px 0 rgba(0,0,0,0.45);
         }
-        .login-card .brand {
-            text-align: center;
-            margin-bottom: 8px;
-        }
+        .login-card .brand { text-align: center; margin-bottom: 8px; }
+        /* 品牌像素方块 Logo：橙/天青 2x2 棋盘格 */
         .login-card .brand .logo {
             display: inline-flex;
             align-items: center;
             justify-content: center;
             width: 56px;
             height: 56px;
-            border-radius: 14px;
-            background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-            color: #0a1424;
-            font-size: 1.6rem;
-            font-weight: 800;
-            margin-bottom: 12px;
-            box-shadow: 0 4px 16px rgba(56, 189, 248, 0.35);
+            border: 2px solid var(--btn-outline, #0c0c12);
+            background:
+                linear-gradient(var(--accent-2, #38bdf8), var(--accent-2, #38bdf8)) no-repeat 4px 4px / 22px 22px,
+                linear-gradient(var(--accent, #f97316), var(--accent, #f97316)) no-repeat 26px 4px / 22px 22px,
+                linear-gradient(var(--accent, #f97316), var(--accent, #f97316)) no-repeat 4px 26px / 22px 22px,
+                linear-gradient(var(--accent-2, #38bdf8), var(--accent-2, #38bdf8)) no-repeat 26px 26px / 22px 22px;
+            background-color: var(--bg-input, #16161e);
+            box-shadow: 4px 4px 0 rgba(0,0,0,0.45);
+            margin-bottom: 14px;
+            image-rendering: pixelated;
         }
         .login-card h1 {
-            color: var(--accent);
-            font-size: 1.6rem;
+            color: var(--text-primary);
+            font-size: 1.7rem;
             margin-bottom: 4px;
             text-align: center;
             font-weight: 700;
-            letter-spacing: 0.5px;
+            letter-spacing: 1px;
+            font-family: var(--font-pixel, sans-serif);
         }
+        .login-card h1 .brand-sky { color: var(--accent-2, #38bdf8); }
         .login-card .subtitle {
             color: var(--text-muted);
             text-align: center;
@@ -72,55 +79,58 @@
             color: var(--text-secondary);
             font-size: 0.85rem;
             margin-bottom: 4px;
-            font-weight: 500;
+            font-weight: 600;
         }
         .login-card .form-control {
             background-color: var(--bg-input);
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--border-color);
+            border-radius: 0;
             color: var(--text-primary);
-            border-radius: 8px;
+            box-shadow: inset 2px 2px 0 rgba(0,0,0,0.25);
             padding: 10px 14px;
         }
         .login-card .form-control:focus {
             background-color: var(--bg-input);
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+            box-shadow: inset 2px 2px 0 rgba(0,0,0,0.25), 0 0 0 3px var(--accent-soft);
             color: var(--text-primary);
         }
         .login-card .btn-primary {
-            background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-            border: none;
-            border-radius: 8px;
+            background: linear-gradient(180deg, #fb923c, #f97316 55%, #e86a0c);
+            border: 2px solid var(--btn-outline, #0c0c12);
+            border-radius: 0;
             padding: 11px;
-            font-weight: 600;
+            font-weight: 700;
             width: 100%;
-            color: #0a1424;
-            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.25);
-            transition: all 0.2s;
+            color: #fff;
+            font-family: var(--font-pixel, sans-serif);
+            letter-spacing: 0.5px;
+            text-shadow: 0 1px 0 rgba(0,0,0,0.35);
+            box-shadow: inset 2px 2px 0 rgba(255,255,255,0.28), inset -2px -2px 0 rgba(0,0,0,0.42);
+            transition: filter 0.12s, transform 0.05s, box-shadow 0.05s;
         }
-        .login-card .btn-primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 6px 16px rgba(56, 189, 248, 0.4);
+        .login-card .btn-primary:hover:not(:disabled) { filter: brightness(1.12); color: #fff; }
+        .login-card .btn-primary:active:not(:disabled) {
+            transform: translateY(2px);
+            box-shadow: inset 2px 2px 0 rgba(0,0,0,0.42), inset -2px -2px 0 rgba(255,255,255,0.28);
         }
         .login-card .btn-primary:disabled {
-            background: #2a3b54;
+            background: var(--bg-card-hover, #2a2a35);
             color: var(--text-muted);
+            filter: none;
             box-shadow: none;
             transform: none;
         }
         .alert-error {
-            background: rgba(239, 68, 68, 0.12);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: #fca5a5;
-            border-radius: 8px;
+            background: rgba(240, 82, 82, 0.1);
+            border: 2px solid rgba(240, 82, 82, 0.45);
+            color: #f8a3a3;
+            border-radius: 0;
             padding: 10px 14px;
             font-size: 0.85rem;
             display: none;
         }
-        .port-input-group {
-            display: flex;
-            gap: 8px;
-        }
+        .port-input-group { display: flex; gap: 8px; }
         .port-input-group .host { flex: 1; }
         .port-input-group .port { width: 100px; }
         .login-card .footer-note {
@@ -134,9 +144,9 @@
 <body>
     <div class="login-card">
         <div class="brand">
-            <div class="logo">Rt</div>
+            <div class="logo" aria-hidden="true"></div>
         </div>
-        <h1>RtPanel</h1>
+        <h1>Rt<span class="brand-sky">Panel</span></h1>
         <p class="subtitle">RutCitrus 管理面板 - 请输入连接信息登录</p>
 
         <div id="errorMsg" class="alert-error mb-3"></div>

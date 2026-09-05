@@ -33,6 +33,42 @@ namespace RtCli.Modules.Unit
         public int Limit { get; set; } = 500;
     }
 
+    /// <summary>
+    /// 错误分析记录(含数据来源): 服务器标识 / 外部导入(.fx add) / 实时缓冲等
+    /// </summary>
+    public class ErrorRecord
+    {
+        [YamlMember(Alias = "content")]
+        public string Content { get; set; } = "";
+
+        /// <summary>来源标识: 服务器标识或外部文件名</summary>
+        [YamlMember(Alias = "source")]
+        public string Source { get; set; } = "";
+
+        /// <summary>来源类型: server / external / buffer / legacy(旧格式记录)</summary>
+        [YamlMember(Alias = "source_type")]
+        public string SourceType { get; set; } = "";
+
+        [YamlMember(Alias = "time")]
+        public string Time { get; set; } = "";
+
+        /// <summary>显示用来源文本: [服务器] key / [外部] name / [历史]</summary>
+        [YamlIgnore]
+        public string SourceDisplay
+        {
+            get
+            {
+                return SourceType switch
+                {
+                    "server" => $"[服务器] {Source}",
+                    "external" => $"[外部] {Source}",
+                    "buffer" => $"[缓冲] {Source}",
+                    _ => string.IsNullOrEmpty(Source) ? "[历史]" : Source
+                };
+            }
+        }
+    }
+
     public class ClientGuideSetting
     {
         public string PlayerJoin { get; set; } = @"joined the game|logged in with entity id";
@@ -837,7 +873,7 @@ namespace RtCli.Modules.Unit
             File.WriteAllText(filePath, serializer.Serialize(existing));
         }
 
-        public static void SaveErrorLog(Dictionary<int, string> errors)
+        public static void SaveErrorLog(Dictionary<int, ErrorRecord> errors, bool quiet = false)
         {
             string filePath = Path.Combine(Config.DataPath, FxSaveErrorFile);
 
@@ -849,24 +885,29 @@ namespace RtCli.Modules.Unit
 
             foreach (var kv in errors)
             {
-                sb.AppendLine($"{kv.Key}: |-");
-                var lines = kv.Value.Split('\n');
+                sb.AppendLine($"{kv.Key}:");
+                sb.AppendLine($"  source: \"{kv.Value.Source.Replace("\"", "'")}\"");
+                sb.AppendLine($"  source_type: \"{kv.Value.SourceType}\"");
+                sb.AppendLine($"  time: \"{kv.Value.Time}\"");
+                sb.AppendLine("  content: |-");
+                var lines = kv.Value.Content.Split('\n');
                 foreach (var line in lines)
                 {
-                    sb.AppendLine($"  {line}");
+                    sb.AppendLine($"    {line}");
                 }
                 sb.AppendLine();
             }
 
             AtomicFile.WriteAllText(filePath, sb.ToString());
-            Output.Log($"错误分析结果已保存: {filePath}", 1, "ContentManager");
+            if (!quiet)
+                Output.Log($"错误分析结果已保存: {filePath}", 1, "ContentManager");
         }
 
-        public static Dictionary<int, string> LoadErrorLog()
+        public static Dictionary<int, ErrorRecord> LoadErrorLog()
         {
             string filePath = Path.Combine(Config.DataPath, FxSaveErrorFile);
             if (!File.Exists(filePath))
-                return new Dictionary<int, string>();
+                return new Dictionary<int, ErrorRecord>();
 
             try
             {
@@ -874,11 +915,31 @@ namespace RtCli.Modules.Unit
                 var deserializer = new DeserializerBuilder()
                     .WithNamingConvention(UnderscoredNamingConvention.Instance)
                     .Build();
-                return deserializer.Deserialize<Dictionary<int, string>>(yaml) ?? new Dictionary<int, string>();
+
+                // 新格式: Dictionary<int, ErrorRecord>(带来源)
+                try
+                {
+                    var records = deserializer.Deserialize<Dictionary<int, ErrorRecord>>(yaml);
+                    if (records != null && records.Count > 0) return records;
+                }
+                catch { }
+
+                // 兼容旧格式(Dictionary<int, string>): 无来源信息,标记为历史记录
+                var legacy = deserializer.Deserialize<Dictionary<int, string>>(yaml);
+                if (legacy != null)
+                {
+                    var result = new Dictionary<int, ErrorRecord>();
+                    foreach (var kv in legacy)
+                    {
+                        result[kv.Key] = new ErrorRecord { Content = kv.Value, Source = "", SourceType = "legacy", Time = "" };
+                    }
+                    return result;
+                }
+                return new Dictionary<int, ErrorRecord>();
             }
             catch
             {
-                return new Dictionary<int, string>();
+                return new Dictionary<int, ErrorRecord>();
             }
         }
 
