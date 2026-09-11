@@ -23,7 +23,7 @@ service RtCliService {
   // 系统状态：主机CPU/内存 + 各MC服务端TPS
   rpc GetSystemStats (Empty) returns (SystemStatsResponse);
   // MC 服务端配置文件管理(server.properties, ops.json 等)
-  rpc ListServerFiles (Empty) returns (ServerFileListResponse);
+  rpc ListServerFiles (ServerFileListRequest) returns (ServerFileListResponse);
   rpc GetServerFile (ServerFileRequest) returns (ServerFileResponse);
   rpc SaveServerFile (SaveServerFileRequest) returns (SaveConfigResponse);
   // 实例管理(实例 = server_list 扩展, server_data.json 存储元数据)
@@ -52,12 +52,25 @@ service RtCliService {
   rpc AiAnalyzeInstanceErrors (AiAnalyzeRequest) returns (AiAnalyzeResponse);
   // 玩家事件监控: 获取指定实例的玩家活动日志
   rpc GetPlayerEvents (PlayerEventRequest) returns (PlayerEventListResponse);
+  // 事件板: 实例生命周期事件(开启/关闭/崩溃/自动重启/stop无响应)
+  rpc GetEventBoard (EventBoardRequest) returns (EventBoardResponse);
+  rpc MarkEventBoardRead (Empty) returns (SimpleResponse);
+  rpc ClearEventBoard (Empty) returns (SimpleResponse);
   // 插件/模组管理
   rpc ListPlugins (InstanceDetailRequest) returns (JarFileListResponse);
   rpc ListMods (InstanceDetailRequest) returns (JarFileListResponse);
   rpc ToggleJarFile (ManageJarFileRequest) returns (SimpleResponse);
   rpc DeleteJarFile (ManageJarFileRequest) returns (SimpleResponse);
   rpc UploadJarFile (UploadJarFileRequest) returns (SimpleResponse);
+  // 实例文件管理: 浏览/上传/下载/删除/重命名(移动)工作目录内的文件, 工作目录为根
+  rpc ListInstanceDir (InstanceDirRequest) returns (InstanceDirResponse);
+  rpc DownloadInstanceFile (InstanceFileRequest) returns (stream FileDataChunk);
+  rpc UploadInstanceFileChunk (InstanceFileChunkRequest) returns (SimpleResponse);
+  rpc DeleteInstanceEntry (InstanceEntryRequest) returns (SimpleResponse);
+  rpc RenameInstanceEntry (InstanceRenameRequest) returns (SimpleResponse);
+  // 实例文件管理: 文本文件编辑(配置文件等)
+  rpc ReadInstanceTextFile (InstanceFileRequest) returns (InstanceTextFileResponse);
+  rpc WriteInstanceTextFile (InstanceTextFileWriteRequest) returns (SimpleResponse);
   // 玩家管理
   rpc ManagePlayer (ManagePlayerRequest) returns (SimpleResponse);
   // 面板向导: 服务端类型/版本列表与下载(对应 .guide 引导能力)
@@ -274,6 +287,10 @@ message ServerFileInfo {
   int64 size_bytes = 6;           // 文件大小
 }
 
+message ServerFileListRequest {
+  string server_key = 1;          // 留空则使用 RtCli 当前选中的服务器
+}
+
 message ServerFileListResponse {
   bool success = 1;
   string message = 2;
@@ -472,6 +489,28 @@ message PlayerEventListResponse {
   repeated PlayerEventLog events = 3;
 }
 
+// ===== 事件板(实例生命周期事件) =====
+message EventBoardRequest {
+  int32 limit = 1;                  // 返回最近N条(0=全部)
+}
+
+message BoardEvent {
+  int64 id = 1;                     // 自增序号(用于已读判断)
+  string event_type = 2;            // started/stopped/crashed/auto_restarted/stop_unresponsive
+  string instance_id = 3;           // 实例标识(ServerList key)
+  string instance_name = 4;         // 实例显示名
+  string title = 5;                 // 主题
+  string detail = 6;                // 详细信息
+  string recorded_at = 7;           // 记录时间(ISO 8601)
+}
+
+message EventBoardResponse {
+  bool success = 1;
+  string message = 2;
+  int64 last_read_id = 3;           // 已读水位(id <= last_read_id 视为已读)
+  repeated BoardEvent events = 4;
+}
+
 // ===== 插件/模组管理 =====
 message JarFileInfo {
   string file_name = 1;
@@ -497,6 +536,69 @@ message UploadJarFileRequest {
   string file_name = 2;
   string type = 3;             // "plugin" 或 "mod"
   bytes content = 4;
+}
+
+// ===== 实例文件管理 =====
+message InstanceDirRequest {
+  string id = 1;
+  string rel_path = 2;         // 相对工作目录的路径("" = 根)
+}
+
+message DirEntry {
+  string name = 1;
+  bool is_dir = 2;
+  int64 size_bytes = 3;
+  string modified_at = 4;
+}
+
+message InstanceDirResponse {
+  bool success = 1;
+  string message = 2;
+  string work_path = 3;
+  repeated DirEntry entries = 4;
+}
+
+message InstanceFileRequest {
+  string id = 1;
+  string rel_path = 2;
+}
+
+message FileDataChunk {
+  bytes data = 1;
+}
+
+// offset=0 时服务端截断临时文件; final=true 时提交(临时文件改名为正式文件)
+message InstanceFileChunkRequest {
+  string id = 1;
+  string rel_path = 2;
+  int64 offset = 3;
+  bytes data = 4;
+  bool final = 5;
+}
+
+message InstanceEntryRequest {
+  string id = 1;
+  string rel_path = 2;
+  bool recursive = 3;
+}
+
+message InstanceRenameRequest {
+  string id = 1;
+  string old_path = 2;
+  string new_path = 3;
+}
+
+message InstanceTextFileResponse {
+  bool success = 1;
+  string message = 2;
+  string content = 3;
+  int64 size_bytes = 4;
+}
+
+message InstanceTextFileWriteRequest {
+  string id = 1;
+  string rel_path = 2;
+  string content = 3;
 }
 
 // ===== 玩家管理 =====

@@ -1288,13 +1288,213 @@ namespace RtCli.Modules
                         }
                         writer.WriteEndObject();
                     }
-                    File.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
+                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
                 }
                 catch (Exception ex)
                 {
                     Output.Log(Unit.I18n.Get("hub_append_player_event_failed", ex.Message), 3, "Hub");
                 }
             }
+        }
+
+        /// <summary>事件板最大保留条数</summary>
+        private const int MaxBoardEvents = 500;
+
+        /// <summary>追加一条事件板事件(自动分配自增 id, 返回分配的 id, 失败返回 0)</summary>
+        public static long AppendBoardEvent(BoardEventEntry entry)
+        {
+            if (entry == null) return 0;
+            lock (_lock)
+            {
+                try
+                {
+                    var json = File.Exists(FilePath) ? File.ReadAllText(FilePath) : "{}";
+                    using var doc = JsonDocument.Parse(json);
+                    long nextId = 1;
+                    if (doc.RootElement.TryGetProperty("boardNextId", out var nid) && nid.TryGetInt64(out var n))
+                        nextId = n;
+                    entry.Id = nextId;
+                    using var ms = new MemoryStream();
+                    using (var writer = new Utf8JsonWriter(ms))
+                    {
+                        writer.WriteStartObject();
+                        bool hasBoard = false;
+                        foreach (var prop in doc.RootElement.EnumerateObject())
+                        {
+                            if (prop.Name == "boardEvents")
+                            {
+                                hasBoard = true;
+                                writer.WritePropertyName("boardEvents");
+                                WriteBoardEventArrayWithAppend(writer, prop.Value, entry);
+                            }
+                            else if (prop.Name == "boardNextId")
+                            {
+                                // 跳过旧值, 末尾统一重新写入
+                            }
+                            else
+                            {
+                                prop.WriteTo(writer);
+                            }
+                        }
+                        if (!hasBoard)
+                        {
+                            writer.WritePropertyName("boardEvents");
+                            writer.WriteStartArray();
+                            WriteBoardEventEntry(writer, entry);
+                            writer.WriteEndArray();
+                        }
+                        writer.WriteNumber("boardNextId", nextId + 1);
+                        writer.WriteEndObject();
+                    }
+                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
+                    return nextId;
+                }
+                catch (Exception ex)
+                {
+                    Output.Log(Unit.I18n.Get("hub_append_board_event_failed", ex.Message), 3, "Hub");
+                    return 0;
+                }
+            }
+        }
+
+        /// <summary>获取事件板事件列表(按时间正序)与已读水位</summary>
+        public static (List<BoardEventEntry> Events, long LastReadId) GetBoardEvents(int limit = 0)
+        {
+            var result = new List<BoardEventEntry>();
+            long lastReadId = 0;
+            lock (_lock)
+            {
+                try
+                {
+                    if (!File.Exists(FilePath)) return (result, 0);
+                    var json = File.ReadAllText(FilePath);
+                    using var doc = JsonDocument.Parse(json);
+                    if (doc.RootElement.TryGetProperty("boardLastReadId", out var lr) && lr.TryGetInt64(out var lrid))
+                        lastReadId = lrid;
+                    if (!doc.RootElement.TryGetProperty("boardEvents", out var arr))
+                        return (result, lastReadId);
+                    foreach (var item in arr.EnumerateArray())
+                    {
+                        result.Add(new BoardEventEntry
+                        {
+                            Id = item.TryGetProperty("id", out var idEl) && idEl.TryGetInt64(out var idv) ? idv : 0,
+                            EventType = item.TryGetProperty("eventType", out var t) ? t.GetString() ?? "" : "",
+                            InstanceId = item.TryGetProperty("instanceId", out var iid) ? iid.GetString() ?? "" : "",
+                            InstanceName = item.TryGetProperty("instanceName", out var inm) ? inm.GetString() ?? "" : "",
+                            Title = item.TryGetProperty("title", out var ti) ? ti.GetString() ?? "" : "",
+                            Detail = item.TryGetProperty("detail", out var d) ? d.GetString() ?? "" : "",
+                            RecordedAt = item.TryGetProperty("recordedAt", out var r) ? r.GetString() ?? "" : ""
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Output.Log(Unit.I18n.Get("hub_read_board_events_failed", ex.Message), 3, "Hub");
+                }
+            }
+            if (limit > 0 && result.Count > limit)
+                result = result.Skip(result.Count - limit).ToList();
+            return (result, lastReadId);
+        }
+
+        /// <summary>标记事件板已读水位(只前进不后退)</summary>
+        public static (bool Success, string Message) MarkBoardRead(long id)
+        {
+            lock (_lock)
+            {
+                try
+                {
+                    var json = File.Exists(FilePath) ? File.ReadAllText(FilePath) : "{}";
+                    using var doc = JsonDocument.Parse(json);
+                    long current = 0;
+                    if (doc.RootElement.TryGetProperty("boardLastReadId", out var lr) && lr.TryGetInt64(out var lv))
+                        current = lv;
+                    if (id <= current) return (true, "无新事件");
+                    using var ms = new MemoryStream();
+                    using (var writer = new Utf8JsonWriter(ms))
+                    {
+                        writer.WriteStartObject();
+                        foreach (var prop in doc.RootElement.EnumerateObject())
+                        {
+                            if (prop.Name == "boardLastReadId") continue; // 末尾统一写入新水位
+                            prop.WriteTo(writer);
+                        }
+                        writer.WriteNumber("boardLastReadId", id);
+                        writer.WriteEndObject();
+                    }
+                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
+                    return (true, "已标记");
+                }
+                catch (Exception ex)
+                {
+                    return (false, $"标记失败: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>清空事件板(自增 id 水位保留, 避免旧事件复活为未读)</summary>
+        public static (bool Success, string Message) ClearBoardEvents()
+        {
+            lock (_lock)
+            {
+                try
+                {
+                    if (!File.Exists(FilePath)) return (true, "无数据");
+                    var json = File.ReadAllText(FilePath);
+                    using var doc = JsonDocument.Parse(json);
+                    long nextId = 0;
+                    if (doc.RootElement.TryGetProperty("boardNextId", out var nid) && nid.TryGetInt64(out var nv))
+                        nextId = nv;
+                    using var ms = new MemoryStream();
+                    using (var writer = new Utf8JsonWriter(ms))
+                    {
+                        writer.WriteStartObject();
+                        foreach (var prop in doc.RootElement.EnumerateObject())
+                        {
+                            if (prop.Name == "boardEvents") continue;
+                            prop.WriteTo(writer);
+                        }
+                        if (nextId > 0)
+                            writer.WriteNumber("boardLastReadId", nextId - 1);
+                        writer.WriteEndObject();
+                    }
+                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
+                    return (true, Unit.I18n.Get("hub_board_cleared"));
+                }
+                catch (Exception ex)
+                {
+                    return (false, $"清空失败: {ex.Message}");
+                }
+            }
+        }
+
+        private static void WriteBoardEventArrayWithAppend(Utf8JsonWriter writer, JsonElement existing, BoardEventEntry newEntry)
+        {
+            writer.WriteStartArray();
+            var items = existing.EnumerateArray().ToList();
+            // 超过上限则丢弃最旧的, 保持不超过 MaxBoardEvents
+            int skip = 0;
+            if (items.Count >= MaxBoardEvents)
+                skip = items.Count - MaxBoardEvents + 1;
+            for (int i = skip; i < items.Count; i++)
+            {
+                items[i].WriteTo(writer);
+            }
+            WriteBoardEventEntry(writer, newEntry);
+            writer.WriteEndArray();
+        }
+
+        private static void WriteBoardEventEntry(Utf8JsonWriter writer, BoardEventEntry entry)
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("id", entry.Id);
+            writer.WriteString("eventType", entry.EventType);
+            writer.WriteString("instanceId", entry.InstanceId);
+            writer.WriteString("instanceName", entry.InstanceName);
+            writer.WriteString("title", entry.Title);
+            writer.WriteString("detail", entry.Detail);
+            writer.WriteString("recordedAt", entry.RecordedAt);
+            writer.WriteEndObject();
         }
 
         /// <summary>获取指定实例的玩家事件列表</summary>
@@ -1413,5 +1613,17 @@ namespace RtCli.Modules
         public string TriggerTime { get; set; } = "";
         public string RecordedAt { get; set; } = "";
         public string Detail { get; set; } = "";
+    }
+
+    /// <summary>事件板事件条目(实例生命周期)</summary>
+    public class BoardEventEntry
+    {
+        public long Id { get; set; }
+        public string EventType { get; set; } = "";
+        public string InstanceId { get; set; } = "";
+        public string InstanceName { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Detail { get; set; } = "";
+        public string RecordedAt { get; set; } = "";
     }
 }

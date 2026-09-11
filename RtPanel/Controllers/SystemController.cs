@@ -154,5 +154,71 @@ namespace RtPanel.Controllers
 
             return Ok(new { success = resp.Success, message = resp.Message });
         }
+
+        /// <summary>获取 RtPanel 与 RtCli 版本号</summary>
+        [HttpGet("version")]
+        public IActionResult GetVersion()
+        {
+            var panelVersion = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+            return Ok(new
+            {
+                success = true,
+                connected = _client.IsConnected,
+                panelVersion,
+                rtCliVersion = _client.ConnectedRtCliVersion
+            });
+        }
+
+        /// <summary>
+        /// 检查更新: 查询 GitHub 最新 Release, 按版本号中的 8 位日期比较(与 RtCli Checker 相同规则)。
+        /// </summary>
+        [HttpGet("checkupdate")]
+        public async Task<IActionResult> CheckUpdate()
+        {
+            const string repoApi = "https://api.github.com/repos/psoloi/RutCitrus/releases/latest";
+            var currentVersion = _client.ConnectedRtCliVersion ?? "";
+
+            // 本地版本日期(与 RtCli Checker.ExtractVersionDate 一致)
+            var localMatch = System.Text.RegularExpressions.Regex.Match(currentVersion, @"(\d{8})");
+            if (localMatch.Success == false || !long.TryParse(localMatch.Groups[1].Value, out var localDate))
+                return Ok(new { success = false, message = "无法解析当前 RtCli 版本号" + (currentVersion.Length == 0 ? "(未连接服务器)" : ": " + currentVersion) });
+
+            try
+            {
+                using var http = new HttpClient();
+                http.DefaultRequestHeaders.Add("User-Agent", "RtPanel-UpdateCheck");
+                http.Timeout = TimeSpan.FromSeconds(10);
+
+                var json = await http.GetStringAsync(repoApi);
+                var obj = Newtonsoft.Json.Linq.JObject.Parse(json);
+                var tagName = obj["tag_name"]?.ToString() ?? "";
+                var htmlUrl = obj["html_url"]?.ToString() ?? "";
+                var releaseName = obj["name"]?.ToString() ?? "";
+
+                var remoteMatch = System.Text.RegularExpressions.Regex.Match(tagName, @"(\d{8})");
+                if (!remoteMatch.Success || !long.TryParse(remoteMatch.Groups[1].Value, out var remoteDate))
+                    return Ok(new { success = false, message = $"无法解析远程版本标签: {tagName}" });
+
+                var updateAvailable = remoteDate > localDate;
+                return Ok(new
+                {
+                    success = true,
+                    updateAvailable,
+                    currentVersion,
+                    latestVersion = tagName,
+                    releaseUrl = htmlUrl,
+                    releaseName,
+                    message = updateAvailable ? $"发现新版本 {tagName}" : "当前已是最新版本"
+                });
+            }
+            catch (TaskCanceledException)
+            {
+                return Ok(new { success = false, message = "检查更新超时(无法访问 GitHub)" });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { success = false, message = $"检查更新失败: {ex.Message}" });
+            }
+        }
     }
 }

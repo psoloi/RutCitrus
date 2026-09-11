@@ -17,9 +17,9 @@ namespace RtCli
 {
     internal class Program
     {
-        // 多数测试及功能完善，AI无人化优化(skill.md文件夹)
+        // 多数测试及功能完善，AI无人化优化
 
-        // 优化文字和整理及I18n（超微终止了）
+        // 优化文字和整理及I18n
         // 服务端信息获取模式（Run、Rcon、RR、RM）"四架构 理功能"
         // 添加更多错误识别并分类（mc和程序自身的）
 
@@ -1354,9 +1354,25 @@ namespace RtCli
                                 break;
                             case var cmd when cmd == ".server stop":
                                 if (Analyzer.NeedsRunServer)
-                                    Analyzer.StopServer();
+                                {
+                                    // 交互路径: 无响应时在控制台确认是否强制关闭(不自动杀)
+                                    _ = Analyzer.StopServer(prompt: true, killOnTimeout: false);
+                                }
                                 else
                                     Output.Log(I18n.Get("prog_server_stop_rcon"), 2, ThisProgramName);
+                                handled = true;
+                                break;
+                            case var cmd when cmd == ".server kill":
+                                if (Analyzer.HasManagedProcess)
+                                {
+                                    if (AnsiConsole.Confirm(I18n.Get("prog_kill_confirm"), false))
+                                    {
+                                        Analyzer.ForceKillServer();
+                                        Output.Log(I18n.Get("prog_server_killed"), 1, ThisProgramName);
+                                    }
+                                }
+                                else
+                                    Output.Log(I18n.Get("prog_server_no_local_process"), 2, ThisProgramName);
                                 handled = true;
                                 break;
                             case var cmd when cmd == ".server status":

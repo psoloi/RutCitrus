@@ -193,6 +193,20 @@ namespace RtCli.Modules.Extension
         public ServerCrashEvent(string serverKey = "", int exitCode = -1) { ServerKey = serverKey; ExitCode = exitCode; }
     }
 
+    /// <summary>stop 指令无响应(无日志流/进程未退出), 提示用户可强制关闭</summary>
+    public class ServerStopUnresponsiveEvent : RtEvent
+    {
+        public string ServerKey { get; set; }
+        public bool HadLogActivity { get; set; }
+        public int WaitedSeconds { get; set; }
+        public ServerStopUnresponsiveEvent(string serverKey = "", bool hadLogActivity = false, int waitedSeconds = 0)
+        {
+            ServerKey = serverKey;
+            HadLogActivity = hadLogActivity;
+            WaitedSeconds = waitedSeconds;
+        }
+    }
+
     public class AutoRestartEvent : RtEvent
     {
         public string ServerKey { get; set; }

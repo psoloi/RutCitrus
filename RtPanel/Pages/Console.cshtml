@@ -86,7 +86,7 @@
                 <div class="mb-2"><small class="text-info fw-bold">计划任务调度器</small></div>
                 <div class="d-grid gap-2 mb-3">
                     <div class="btn-group btn-group-sm" role="group">
-                        <button class="btn btn-success" onclick="quickCmd('.auto start')">启动</button>
+                        <button class="btn btn-outline-success" id="autoStartBtn" onclick="quickCmd('.auto start')">启动</button>
                         <button class="btn btn-outline-danger" onclick="confirmCmd('.auto stop', '确定停止调度器？')">停止</button>
                         <button class="btn btn-outline-info" onclick="showTaskInfo('auto','计划任务列表')">任务列表</button>
                     </div>
@@ -94,7 +94,7 @@
                 <div class="mb-2"><small class="text-info fw-bold">MC服务端</small></div>
                 <div class="d-grid gap-2">
                     <div class="btn-group btn-group-sm" role="group">
-                        <button class="btn btn-success" onclick="confirmCmd('.server start', '确定启动MC服务端？')">启动</button>
+                        <button class="btn btn-outline-success" id="serverStartBtn" onclick="confirmCmd('.server start', '确定启动MC服务端？')">启动</button>
                         <button class="btn btn-outline-danger" onclick="confirmCmd('.server stop', '确定停止MC服务端？')">停止</button>
                         <button class="btn btn-outline-warning" onclick="confirmCmd('.server restart', '确定重启MC服务端？')">重启</button>
                     </div>
@@ -387,6 +387,13 @@
             const servers = stats.servers || [];
             const aiRunning = stats.aiRunning;
             const schedRunning = stats.schedulerRunning;
+            const mcRunning = servers.some(s => s.isRunning);
+
+            // 启动按钮随服务端真实状态置灰: 已运行则禁用, 防止重复启动
+            const autoStartBtn = document.getElementById('autoStartBtn');
+            const serverStartBtn = document.getElementById('serverStartBtn');
+            if (autoStartBtn) autoStartBtn.disabled = !!schedRunning;
+            if (serverStartBtn) serverStartBtn.disabled = !!mcRunning;
 
             updateAiHeroStatus(aiRunning);
 
@@ -439,10 +446,11 @@
     .ai-hero-card.running { outline-color: rgba(74, 222, 128, 0.8); box-shadow: 4px 4px 0 rgba(74, 222, 128, 0.35); }
     .ai-hero-icon { font-size: 1.6rem; line-height: 1; filter: drop-shadow(2px 2px 0 rgba(0, 0, 0, 0.5)); }
     .ai-hero-title { font-size: 1.05rem; font-weight: 700; font-family: var(--font-pixel, sans-serif); letter-spacing: 0.5px; color: var(--color-success, #4ade80); text-shadow: 0 0 12px rgba(74, 222, 128, 0.4); }
-    .ai-hero-btn { border: 2px solid var(--btn-outline, #0c0c12); border-radius: 0; padding: 10px 12px; font-weight: 700; font-family: var(--font-pixel, sans-serif); color: #0c1a0e; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3); background: linear-gradient(180deg, #5ede8a, #4ade80 55%, #34b968); box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.3), inset -2px -2px 0 rgba(0, 0, 0, 0.42); transition: filter 0.12s, transform 0.05s, box-shadow 0.05s; }
-    .ai-hero-btn:hover { filter: brightness(1.12); color: #0c1a0e; }
-    .ai-hero-btn:active { transform: translateY(2px); box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.42), inset -2px -2px 0 rgba(255, 255, 255, 0.3); }
-    .ai-hero-btn.stop { color: #fff; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35); background: linear-gradient(180deg, #f66b6b, #f05252 55%, #d43c3c); }
+    .ai-hero-btn { border: 2px solid var(--color-success, #4ade80) !important; border-radius: 0; padding: 10px 12px; font-weight: 700; font-family: var(--font-pixel, sans-serif); color: var(--color-success, #4ade80); background: transparent; box-shadow: none; text-shadow: none; transition: background 0.12s, color 0.12s, border-color 0.12s; }
+    .ai-hero-btn:hover { background: rgba(74, 222, 128, 0.12); color: var(--color-success, #4ade80); border-color: var(--color-success, #4ade80) !important; filter: none; }
+    .ai-hero-btn:active { transform: translateY(1px); }
+    .ai-hero-btn.stop { color: var(--color-danger, #f05252); border-color: var(--color-danger, #f05252) !important; background: transparent; text-shadow: none; }
+    .ai-hero-btn.stop:hover { background: rgba(240, 82, 82, 0.12); color: var(--color-danger, #f05252); border-color: var(--color-danger, #f05252) !important; }
     .ai-status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; font-family: var(--font-pixel, sans-serif); padding: 3px 10px; border-radius: 0; background: var(--bg-input, #16161e); color: var(--text-secondary, #a8a89b); border: 2px solid var(--border-color, #3a3a49); }
     .ai-status-badge.running { color: var(--color-success, #4ade80); border-color: var(--color-success, #4ade80); }
     .ai-status-dot { width: 8px; height: 8px; border-radius: 0; background: #6b6b78; display: inline-block; }

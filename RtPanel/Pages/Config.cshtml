@@ -106,6 +106,12 @@
     let searchMode = 'files';
     let itemSearchIndex = []; // [{file, source, path, key, value, type, comment}]
 
+    // === URL 深链参数(由文件管理等页面跳转: /Config?file=server.properties&source=server&server=xxx) ===
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlFile = urlParams.get('file') || '';
+    const urlSource = urlParams.get('source') === 'rtcli' ? 'rtcli' : 'server';
+    const urlServerKey = urlParams.get('server') || '';
+
     // === 工具函数 ===
     function escapeHtml(s) {
         return (s ?? '').toString()
@@ -178,7 +184,8 @@
 
         const tasks = [
             fetch('/api/config/files').then(r => r.json()).catch(() => ({ success: false, files: [] })),
-            fetch('/api/serverfile/list').then(r => r.json()).catch(() => ({ success: false, files: [] }))
+            fetch(`/api/serverfile/list${urlServerKey ? '?serverKey=' + encodeURIComponent(urlServerKey) : ''}`)
+                .then(r => r.json()).catch(() => ({ success: false, files: [] }))
         ];
         const [rtcliRes, serverRes] = await Promise.all(tasks);
 
@@ -187,6 +194,12 @@
         currentServerKey = serverRes.serverKey || '';
 
         renderFileTree();
+        // 优先选择 URL 深链指定的文件(来自文件管理等页面的跳转)
+        if (urlFile && !currentFileName) {
+            const pool = urlSource === 'rtcli' ? knownRtcliFiles : knownServerFiles;
+            const hit = pool.find(f => f.fileName === urlFile);
+            if (hit) selectFile(hit.fileName, urlSource, hit.displayName);
+        }
         // 自动选择第一个文件
         if (!currentFileName && knownRtcliFiles.length > 0) {
             selectFile(knownRtcliFiles[0].fileName, 'rtcli', knownRtcliFiles[0].displayName);

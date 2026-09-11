@@ -489,11 +489,11 @@ namespace RtCli.Modules.Unit
             return Task.FromResult(response);
         }
 
-        public override Task<ServerFileListResponse> ListServerFiles(Empty request, ServerCallContext context)
+        public override Task<ServerFileListResponse> ListServerFiles(ServerFileListRequest request, ServerCallContext context)
         {
             ValidateAuthKey(context);
             EnsureClientTracked(context);
-            var (success, message, serverKey, serverName, workPath, files) = Backend.ListServerFiles("");
+            var (success, message, serverKey, serverName, workPath, files) = Backend.ListServerFiles(request.ServerKey ?? "");
             var response = new ServerFileListResponse
             {
                 Success = success,
@@ -901,6 +901,48 @@ namespace RtCli.Modules.Unit
             return Task.FromResult(resp);
         }
 
+        // ===== 事件板(实例生命周期事件) =====
+        public override Task<EventBoardResponse> GetEventBoard(EventBoardRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (events, lastReadId) = PanelDataManager.GetBoardEvents(request.Limit);
+            var resp = new EventBoardResponse { Success = true, Message = "OK", LastReadId = lastReadId };
+            foreach (var e in events)
+            {
+                resp.Events.Add(new Grpc.BoardEvent
+                {
+                    Id = e.Id,
+                    EventType = e.EventType ?? "",
+                    InstanceId = e.InstanceId ?? "",
+                    InstanceName = e.InstanceName ?? "",
+                    Title = e.Title ?? "",
+                    Detail = e.Detail ?? "",
+                    RecordedAt = e.RecordedAt ?? ""
+                });
+            }
+            return Task.FromResult(resp);
+        }
+
+        public override Task<SimpleResponse> MarkEventBoardRead(Empty request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            // 标记到当前最新事件: 取最大已知 id(读全部后取末尾), 空板用 0
+            var (events, _) = PanelDataManager.GetBoardEvents(0);
+            long latestId = events.Count > 0 ? events[^1].Id : 0;
+            var (ok, msg) = PanelDataManager.MarkBoardRead(latestId);
+            return Task.FromResult(new SimpleResponse { Success = ok, Message = msg });
+        }
+
+        public override Task<SimpleResponse> ClearEventBoard(Empty request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg) = PanelDataManager.ClearBoardEvents();
+            return Task.FromResult(new SimpleResponse { Success = ok, Message = msg });
+        }
+
         // ===== 插件/模组 =====
         public override Task<JarFileListResponse> ListPlugins(InstanceDetailRequest request, ServerCallContext context)
         {
@@ -971,6 +1013,88 @@ namespace RtCli.Modules.Unit
             var (ok, msg) = string.Equals(request.Type, "mod", StringComparison.OrdinalIgnoreCase)
                 ? Backend.UploadMod(request.Id ?? "", request.FileName ?? "", request.Content?.ToByteArray() ?? Array.Empty<byte>())
                 : Backend.UploadPlugin(request.Id ?? "", request.FileName ?? "", request.Content?.ToByteArray() ?? Array.Empty<byte>());
+            return Task.FromResult(new SimpleResponse { Success = ok, Message = msg });
+        }
+
+        // ===== 实例文件管理 =====
+
+        public override Task<InstanceDirResponse> ListInstanceDir(InstanceDirRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg, workPath, entries) = Backend.ListInstanceDirectory(request.Id ?? "", request.RelPath ?? "");
+            var resp = new InstanceDirResponse { Success = ok, Message = msg, WorkPath = workPath };
+            foreach (var e in entries)
+                resp.Entries.Add(new DirEntry { Name = e.Name, IsDir = e.IsDir, SizeBytes = e.SizeBytes, ModifiedAt = e.ModifiedAt });
+            return Task.FromResult(resp);
+        }
+
+        public override async Task DownloadInstanceFile(InstanceFileRequest request, IServerStreamWriter<FileDataChunk> responseStream, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+
+            var (ok, msg, stream, _) = Backend.OpenInstanceFileForRead(request.Id ?? "", request.RelPath ?? "");
+            if (!ok || stream == null)
+                throw new RpcException(new global::Grpc.Core.Status(StatusCode.NotFound, msg));
+
+            try
+            {
+                var buffer = new byte[256 * 1024];
+                int read;
+                while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, context.CancellationToken)) > 0)
+                {
+                    await responseStream.WriteAsync(new FileDataChunk
+                    {
+                        Data = Google.Protobuf.ByteString.CopyFrom(buffer, 0, read)
+                    });
+                }
+            }
+            finally
+            {
+                stream.Dispose();
+            }
+        }
+
+        public override Task<SimpleResponse> UploadInstanceFileChunk(InstanceFileChunkRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg) = Backend.WriteInstanceFileChunk(
+                request.Id ?? "", request.RelPath ?? "", request.Offset,
+                request.Data?.ToByteArray() ?? Array.Empty<byte>(), request.Final);
+            return Task.FromResult(new SimpleResponse { Success = ok, Message = msg });
+        }
+
+        public override Task<SimpleResponse> DeleteInstanceEntry(InstanceEntryRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg) = Backend.DeleteInstanceEntry(request.Id ?? "", request.RelPath ?? "", request.Recursive);
+            return Task.FromResult(new SimpleResponse { Success = ok, Message = msg });
+        }
+
+        public override Task<SimpleResponse> RenameInstanceEntry(InstanceRenameRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg) = Backend.RenameInstanceEntry(request.Id ?? "", request.OldPath ?? "", request.NewPath ?? "");
+            return Task.FromResult(new SimpleResponse { Success = ok, Message = msg });
+        }
+
+        public override Task<InstanceTextFileResponse> ReadInstanceTextFile(InstanceFileRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg, content, size) = Backend.ReadInstanceTextFile(request.Id ?? "", request.RelPath ?? "");
+            return Task.FromResult(new InstanceTextFileResponse { Success = ok, Message = msg, Content = content, SizeBytes = size });
+        }
+
+        public override Task<SimpleResponse> WriteInstanceTextFile(InstanceTextFileWriteRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg) = Backend.WriteInstanceTextFile(request.Id ?? "", request.RelPath ?? "", request.Content ?? "");
             return Task.FromResult(new SimpleResponse { Success = ok, Message = msg });
         }
 

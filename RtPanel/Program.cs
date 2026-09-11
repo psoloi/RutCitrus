@@ -69,6 +69,9 @@ namespace RtPanel
                 app.UseHsts();
             }
 
+            // 404 等非异常状态码也渲染 /Error 页面(带 ?code={0} 重执行, 页面内区分 404/500)
+            app.UseStatusCodePagesWithReExecute("/Error", "?code={0}");
+
             // 关闭 HTTPS 强制跳转：双击 exe 启动的场景通常没有证书，强制 HTTPS 会导致无法访问
             // 如需 HTTPS，请配置反向代理或在 appsettings 中启用
             // app.UseHttpsRedirection();

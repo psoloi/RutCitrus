@@ -126,19 +126,22 @@
                 <div class="row text-center">
                     <div class="col-md-3">
                         <strong class="text-sky">RtPanel</strong>
+                        <small class="text-muted d-block" id="panelVersion">v?</small>
                         <small class="text-muted d-block">管理面板</small>
                     </div>
                     <div class="col-md-3">
                         <strong class="text-info">RtCli</strong>
-                        <small class="text-muted d-block">命令行工具</small>
+                        <small class="text-muted d-block" id="rtCliVersion">v?</small>
+                        <small class="text-muted d-block">主程序</small>
                     </div>
                     <div class="col-md-3">
                         <strong class="text-warning">RutCitrus</strong>
                         <small class="text-muted d-block">项目名称</small>
                     </div>
                     <div class="col-md-3">
-                        <button class="btn btn-sm btn-outline-info" onclick="loadRtVersion()">检查版本</button>
-                        <small class="text-muted d-block mt-1" id="versionInfo"></small>
+                        <button class="btn btn-sm btn-outline-info" onclick="checkForUpdate(this)">检查更新</button>
+                        <small class="text-muted d-block mt-1" id="updateInfo"></small>
+                        <a href="/Privacy" class="d-block mt-2 small">关于详情 ›</a>
                     </div>
                 </div>
             </div>
@@ -262,18 +265,49 @@
         }
     }
 
-    // 检查版本(通过 rt status API 获取)
-    async function loadRtVersion() {
-        document.getElementById('versionInfo').textContent = '获取中...';
+    // 版本信息(RtPanel 自身版本 + 已连接 RtCli 版本)
+    async function loadVersions() {
         try {
-            const resp = await fetch('/api/system/rtstatus').then(r => r.json());
+            const resp = await fetch('/api/system/version').then(r => r.json());
+            document.getElementById('panelVersion').textContent = resp.success ? `v${resp.panelVersion}` : '获取失败';
+            document.getElementById('rtCliVersion').textContent = resp.rtCliVersion ? `v${resp.rtCliVersion}` : (resp.connected ? '未知' : '未连接');
+        } catch {
+            document.getElementById('panelVersion').textContent = '获取失败';
+            document.getElementById('rtCliVersion').textContent = '获取失败';
+        }
+    }
+
+    // 检查更新(查询 GitHub 最新 Release, 比较版本日期)
+    async function checkForUpdate(btn) {
+        const info = document.getElementById('updateInfo');
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '检查中...';
+        info.textContent = '';
+        try {
+            const resp = await fetch('/api/system/checkupdate').then(r => r.json());
             if (resp.success) {
-                document.getElementById('versionInfo').textContent = `${resp.currentServerName || '-'} · ${resp.mcMode || '-'}`;
+                info.textContent = resp.updateAvailable ? resp.message : '已是最新版本';
+                info.className = resp.updateAvailable ? 'd-block mt-1 text-warning' : 'd-block mt-1 text-success';
+                if (resp.updateAvailable && resp.releaseUrl) {
+                    info.innerHTML = '';
+                    const a = document.createElement('a');
+                    a.href = resp.releaseUrl;
+                    a.target = '_blank';
+                    a.rel = 'noopener';
+                    a.textContent = resp.message + ' → 前往查看';
+                    info.appendChild(a);
+                }
             } else {
-                document.getElementById('versionInfo').textContent = '获取失败';
+                info.textContent = resp.message || '检查失败';
+                info.className = 'd-block mt-1 text-danger';
             }
         } catch {
-            document.getElementById('versionInfo').textContent = '请求失败';
+            info.textContent = '请求失败';
+            info.className = 'd-block mt-1 text-danger';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
         }
     }
 
@@ -281,5 +315,6 @@
     applySettings();
     loadPanelData();
     checkConn();
+    loadVersions();
 </script>
 }

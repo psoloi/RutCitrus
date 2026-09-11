@@ -55,6 +55,8 @@ namespace RtCli.Modules.Function
         private static RconClient? _rconClient;
         private static int _restartAttemptCount = 0;
         private static bool _userInitiatedStop = false;
+        // 服务器日志活动计数器(RUN stdout 与 RM 日志文件双埋点): stop 看门狗用于检测"无响应信息流"
+        private static long _logActivityCounter = 0;
 
         public static IReadOnlyList<MinecraftServerInfo> LastScanResults
         {
@@ -405,17 +407,33 @@ namespace RtCli.Modules.Function
             }
         }
 
-        public static void StopServer()
+        /// <summary>StopServer 结果</summary>
+        public enum StopResult
+        {
+            NotRunning,     // 服务端未运行(子进程模式)
+            Sent,           // stop 已发送, 后台监测中(asyncReturn=true)
+            Stopped,        // 进程已退出
+            Unresponsive    // 无响应(进程未退出), 交由用户决定是否强杀
+        }
+
+        /// <summary>
+        /// 停止服务端(带无响应看门狗)。
+        /// prompt: 无响应时在控制台交互确认是否强制关闭(仅 .server stop 交互路径)。
+        /// killOnTimeout: 无响应时是否自动强杀兜底(内部自动流程保持 true; 面板/CLI 用户路径为 false, 由用户决定)。
+        /// asyncReturn: true 时发送 stop 后立即返回 Sent, 看门狗在后台执行(面板路径, 避免阻塞 gRPC)。
+        /// </summary>
+        public static StopResult StopServer(bool prompt = false, bool killOnTimeout = true, bool asyncReturn = false)
         {
             string ThisProgramName = "Analyzer";
 
             if (!_isRunModeActive)
             {
                 Output.Log(I18n.Get("anz_server_not_running"), 1, ThisProgramName);
-                return;
+                return StopResult.NotRunning;
             }
 
             _userInitiatedStop = true;
+            long baseline = Interlocked.Read(ref _logActivityCounter);
 
             try
             {
@@ -424,14 +442,106 @@ namespace RtCli.Modules.Function
                     _serverInput.WriteLine("stop");
                     _serverInput.Flush();
                 }
+            }
+            catch (Exception ex)
+            {
+                Output.Log(I18n.Get("anz_stop_server_error", ex.Message), 2, ThisProgramName);
+            }
 
-                if (_serverProcess != null && !_serverProcess.HasExited)
+            if (asyncReturn)
+            {
+                long taskBaseline = baseline;
+                _ = Task.Run(() => WatchStopResponse(taskBaseline, prompt, killOnTimeout));
+                return StopResult.Sent;
+            }
+
+            return WatchStopResponse(baseline, prompt, killOnTimeout);
+        }
+
+        /// <summary>
+        /// 等待 stop 响应: 进程退出即成功;
+        /// 前 10 秒完全无新日志流 → 提前判定无响应; 日志仍流动但 30 秒未退出 → 判定无响应(慢关闭)。
+        /// </summary>
+        private static StopResult WatchStopResponse(long baseline, bool prompt, bool killOnTimeout)
+        {
+            const int GraceSeconds = 30;          // 最长等待进程退出
+            const int SilentDetectSeconds = 10;   // 完全无日志流时提前判定无响应的阈值
+
+            var sw = Stopwatch.StartNew();
+            bool hadLogActivity = false;
+            while (sw.Elapsed.TotalSeconds < GraceSeconds)
+            {
+                var proc = _serverProcess;
+                if (proc == null || proc.HasExited)
                 {
-                    if (!_serverProcess.WaitForExit(10000))
-                    {
-                        _serverProcess.Kill();
-                    }
+                    CleanupRunMode();
+                    Intelligence.StopAutoTips();
+                    return StopResult.Stopped;
                 }
+                if (Interlocked.Read(ref _logActivityCounter) != baseline)
+                    hadLogActivity = true;
+                else if (sw.Elapsed.TotalSeconds >= SilentDetectSeconds)
+                    return HandleStopUnresponsive(hadLogActivity: false, (int)sw.Elapsed.TotalSeconds, prompt, killOnTimeout);
+                Thread.Sleep(250);
+            }
+            return HandleStopUnresponsive(hadLogActivity, (int)sw.Elapsed.TotalSeconds, prompt, killOnTimeout);
+        }
+
+        /// <summary>stop 无响应处理: 发布事件 + 控制台警告; 按调用方决定交互确认/自动强杀/交由用户在事件板处理</summary>
+        private static StopResult HandleStopUnresponsive(bool hadLogActivity, int waitedSeconds, bool prompt, bool killOnTimeout)
+        {
+            Output.Log(I18n.Get("anz_stop_unresponsive", waitedSeconds,
+                hadLogActivity ? I18n.Get("anz_stop_unresponsive_slow") : I18n.Get("anz_stop_unresponsive_silent")), 2, "Analyzer");
+            EventBus.Publish(new ServerStopUnresponsiveEvent(Config.App.CurrentServer, hadLogActivity, waitedSeconds));
+
+            if (prompt)
+            {
+                // CLI 交互路径: 用户自行决定是否强制关闭(拒绝则保留进程)
+                bool force = AnsiConsole.Confirm(I18n.Get("prog_stop_confirm_force"), false);
+                if (force)
+                {
+                    ForceKillServer();
+                    return StopResult.Stopped;
+                }
+                Output.Log(I18n.Get("prog_stop_declined_hint"), 1, "Analyzer");
+                return StopResult.Unresponsive;
+            }
+
+            if (killOnTimeout)
+            {
+                // 内部自动流程(restart/计划任务/重载等): 保持强杀兜底
+                Output.Log(I18n.Get("anz_stop_force_killed"), 2, "Analyzer");
+                ForceKillServer();
+                return StopResult.Stopped;
+            }
+
+            // 面板路径: 不自动杀, 事件板会收到无响应事件, 由用户手动强制关闭
+            return StopResult.Unresponsive;
+        }
+
+        /// <summary>是否存在本地托管子进程(可强制关闭)</summary>
+        public static bool HasManagedProcess
+        {
+            get { var p = _serverProcess; return p != null && !p.HasExited; }
+        }
+
+        /// <summary>强制结束服务端进程树(可能丢失未保存数据, 须经用户确认后调用)</summary>
+        public static void ForceKillServer()
+        {
+            string ThisProgramName = "Analyzer";
+            var proc = _serverProcess;
+            if (proc == null || proc.HasExited)
+            {
+                Output.Log(I18n.Get("anz_force_no_process"), 2, ThisProgramName);
+                return;
+            }
+
+            _userInitiatedStop = true;
+            try
+            {
+                Output.Log(I18n.Get("anz_force_killing", proc.Id), 2, ThisProgramName);
+                proc.Kill(entireProcessTree: true);
+                proc.WaitForExit(5000);
             }
             catch (Exception ex)
             {
@@ -874,6 +984,7 @@ namespace RtCli.Modules.Function
                 {
                     if (!string.IsNullOrWhiteSpace(line))
                     {
+                        Interlocked.Increment(ref _logActivityCounter);
                         if (!ShouldHideConsole())
                             Output.Log(line, 0, serverName);
                         ProcessPlayerEventLine(line);
@@ -2522,6 +2633,7 @@ namespace RtCli.Modules.Function
 
         private static void AddToLogBuffer(string line)
         {
+            Interlocked.Increment(ref _logActivityCounter);
             lock (_logBufferLock)
             {
                 _logBuffer.Add(line);

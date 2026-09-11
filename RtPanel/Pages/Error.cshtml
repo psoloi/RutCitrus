@@ -1,26 +1,39 @@
-﻿@page
+@page
 @model ErrorModel
 @{
-    ViewData["Title"] = "Error";
+    ViewData["Title"] = Model.IsNotFound ? "页面不存在" : "出错了";
 }
 
-<h1 class="text-danger">Error.</h1>
-<h2 class="text-danger">An error occurred while processing your request.</h2>
+<div class="card mt-4">
+    <div class="card-body text-center py-5">
+        <div style="font-family: Consolas, 'Courier New', monospace; font-size: 4.5rem; font-weight: 700; line-height: 1;
+                    color: var(--accent, #f97316); text-shadow: 4px 4px 0 rgba(0,0,0,0.45);">
+            @(Model.HttpStatusCode == 404 ? "404" : Model.HttpStatusCode.ToString())
+        </div>
 
-@if (Model.ShowRequestId)
-{
-    <p>
-        <strong>Request ID:</strong> <code>@Model.RequestId</code>
-    </p>
-}
+        @if (Model.IsNotFound)
+        {
+            <h3 class="mt-4 mb-2 text-warning">方块不见了！</h3>
+            <p class="text-muted mb-1">你访问的页面不存在，可能已被移动或从未生成过。</p>
+            @if (!string.IsNullOrEmpty(Model.OriginalPath))
+            {
+                <p class="text-muted small mb-0">请求路径: <code>@Model.OriginalPath</code></p>
+            }
+        }
+        else
+        {
+            <h3 class="mt-4 mb-2 text-danger">服务器内部错误</h3>
+            <p class="text-muted mb-1">处理请求时发生异常，请稍后重试；若持续出现，请查看面板日志。</p>
+        }
 
-<h3>Development Mode</h3>
-<p>
-    Swapping to the <strong>Development</strong> environment displays detailed information about the error that occurred.
-</p>
-<p>
-    <strong>The Development environment shouldn't be enabled for deployed applications.</strong>
-    It can result in displaying sensitive information from exceptions to end users.
-    For local debugging, enable the <strong>Development</strong> environment by setting the <strong>ASPNETCORE_ENVIRONMENT</strong> environment variable to <strong>Development</strong>
-    and restarting the app.
-</p>
+        @if (Model.ShowRequestId)
+        {
+            <p class="text-muted small mt-3 mb-0">Request ID: <code>@Model.RequestId</code></p>
+        }
+
+        <div class="d-flex justify-content-center gap-2 mt-4">
+            <a href="/" class="btn btn-primary btn-sm">返回主页</a>
+            <a href="javascript:history.back()" class="btn btn-outline-secondary btn-sm">返回上一页</a>
+        </div>
+    </div>
+</div>

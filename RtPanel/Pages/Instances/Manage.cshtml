@@ -21,6 +21,9 @@
             <button class="nav-link" data-tab="playerMgr" onclick="switchTab('playerMgr')">玩家管理</button>
         </li>
         <li class="nav-item">
+            <button class="nav-link" data-tab="fileMgr" onclick="switchTab('fileMgr')">文件管理</button>
+        </li>
+        <li class="nav-item">
             <button class="nav-link" data-tab="plugins" onclick="switchTab('plugins')">插件管理</button>
         </li>
         <li class="nav-item">
@@ -127,6 +130,40 @@
                     <div class="text-muted small p-2">暂无自定义命令</div>
                 </div>
                 <small class="text-muted d-block mt-2">自定义命令保存在 panel_data.json 中,点击命令可快速执行</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- 文件管理 -->
+    <div class="tab-pane-content" id="tab-fileMgr" style="display:none;">
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>文件管理</span>
+                <div class="d-flex gap-1 align-items-center">
+                    <input type="file" id="fmUploadInput" multiple style="display:none;" onchange="FileMgr.upload(this.files)" />
+                    <button class="btn btn-sm btn-outline-success" onclick="document.getElementById('fmUploadInput').click()">+ 上传</button>
+                    <button class="btn btn-sm btn-outline-info" onclick="FileMgr.refresh()">刷新</button>
+                </div>
+            </div>
+            <div class="card-body p-2">
+                <div class="fm-breadcrumb" id="fmBreadcrumb"></div>
+                <div class="fm-layout">
+                    <div class="fm-tree-pane">
+                        <input type="text" class="form-control form-control-sm fm-search" id="fmSearch"
+                               placeholder="搜索文件..." oninput="FileMgr.renderTree()" />
+                        <div class="fm-tree" id="fmTree">
+                            <div class="text-muted small p-2">正在加载目录树...</div>
+                        </div>
+                    </div>
+                    <div class="fm-list-pane" id="fmListPane"
+                         ondragover="FileMgr.onPaneDragOver(event)" ondragleave="FileMgr.onDragLeave(event)"
+                         ondrop="FileMgr.onPaneDrop(event)">
+                        <div class="fm-list" id="fmList">
+                            <div class="text-muted small p-3">正在加载文件列表...</div>
+                        </div>
+                    </div>
+                </div>
+                <small class="text-muted d-block mt-2">提示: 长按文件拖拽到文件夹(或左侧目录树)即可移动; 也可从系统直接拖文件进来上传。仅可访问实例工作目录内的文件。</small>
             </div>
         </div>
     </div>
@@ -289,6 +326,7 @@
         if (tab === 'playerMgr') loadCustomCommands();
         if (tab === 'plugins') loadJarFiles('plugin');
         if (tab === 'mods') loadJarFiles('mod');
+        if (tab === 'fileMgr') FileMgr.ensureInit();
     }
 
     // === 加载实例详情 ===
@@ -637,6 +675,377 @@
         if (resp.success) loadJarFiles(type);
         input.value = '';
     }
+
+    // === 文件管理 (工作目录 = 根, VSCode 资源管理器式) ===
+    window.FileMgr = {
+        _inited: false,
+        _workPath: '',
+        _cwd: '',           // 当前目录(相对路径, '' = 工作目录根)
+        _tree: {},          // rel -> { name, dirs: Array<rel>|null, files, expanded }
+        _configFiles: null, // 配置页支持的文件集合(Set<relPath>), null = 尚未加载
+        _dragRel: null,     // 内部拖拽中的条目相对路径
+        _dragIsDir: false,
+
+        esc(s) {
+            return escapeHtml(s).replace(/'/g, '&#39;');
+        },
+
+        async ensureInit() {
+            if (this._inited) return;
+            this._inited = true;
+            this._tree[''] = { name: '', dirs: null, files: null, expanded: true };
+            this._loadConfigFiles(); // 异步加载, 完成后按支持情况刷新按钮形态
+            await this._loadTreeDir('');
+            this.renderTree();
+            await this.loadDir('');
+        },
+
+        // 加载配置页支持的文件清单(与"配置"页同一后端白名单)
+        async _loadConfigFiles() {
+            try {
+                const resp = await fetch(`/api/serverfile/list?serverKey=${encodeURIComponent(INSTANCE_ID)}`).then(r => r.json());
+                this._configFiles = (resp.success && resp.files) ? new Set(resp.files.map(f => f.fileName)) : new Set();
+            } catch { this._configFiles = new Set(); }
+            this.renderTree();
+            this.loadDir(this._cwd); // 以配置页支持形态重渲染按钮
+        },
+
+        isConfigPageFile(rel) {
+            return !!(this._configFiles && this._configFiles.has(rel));
+        },
+
+        jumpToConfig(rel) {
+            window.location.href = `/Config?file=${encodeURIComponent(rel)}&source=server&server=${encodeURIComponent(INSTANCE_ID)}`;
+        },
+
+        async refresh() {
+            await this.loadDir(this._cwd);
+            const expanded = Object.keys(this._tree).filter(k => this._tree[k].expanded);
+            for (const rel of expanded) await this._loadTreeDir(rel);
+            this.renderTree();
+        },
+
+        // ---- 右侧文件列表 ----
+        async loadDir(rel) {
+            const list = document.getElementById('fmList');
+            if (!list) return;
+            const resp = await fetch(`/api/instances/file/list?id=${encodeURIComponent(INSTANCE_ID)}&path=${encodeURIComponent(rel)}`).then(r => r.json());
+            if (!resp.success) {
+                list.innerHTML = `<div class="text-danger small p-3">${escapeHtml(resp.message || '加载失败')}</div>`;
+                return;
+            }
+            this._workPath = resp.workPath || this._workPath;
+            this._cwd = rel;
+            this.renderBreadcrumb();
+            const entries = resp.entries || [];
+            if (!entries.length) {
+                list.innerHTML = '<div class="text-muted small p-3">此目录为空(可将文件拖入此处上传)</div>';
+                return;
+            }
+            list.innerHTML = entries.map(e => {
+                const rel2 = rel ? `${rel}/${e.name}` : e.name;
+                const isDir = e.isDir ? 1 : 0;
+                // 按钮几何必须逐行一致: 不可用的按钮用隐形占位符, 避免不同行错位
+                const dl = isDir
+                    ? '<button class="btn btn-outline-info fm-btn-off" tabindex="-1" disabled title="">⬇</button>'
+                    : `<button class="btn btn-outline-info" onclick="FileMgr.download('${this.esc(rel2)}')" title="下载">⬇</button>`;
+                const cfgFile = !isDir && this.isConfigPageFile(rel2);
+                const editBtn = cfgFile
+                    ? `<button class="btn btn-outline-success" onclick="FileMgr.jumpToConfig('${this.esc(rel2)}')" title="在配置页中编辑(界面/文本双模式)">⚙</button>`
+                    : ((!isDir && this.isEditable(e.name))
+                        ? `<button class="btn btn-outline-primary" onclick="FileMgr.editFile('${this.esc(rel2)}')" title="编辑">📝</button>`
+                        : '<button class="btn btn-outline-primary fm-btn-off" tabindex="-1" disabled title="">📝</button>');
+                return `<div class="fm-row${isDir ? ' fm-row-dir' : ''}" draggable="true"
+                         data-path="${this.esc(rel2)}" data-dir="${isDir}"
+                         ondragstart="FileMgr.onDragStart(event,'${this.esc(rel2)}',${isDir})"
+                         ondragover="FileMgr.onDragOver(event)" ondragleave="FileMgr.onDragLeave(event)"
+                         ondrop="FileMgr.onRowDrop(event,'${this.esc(rel2)}')">
+                        <span class="fm-ico">${isDir ? '📁' : '📄'}</span>
+                        <span class="fm-name" onclick="FileMgr.open('${this.esc(rel2)}',${isDir})">${escapeHtml(e.name)}</span>
+                        <span class="fm-size">${isDir ? '' : formatBytes(e.sizeBytes)}</span>
+                        <span class="fm-time">${escapeHtml(e.modifiedAt || '')}</span>
+                        <span class="fm-acts">${editBtn}${dl}
+                            <button class="btn btn-outline-warning" onclick="FileMgr.rename('${this.esc(rel2)}')" title="重命名">✎</button>
+                            <button class="btn btn-outline-danger" onclick="FileMgr.remove('${this.esc(rel2)}',${isDir})" title="删除">✕</button>
+                        </span>
+                    </div>`;
+            }).join('');
+        },
+
+        open(rel, isDir) {
+            if (isDir) this.loadDir(rel);
+        },
+
+        renderBreadcrumb() {
+            const bc = document.getElementById('fmBreadcrumb');
+            const parts = this._cwd ? this._cwd.split('/') : [];
+            let html = `<span class="fm-crumb" onclick="FileMgr.loadDir('')">工作目录</span>`;
+            let acc = '';
+            for (const p of parts) {
+                acc = acc ? `${acc}/${p}` : p;
+                html += `<span class="fm-crumb-sep">›</span><span class="fm-crumb" onclick="FileMgr.loadDir('${this.esc(acc)}')">${escapeHtml(p)}</span>`;
+            }
+            bc.innerHTML = html;
+        },
+
+        // ---- 左侧目录树 ----
+        // 可在面板编辑的文本配置扩展名(后端另有二进制检测兜底)
+        _editableExts: ['json', 'yml', 'yaml', 'properties', 'toml', 'txt', 'log', 'conf', 'cfg', 'ini', 'xml', 'mcmeta', 'lang', 'csv', 'md'],
+
+        isEditable(name) {
+            const i = name.lastIndexOf('.');
+            if (i < 0) return false;
+            return this._editableExts.includes(name.slice(i + 1).toLowerCase());
+        },
+
+        async _loadTreeDir(rel) {
+            const resp = await fetch(`/api/instances/file/list?id=${encodeURIComponent(INSTANCE_ID)}&path=${encodeURIComponent(rel)}`).then(r => r.json());
+            const node = this._tree[rel];
+            if (!node) return;
+            node.dirs = [];
+            node.files = [];
+            if (resp.success) {
+                (resp.entries || []).forEach(e => {
+                    if (e.isDir) {
+                        const d = rel ? `${rel}/${e.name}` : e.name;
+                        if (!this._tree[d]) this._tree[d] = { name: e.name, dirs: null, files: null, expanded: false };
+                        else this._tree[d].name = e.name;
+                        node.dirs.push(d);
+                    } else if (this.isEditable(e.name)) {
+                        node.files.push({ name: e.name, rel: rel ? `${rel}/${e.name}` : e.name });
+                    }
+                });
+            }
+        },
+
+        async toggleTreeNode(rel) {
+            const node = this._tree[rel];
+            if (!node) return;
+            node.expanded = !node.expanded;
+            if (node.expanded && node.dirs === null) await this._loadTreeDir(rel);
+            this.renderTree();
+        },
+
+        renderTree() {
+            const tree = document.getElementById('fmTree');
+            if (!tree) return;
+            const q = (document.getElementById('fmSearch').value || '').trim().toLowerCase();
+            // build 返回该目录(及其展开的子树)的 HTML, 交给父级拼接, 保证父子顺序正确
+            const build = (rel, depth) => {
+                const node = this._tree[rel];
+                if (!node) return '';
+                const isRoot = rel === '';
+                const matchSelf = isRoot || !q || (node.name || '').toLowerCase().includes(q);
+
+                let dirRows = '';
+                for (const d of (node.dirs || [])) dirRows += build(d, depth + 1);
+
+                let fileRows = '';
+                for (const f of (node.files || [])) {
+                    if (q && !f.name.toLowerCase().includes(q)) continue;
+                    const cfg = this.isConfigPageFile(f.rel);
+                    fileRows += `<div class="fm-tree-row fm-tree-file${cfg ? ' fm-tree-cfg' : ''}" style="padding-left:${6 + (depth + 1) * 14}px"
+                                  onclick="FileMgr.${cfg ? 'jumpToConfig' : 'editFile'}('${this.esc(f.rel)}')" title="${cfg ? '点击跳转到配置页编辑' : '点击编辑'}">
+                                  <span class="fm-arrow fm-arrow-sp"></span>
+                                  <span class="fm-ico">${cfg ? '⚙' : '📄'}</span>
+                                  <span class="fm-name">${escapeHtml(f.name)}${cfg ? '<span class="fm-cfg-tag">配置</span>' : ''}</span>
+                              </div>`;
+                }
+
+                if (q && !matchSelf && !dirRows && !fileRows) return '';
+
+                const expanded = (q && !isRoot) ? true : node.expanded;
+                const rowHtml = `<div class="fm-tree-row fm-tree-dir${rel === this._cwd ? ' fm-tree-active' : ''}" data-path="${this.esc(rel)}"
+                                  style="padding-left:${6 + depth * 14}px"
+                                  ondragover="FileMgr.onDragOver(event)" ondragleave="FileMgr.onDragLeave(event)"
+                                  ondrop="FileMgr.onTreeDrop(event,'${this.esc(rel)}')">
+                                  <span class="fm-arrow" onclick="event.stopPropagation(); FileMgr.toggleTreeNode('${this.esc(rel)}')">${expanded ? '▼' : '▶'}</span>
+                                  <span class="fm-ico">📁</span>
+                                  <span class="fm-name" onclick="FileMgr.loadDir('${this.esc(rel)}')">${escapeHtml(node.name || '工作目录')}</span>
+                              </div>`;
+                if (!expanded) return rowHtml;
+                return rowHtml + dirRows + fileRows;
+            };
+            const html = build('', 0);
+            tree.innerHTML = html || '<div class="text-muted small p-2">无匹配目录</div>';
+        },
+
+        // ---- 上传 / 下载 / 重命名 / 删除 ----
+        async upload(files, targetDir) {
+            files = Array.from(files || []);
+            const dir = targetDir !== undefined ? targetDir : this._cwd;
+            if (!files.length) return;
+            for (const file of files) {
+                showStatus(`正在上传 ${file.name}...`, 'info');
+                const fd = new FormData();
+                fd.append('id', INSTANCE_ID);
+                fd.append('path', dir);
+                fd.append('file', file);
+                try {
+                    const resp = await fetch('/api/instances/file/upload', { method: 'POST', body: fd }).then(r => r.json());
+                    showStatus(resp.message || (resp.success ? '上传成功' : '上传失败'), resp.success ? 'success' : 'danger');
+                } catch { showStatus(`上传 ${file.name} 失败`, 'danger'); }
+            }
+            document.getElementById('fmUploadInput').value = '';
+            await this.refresh();
+        },
+
+        download(rel) {
+            const a = document.createElement('a');
+            a.href = `/api/instances/file/download?id=${encodeURIComponent(INSTANCE_ID)}&path=${encodeURIComponent(rel)}`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        },
+
+        async rename(oldRel) {
+            const oldName = oldRel.split('/').pop();
+            const newName = window.RtPanel && RtPanel.showPrompt
+                ? await RtPanel.showPrompt('重命名', '输入新名称', oldName)
+                : prompt('重命名为:', oldName);
+            if (!newName || newName === oldName) return;
+            if (/[\/\\]/.test(newName) || newName === '.' || newName === '..') {
+                showStatus('名称不能包含路径分隔符', 'warning');
+                return;
+            }
+            const newRel = oldRel.split('/').slice(0, -1).concat(newName).join('/');
+            const resp = await fetch('/api/instances/file/rename', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: INSTANCE_ID, oldPath: oldRel, newPath: newRel })
+            }).then(r => r.json());
+            showStatus(resp.message, resp.success ? 'success' : 'danger');
+            if (resp.success) await this.refresh();
+        },
+
+        async remove(rel, isDir) {
+            const msg = isDir
+                ? `确定删除文件夹「${this.esc(rel)}」？<br><br>文件夹内的全部内容将被一并删除，<b>此操作不可恢复</b>！`
+                : `确定删除「${this.esc(rel)}」？<br><br>此操作不可恢复。`;
+            const ok = window.RtPanel && RtPanel.showConfirm
+                ? await RtPanel.showConfirm(isDir ? '删除文件夹' : '删除文件', msg)
+                : confirm(isDir ? `确定删除文件夹「${rel}」? 文件夹内的全部内容将被一并删除!` : `确定删除「${rel}」?`);
+            if (!ok) return;
+            const resp = await fetch('/api/instances/file/delete', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: INSTANCE_ID, path: rel, recursive: !!isDir })
+            }).then(r => r.json());
+            showStatus(resp.message, resp.success ? 'success' : 'danger');
+            if (resp.success) await this.refresh();
+        },
+
+        // ---- 文本文件编辑(配置文件等) ----
+        async editFile(rel) {
+            const resp = await fetch(`/api/instances/file/read?id=${encodeURIComponent(INSTANCE_ID)}&path=${encodeURIComponent(rel)}`).then(r => r.json());
+            if (!resp.success) {
+                showStatus(resp.message || '读取失败', 'danger');
+                return;
+            }
+            this._openEditor(rel, resp.content || '', resp.sizeBytes);
+        },
+
+        _openEditor(rel, content, sizeBytes) {
+            const container = document.getElementById('modalContainer');
+            const overlay = document.createElement('div');
+            overlay.className = 'modal-overlay';
+            overlay.innerHTML = `
+                <div class="modal-box fm-editor-box">
+                    <h5>📝 编辑文件 - ${this.esc(rel)}</h5>
+                    <small class="text-muted d-block mb-2">${formatBytes(sizeBytes)} · 保存时自动备份原文件为 .bak</small>
+                    <textarea class="fm-editor-textarea" id="fmEditorText" spellcheck="false"></textarea>
+                    <div class="modal-actions">
+                        <button class="btn btn-secondary btn-sm" id="fmEditorCancel">取消</button>
+                        <button class="btn btn-primary btn-sm" id="fmEditorSave">保存 (Ctrl+S)</button>
+                    </div>
+                </div>`;
+            container.appendChild(overlay);
+            const ta = overlay.querySelector('#fmEditorText');
+            ta.value = content;
+            const close = () => overlay.remove();
+            overlay.querySelector('#fmEditorCancel').onclick = close;
+            overlay.onclick = (e) => { if (e.target === overlay) close(); };
+            const save = async () => {
+                const r = await fetch('/api/instances/file/write', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: INSTANCE_ID, path: rel, content: ta.value })
+                }).then(x => x.json());
+                showStatus(r.message, r.success ? 'success' : 'danger');
+                if (r.success) { close(); await this.refresh(); }
+            };
+            overlay.querySelector('#fmEditorSave').onclick = save;
+            ta.onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); } };
+            ta.focus();
+        },
+
+        // ---- 拖拽移动 ----
+        onDragStart(ev, rel, isDir) {
+            this._dragRel = rel;
+            this._dragIsDir = !!isDir;
+            ev.dataTransfer.effectAllowed = 'move';
+            ev.dataTransfer.setData('text/plain', rel);
+        },
+
+        onDragOver(ev) {
+            // 仅文件夹行/目录树行可作为移动目标; 非目标行不响应(浏览器也就不会触发 drop)
+            const t = ev.currentTarget;
+            if (!t.classList.contains('fm-tree-dir') && !t.classList.contains('fm-row-dir') && !t.classList.contains('fm-list-pane')) return;
+            if (!this._dragRel && !Array.from(ev.dataTransfer.types).includes('Files')) return;
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = this._dragRel ? 'move' : 'copy';
+            t.classList.add('fm-drop-hover');
+        },
+
+        onDragLeave(ev) {
+            ev.currentTarget.classList.remove('fm-drop-hover');
+        },
+
+        _finishDrop(ev, dstDir) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            ev.currentTarget.classList.remove('fm-drop-hover');
+            const files = ev.dataTransfer.files;
+            if (files && files.length) {
+                this.upload(files, dstDir);
+            } else if (this._dragRel) {
+                this.move(this._dragRel, dstDir);
+            }
+            this._dragRel = null;
+        },
+
+        onRowDrop(ev, dirRel) {
+            this._finishDrop(ev, dirRel);
+        },
+
+        onTreeDrop(ev, dirRel) {
+            this._finishDrop(ev, dirRel);
+        },
+
+        onPaneDragOver(ev) {
+            if (!this._dragRel && !Array.from(ev.dataTransfer.types).includes('Files')) return;
+            ev.preventDefault();
+            ev.dataTransfer.dropEffect = this._dragRel ? 'move' : 'copy';
+            ev.currentTarget.classList.add('fm-drop-hover');
+        },
+
+        onPaneDrop(ev) {
+            this._finishDrop(ev, this._cwd);
+        },
+
+        async move(srcRel, dstDir) {
+            const name = srcRel.split('/').pop();
+            const dstRel = dstDir ? `${dstDir}/${name}` : name;
+            if (srcRel === dstRel) return;
+            if (this._dragIsDir && dstRel.startsWith(srcRel + '/')) {
+                showStatus('不能将文件夹移动到其自身内部', 'warning');
+                return;
+            }
+            const resp = await fetch('/api/instances/file/rename', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: INSTANCE_ID, oldPath: srcRel, newPath: dstRel })
+            }).then(r => r.json());
+            showStatus(resp.success ? `已移动: ${name}` : resp.message, resp.success ? 'success' : 'danger');
+            if (resp.success) await this.refresh();
+        }
+    };
 
     // === 玩家事件监控 ===
     const EVENT_META = {

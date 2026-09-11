@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Grpc.Core;
 using System.Net.Http;
 using System.Text.Json;
 using RtCli.Grpc;
@@ -465,6 +466,179 @@ namespace RtPanel.Controllers
             var content = ms.ToArray();
 
             var resp = await _client.UploadJarFileAsync(id, file.FileName, type, content);
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+            return Ok(new { success = resp.Success, message = resp.Message });
+        }
+
+        // ===== 实例文件管理 =====
+
+        /// <summary>列出实例工作目录内指定目录的内容(path 为相对工作目录的路径, "" = 根)</summary>
+        [HttpGet("file/list")]
+        public async Task<IActionResult> FileList([FromQuery] string id, [FromQuery] string path = "")
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            var resp = await _client.ListInstanceDirAsync(id ?? "", path ?? "");
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+            var entries = resp.Entries.Select(e => new
+            {
+                name = e.Name,
+                isDir = e.IsDir,
+                sizeBytes = e.SizeBytes,
+                modifiedAt = e.ModifiedAt
+            }).ToList();
+            return Ok(new { success = resp.Success, message = resp.Message, workPath = resp.WorkPath, entries });
+        }
+
+        /// <summary>下载实例工作目录内的文件(流式转发, 不落盘)</summary>
+        [HttpGet("file/download")]
+        public async Task<IActionResult> FileDownload([FromQuery] string id, [FromQuery] string path)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            var call = _client.DownloadInstanceFile(id ?? "", path ?? "");
+            if (call == null)
+                return Ok(new { success = false, message = "请求失败" });
+
+            try
+            {
+                // 第一次 MoveNext 时服务端完成校验, 业务错误(文件不存在/非法路径)以 RpcException 抛出
+                if (!await call.ResponseStream.MoveNext(CancellationToken.None))
+                    return Ok(new { success = false, message = "文件为空" });
+
+                var fileName = Path.GetFileName((path ?? "file").Replace('\\', '/'));
+                Response.ContentType = "application/octet-stream";
+                Response.Headers["Content-Disposition"] = $"attachment; filename*=UTF-8''{Uri.EscapeDataString(fileName)}";
+                do
+                {
+                    var chunk = call.ResponseStream.Current;
+                    await Response.Body.WriteAsync(chunk.Data.ToByteArray());
+                    await Response.Body.FlushAsync();
+                }
+                while (await call.ResponseStream.MoveNext(CancellationToken.None));
+                return new EmptyResult();
+            }
+            catch (RpcException ex)
+            {
+                if (!Response.HasStarted)
+                    return Ok(new { success = false, message = string.IsNullOrEmpty(ex.Status.Detail) ? "下载失败" : ex.Status.Detail });
+                return new EmptyResult();
+            }
+            finally
+            {
+                call.Dispose();
+            }
+        }
+
+        /// <summary>上传文件到实例工作目录(1MB 分块转发 gRPC, 避免单消息大小限制)</summary>
+        [HttpPost("file/upload")]
+        [RequestSizeLimit(1024L * 1024 * 1024)]
+        [RequestFormLimits(MultipartBodyLengthLimit = 1024L * 1024 * 1024)]
+        public async Task<IActionResult> FileUpload([FromForm] string id, [FromForm] string? path, IFormFile file)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            if (file == null || file.Length == 0)
+                return Ok(new { success = false, message = "未选择文件" });
+
+            var fileName = Path.GetFileName((file.FileName ?? "").Replace('\\', '/'));
+            if (string.IsNullOrWhiteSpace(fileName))
+                return Ok(new { success = false, message = "非法文件名" });
+            var relPath = string.IsNullOrWhiteSpace(path)
+                ? fileName
+                : $"{path.Trim().Replace('\\', '/').Trim('/')}/{fileName}";
+
+            const int chunkSize = 1024 * 1024;
+            var buffer = new byte[chunkSize];
+            long offset = 0;
+            await using var stream = file.OpenReadStream();
+            while (true)
+            {
+                int read = 0;
+                while (read < chunkSize)
+                {
+                    var n = await stream.ReadAsync(buffer, read, chunkSize - read);
+                    if (n == 0) break;
+                    read += n;
+                }
+                bool final = read < chunkSize; // 不足一块即文件读完, 本块为最后一块
+                var resp = await _client.UploadInstanceFileChunkAsync(id ?? "", relPath, offset, buffer[..read], final);
+                if (resp == null)
+                    return Ok(new { success = false, message = "上传请求失败" });
+                if (!resp.Success)
+                    return Ok(new { success = resp.Success, message = resp.Message });
+                offset += read;
+                if (final) break;
+            }
+            return Ok(new { success = true, message = $"已上传: {fileName}" });
+        }
+
+        public class FileDeletePayload
+        {
+            public string Id { get; set; } = "";
+            public string Path { get; set; } = "";
+            public bool Recursive { get; set; }
+        }
+
+        /// <summary>删除实例工作目录内的文件或目录</summary>
+        [HttpPost("file/delete")]
+        public async Task<IActionResult> FileDelete([FromBody] FileDeletePayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            var resp = await _client.DeleteInstanceEntryAsync(payload.Id, payload.Path, payload.Recursive);
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+            return Ok(new { success = resp.Success, message = resp.Message });
+        }
+
+        public class FileRenamePayload
+        {
+            public string Id { get; set; } = "";
+            public string OldPath { get; set; } = "";
+            public string NewPath { get; set; } = "";
+        }
+
+        /// <summary>重命名/移动实例工作目录内的文件或目录(移动 = 跨目录重命名)</summary>
+        [HttpPost("file/rename")]
+        public async Task<IActionResult> FileRename([FromBody] FileRenamePayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            var resp = await _client.RenameInstanceEntryAsync(payload.Id, payload.OldPath, payload.NewPath);
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+            return Ok(new { success = resp.Success, message = resp.Message });
+        }
+
+        /// <summary>读取实例工作目录内的文本文件内容(供面板编辑, 拒绝二进制/超大文件)</summary>
+        [HttpGet("file/read")]
+        public async Task<IActionResult> FileRead([FromQuery] string id, [FromQuery] string path)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            var resp = await _client.ReadInstanceTextFileAsync(id ?? "", path ?? "");
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+            return Ok(new { success = resp.Success, message = resp.Message, content = resp.Content, sizeBytes = resp.SizeBytes });
+        }
+
+        public class FileWritePayload
+        {
+            public string Id { get; set; } = "";
+            public string Path { get; set; } = "";
+            public string Content { get; set; } = "";
+        }
+
+        /// <summary>保存实例工作目录内的文本文件内容(服务端自动备份原文件为 .bak)</summary>
+        [HttpPost("file/write")]
+        public async Task<IActionResult> FileWrite([FromBody] FileWritePayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            var resp = await _client.WriteInstanceTextFileAsync(payload.Id, payload.Path, payload.Content);
             if (resp == null)
                 return Ok(new { success = false, message = "请求失败" });
             return Ok(new { success = resp.Success, message = resp.Message });

@@ -18,14 +18,14 @@ namespace RtPanel.Controllers
             _schema = schema;
         }
 
-        /// <summary>列出当前 MC 服务端工作目录下可编辑的配置文件。</summary>
+        /// <summary>列出 MC 服务端工作目录下可编辑的配置文件(可指定 serverKey, 留空为 RtCli 当前服务器)。</summary>
         [HttpGet("list")]
-        public async Task<IActionResult> List()
+        public async Task<IActionResult> List([FromQuery] string? serverKey = null)
         {
             if (!_client.IsConnected)
                 return Ok(new { success = false, message = "未连接到服务器" });
 
-            var response = await _client.ListServerFilesAsync();
+            var response = await _client.ListServerFilesAsync(serverKey ?? "");
             if (response == null)
                 return Ok(new { success = false, message = "请求失败" });
 

@@ -24,6 +24,8 @@ namespace RtPanel.Services
 
         public bool IsConnected { get; private set; }
         public string? ConnectedServerName => _connectedServerName;
+        /// <summary>连接成功时从 GetServerInfo 获取的 RtCli 版本号</summary>
+        public string? ConnectedRtCliVersion { get; private set; }
         public string? AuthKey { get; private set; }
         public string? Host { get; private set; }
         public int Port { get; private set; }
@@ -110,6 +112,7 @@ namespace RtPanel.Services
                     deadline: DateTime.UtcNow.AddSeconds(5));
 
                 _connectedServerName = info.ServerName;
+                ConnectedRtCliVersion = info.Version;
                 IsConnected = true;
                 LastError = null;
 
@@ -423,12 +426,12 @@ namespace RtPanel.Services
             catch { MarkDisconnected(); return null; }
         }
 
-        public async Task<ServerFileListResponse?> ListServerFilesAsync()
+        public async Task<ServerFileListResponse?> ListServerFilesAsync(string serverKey = "")
         {
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.ListServerFilesAsync(new Empty(),
+                return await _client.ListServerFilesAsync(new ServerFileListRequest { ServerKey = serverKey ?? "" },
                     headers: GetAuthHeaders(),
                     deadline: DateTime.UtcNow.AddSeconds(5));
             }
@@ -635,6 +638,29 @@ namespace RtPanel.Services
             catch { MarkDisconnected(); return null; }
         }
 
+        // ===== 事件板 =====
+
+        public async Task<EventBoardResponse?> GetEventBoardAsync(int limit = 0)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetEventBoardAsync(new EventBoardRequest { Limit = limit }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> MarkEventBoardReadAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.MarkEventBoardReadAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> ClearEventBoardAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ClearEventBoardAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
         public async Task<JarFileListResponse?> ListPluginsAsync(string id)
         {
             if (_client == null || !IsConnected) return null;
@@ -667,6 +693,71 @@ namespace RtPanel.Services
         {
             if (_client == null || !IsConnected) return null;
             try { return await _client.UploadJarFileAsync(new UploadJarFileRequest { Id = id ?? "", FileName = fileName, Type = type, Content = Google.Protobuf.ByteString.CopyFrom(content) }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(60)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== 实例文件管理 =====
+
+        public async Task<InstanceDirResponse?> ListInstanceDirAsync(string id, string relPath)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ListInstanceDirAsync(new InstanceDirRequest { Id = id ?? "", RelPath = relPath ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        /// <summary>打开实例文件下载流(服务器流式)。业务错误(文件不存在等)在遍历流时以 RpcException 抛出, 由调用方处理。</summary>
+        public AsyncServerStreamingCall<FileDataChunk>? DownloadInstanceFile(string id, string relPath)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return _client.DownloadInstanceFile(new InstanceFileRequest { Id = id ?? "", RelPath = relPath ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddMinutes(30));
+            }
+            catch { return null; }
+        }
+
+        public async Task<SimpleResponse?> UploadInstanceFileChunkAsync(string id, string relPath, long offset, byte[] data, bool final)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.UploadInstanceFileChunkAsync(new InstanceFileChunkRequest
+                {
+                    Id = id ?? "",
+                    RelPath = relPath ?? "",
+                    Offset = offset,
+                    Data = Google.Protobuf.ByteString.CopyFrom(data),
+                    Final = final
+                }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(60));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> DeleteInstanceEntryAsync(string id, string relPath, bool recursive)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.DeleteInstanceEntryAsync(new InstanceEntryRequest { Id = id ?? "", RelPath = relPath ?? "", Recursive = recursive }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(120)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> RenameInstanceEntryAsync(string id, string oldPath, string newPath)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.RenameInstanceEntryAsync(new InstanceRenameRequest { Id = id ?? "", OldPath = oldPath ?? "", NewPath = newPath ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<InstanceTextFileResponse?> ReadInstanceTextFileAsync(string id, string relPath)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ReadInstanceTextFileAsync(new InstanceFileRequest { Id = id ?? "", RelPath = relPath ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> WriteInstanceTextFileAsync(string id, string relPath, string content)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.WriteInstanceTextFileAsync(new InstanceTextFileWriteRequest { Id = id ?? "", RelPath = relPath ?? "", Content = content ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(60)); }
             catch { MarkDisconnected(); return null; }
         }
 

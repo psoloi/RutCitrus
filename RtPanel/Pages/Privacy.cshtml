@@ -1,8 +1,52 @@
-﻿@page
+@page
 @model PrivacyModel
 @{
-    ViewData["Title"] = "Privacy Policy";
+    ViewData["Title"] = "关于详情";
 }
-<h1>@ViewData["Title"]</h1>
 
-<p>Use this page to detail your site's privacy policy.</p>
+<div class="card mt-4">
+    <div class="card-header">
+        <span class="text-sky fw-bold">关于 RutCitrus</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            RtPanel v@(Model.PanelVersion)
+            @if (!string.IsNullOrEmpty(Model.RtCliVersion))
+            {
+                <span> · RtCli v@Model.RtCliVersion</span>
+            }
+        </p>
+        <div class="mb-4">
+            <h5 class="text-info">项目简介</h5>
+            <p>
+                RutCitrus 是一套面向 Minecraft 服务端的开源自动化管理工具集，由 <strong>RtCli</strong>（命令行主程序）与 <strong>RtPanel</strong>（Web 管理面板）两部分组成。
+                RtCli 负责进程管理、日志分析、自动重启、计划任务等底层能力；RtPanel 提供可视化的实例管理、文件浏览、状态监控与远程控制界面。
+            </p>
+            <p>
+                面板通过 gRPC+TLS 与 RtCli 安全通信，采用 TOFU（Trust On First Use）证书指纹校验，防止同网段中间人攻击。所有敏感信息（RCON 密码、管理令牌、认证密钥）在日志中自动脱敏。
+            </p>
+        </div>
+
+        <div class="mb-4">
+            <h5 class="text-info">隐私说明</h5>
+            <p>RutPanel 不会主动将任何本地数据上传至第三方服务器。以下为数据流转范围：</p>
+            <ul>
+                <li><strong>本地存储</strong>：面板设置、主题、自定义命令等保存于 <code>panel_data.json</code>；证书指纹记录于 <code>known_hosts.json</code>。</li>
+                <li><strong>组件间通信</strong>：面板与 RtCli 之间通过 gRPC（默认 TLS）通信；若启用 Bridge REST API，默认仅监听 localhost。</li>
+                <li><strong>检查更新</strong>：设置页点击"检查更新"会向 <code>api.github.com</code> 发起 GET 请求以获取最新版本标签，不携带除 User-Agent 外的任何信息。</li>
+                <li><strong>日志分享</strong>：控制台"分享到 mclo.gs"功能会将当前 MC 服务端日志通过 HTTPS POST 上传至 mclo.gs 公开服务，上传前请确认日志内容不含敏感信息。</li>
+                <li><strong>认证 Cookie</strong>：登录票据通过 HttpOnly Cookie 存储，SameSite=Lax，不启用 HTTPS 时未标记 Secure，请勿在公网以明文 HTTP 暴露面板。</li>
+            </ul>
+        </div>
+
+        <div class="mb-2">
+            <h5 class="text-info">第三方依赖</h5>
+            <p class="text-muted small">本项目基于 .NET 8 / ASP.NET Core / gRPC / Bootstrap 构建，完整依赖清单请参见项目文件。</p>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center mt-4">
+            <a href="https://github.com/psoloi/RutCitrus" target="_blank" rel="noopener" class="btn btn-outline-info btn-sm">GitHub 仓库</a>
+            <a href="/Settings" class="btn btn-outline-secondary btn-sm">返回设置</a>
+        </div>
+    </div>
+</div>

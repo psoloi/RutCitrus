@@ -93,6 +93,9 @@ namespace RtCli.Modules.Unit
             // 启动玩家事件记录器(订阅 EventBus, 持久化到 panel_data.json)
             PlayerEventRecorder.Start();
 
+            // 启动事件板记录器(订阅实例生命周期事件, 持久化到 panel_data.json)
+            BoardEventRecorder.Start();
+
             Output.Log("面板后端适配层已初始化", 1, "Backend");
         }
 
@@ -1321,8 +1324,11 @@ namespace RtCli.Modules.Unit
                         case "stop":
                             if (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached)
                             {
-                                Function.Analyzer.StopServer();
-                                results.Add($"[{id}] 已停止");
+                                // 面板路径: 立即返回, 后台看门狗监测无响应(不自动强杀)
+                                var stopRes = Function.Analyzer.StopServer(killOnTimeout: false, asyncReturn: true);
+                                results.Add(stopRes == Function.Analyzer.StopResult.NotRunning
+                                    ? $"[{id}] 未运行, 跳过"
+                                    : $"[{id}] 停止指令已发送, 若服务端无响应可在事件板强制关闭(可能丢失数据)");
                             }
                             else
                             {
@@ -1330,10 +1336,23 @@ namespace RtCli.Modules.Unit
                             }
                             break;
 
+                        case "force_stop":
+                            if (Function.Analyzer.HasManagedProcess)
+                            {
+                                Function.Analyzer.ForceKillServer();
+                                results.Add($"[{id}] 已强制关闭");
+                            }
+                            else
+                            {
+                                results.Add($"[{id}] 无本地托管进程(远程模式?), 请在服务器控制台操作");
+                            }
+                            break;
+
                         case "restart":
                             if (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached)
                             {
-                                Function.Analyzer.StopServer();
+                                // 重启前必须确保进程结束: 保留超时强杀兜底
+                                Function.Analyzer.StopServer(killOnTimeout: true);
                                 System.Threading.Thread.Sleep(2000);
                             }
                             Function.Analyzer.StartServer();
@@ -1589,6 +1608,251 @@ namespace RtCli.Modules.Unit
 
         public static (bool Success, string Message) UploadMod(string serverKey, string fileName, byte[] content)
             => UploadJarFile(serverKey, "mods", fileName, content);
+
+        // ===== 实例文件管理 API (工作目录为根, 禁止越界) =====
+
+        /// <summary>
+        /// 解析工作目录内的相对路径并校验越界。
+        /// 拒绝 ".."/盘符等片段, 返回 GetFullPath 后的绝对路径; 非法时返回 null。
+        /// </summary>
+        private static string? ResolveInstancePath(string serverKey, string? relPath, out string workPath, out string error)
+        {
+            error = "";
+            workPath = "";
+            var root = ResolveWorkPath(serverKey);
+            if (root == null)
+            {
+                error = "服务端工作目录未配置或不存在";
+                return null;
+            }
+            workPath = root;
+
+            var rel = (relPath ?? "").Trim().Replace('\\', '/').Trim('/');
+            if (rel.Length == 0) return root;
+
+            var parts = rel.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length == 0 || parts.Any(p => p == "." || p == ".." || p.EndsWith(":", StringComparison.Ordinal)))
+            {
+                error = "非法路径";
+                return null;
+            }
+            var full = Path.GetFullPath(Path.Combine(root, Path.Combine(parts)));
+            if (!IsWithinRoot(root, full))
+            {
+                error = "非法路径";
+                return null;
+            }
+            return full;
+        }
+
+        /// <summary>列出工作目录内指定目录的条目(目录在前, 各按名称排序)。</summary>
+        public static (bool Success, string Message, string WorkPath, List<(string Name, bool IsDir, long SizeBytes, string ModifiedAt)> Entries)
+            ListInstanceDirectory(string serverKey, string relPath)
+        {
+            try
+            {
+                var dirPath = ResolveInstancePath(serverKey, relPath, out var workPath, out var err);
+                if (dirPath == null) return (false, err, "", new List<(string, bool, long, string)>());
+                if (!Directory.Exists(dirPath)) return (false, $"目录不存在: {relPath}", workPath, new List<(string, bool, long, string)>());
+
+                var entries = new List<(string Name, bool IsDir, long SizeBytes, string ModifiedAt)>();
+                foreach (var d in Directory.GetDirectories(dirPath))
+                    entries.Add((Path.GetFileName(d), true, 0, Directory.GetLastWriteTime(d).ToString("yyyy-MM-dd HH:mm:ss")));
+                foreach (var f in Directory.GetFiles(dirPath))
+                {
+                    if (f.EndsWith(".rtupload.tmp", StringComparison.OrdinalIgnoreCase)) continue; // 上传临时文件不展示
+                    var fi = new FileInfo(f);
+                    entries.Add((fi.Name, false, fi.Length, fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")));
+                }
+                var sorted = entries.OrderBy(e => !e.IsDir).ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList();
+                return (true, "OK", workPath, sorted);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"列目录失败: {ex.Message}", "", new List<(string, bool, long, string)>());
+            }
+        }
+
+        /// <summary>校验并打开工作目录内文件用于流式下载(共享读写, 兼容服务端正在写日志)。调用方负责释放流。</summary>
+        public static (bool Success, string Message, FileStream? Stream, string FileName)
+            OpenInstanceFileForRead(string serverKey, string relPath)
+        {
+            try
+            {
+                var p = ResolveInstancePath(serverKey, relPath, out _, out var err);
+                if (p == null) return (false, err, null, "");
+                if (Directory.Exists(p)) return (false, "不能下载目录", null, "");
+                if (!File.Exists(p)) return (false, $"文件不存在: {relPath}", null, "");
+                var fs = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                return (true, "OK", fs, Path.GetFileName(p));
+            }
+            catch (Exception ex)
+            {
+                return (false, $"打开文件失败: {ex.Message}", null, "");
+            }
+        }
+
+        /// <summary>
+        /// 分块写入工作目录内文件(面板上传)。
+        /// offset=0 时创建/截断临时文件; 否则校验临时文件长度与 offset 连续后追加;
+        /// final=true 时将临时文件提交为正式文件。
+        /// </summary>
+        public static (bool Success, string Message) WriteInstanceFileChunk(string serverKey, string relPath, long offset, byte[] data, bool final)
+        {
+            try
+            {
+                var p = ResolveInstancePath(serverKey, relPath, out _, out var err);
+                if (p == null) return (false, err);
+                if (Directory.Exists(p)) return (false, "目标路径是目录");
+
+                var tempPath = p + ".rtupload.tmp";
+                if (offset == 0)
+                {
+                    var dir = Path.GetDirectoryName(p);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                    using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                        fs.Write(data, 0, data.Length);
+                }
+                else
+                {
+                    if (!File.Exists(tempPath)) return (false, "上传会话丢失, 请重新上传");
+                    if (new FileInfo(tempPath).Length != offset) return (false, "上传偏移不连续, 请重新上传");
+                    using var fs = new FileStream(tempPath, FileMode.Append, FileAccess.Write, FileShare.None);
+                    fs.Write(data, 0, data.Length);
+                }
+
+                if (final)
+                {
+                    File.Move(tempPath, p, overwrite: true);
+                    Output.Log($"实例文件 [{Markup.Escape(relPath ?? "")}] 已由面板上传", 1, "Backend");
+                }
+                return (true, "OK");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"写入失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>删除工作目录内的文件或目录(拒绝删除根目录)。</summary>
+        public static (bool Success, string Message) DeleteInstanceEntry(string serverKey, string relPath, bool recursive)
+        {
+            try
+            {
+                var p = ResolveInstancePath(serverKey, relPath, out var workPath, out var err);
+                if (p == null) return (false, err);
+
+                var rootFull = Path.GetFullPath(workPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.Equals(p, rootFull, StringComparison.OrdinalIgnoreCase))
+                    return (false, "不能删除工作目录根目录");
+
+                if (Directory.Exists(p))
+                {
+                    if (!recursive && Directory.EnumerateFileSystemEntries(p).Any())
+                        return (false, "目录非空, 请确认递归删除");
+                    Directory.Delete(p, recursive);
+                    Output.Log($"实例目录 [{Markup.Escape(relPath ?? "")}] 已由面板删除", 1, "Backend");
+                    return (true, $"已删除目录: {relPath}");
+                }
+                if (File.Exists(p))
+                {
+                    File.Delete(p);
+                    Output.Log($"实例文件 [{Markup.Escape(relPath ?? "")}] 已由面板删除", 1, "Backend");
+                    return (true, $"已删除: {relPath}");
+                }
+                return (false, $"不存在: {relPath}");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"删除失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>重命名/移动工作目录内的文件或目录(拒绝操作根目录, 目标已存在时拒绝)。</summary>
+        public static (bool Success, string Message) RenameInstanceEntry(string serverKey, string oldRel, string newRel)
+        {
+            try
+            {
+                var oldPath = ResolveInstancePath(serverKey, oldRel, out var workPath, out var err);
+                if (oldPath == null) return (false, err);
+                var newPath = ResolveInstancePath(serverKey, newRel, out _, out err);
+                if (newPath == null) return (false, err);
+
+                var rootFull = Path.GetFullPath(workPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.Equals(oldPath, rootFull, StringComparison.OrdinalIgnoreCase))
+                    return (false, "不能重命名工作目录根目录");
+                if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
+                    return (false, "路径未变化");
+
+                bool isDir = Directory.Exists(oldPath);
+                if (!isDir && !File.Exists(oldPath)) return (false, $"不存在: {oldRel}");
+                if (Directory.Exists(newPath) || File.Exists(newPath)) return (false, $"目标已存在: {newRel}");
+
+                var targetDir = Path.GetDirectoryName(newPath);
+                if (!string.IsNullOrEmpty(targetDir) && !Directory.Exists(targetDir)) return (false, "目标目录不存在");
+
+                if (isDir) Directory.Move(oldPath, newPath);
+                else File.Move(oldPath, newPath);
+                Output.Log($"实例条目 [{Markup.Escape(oldRel ?? "")}] 已由面板重命名/移动为 [{Markup.Escape(newRel ?? "")}]", 1, "Backend");
+                return (true, "OK");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"重命名失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>可编辑文本文件大小上限(2MB)。</summary>
+        private const int MaxEditableFileBytes = 2 * 1024 * 1024;
+
+        /// <summary>读取工作目录内文本文件内容(供面板编辑)。拒绝目录与二进制内容(检测 0x00 字节)。</summary>
+        public static (bool Success, string Message, string Content, long SizeBytes)
+            ReadInstanceTextFile(string serverKey, string relPath)
+        {
+            try
+            {
+                var p = ResolveInstancePath(serverKey, relPath, out _, out var err);
+                if (p == null) return (false, err, "", 0);
+                if (Directory.Exists(p)) return (false, "目标路径是目录", "", 0);
+                if (!File.Exists(p)) return (false, $"文件不存在: {relPath}", "", 0);
+
+                var fi = new FileInfo(p);
+                if (fi.Length > MaxEditableFileBytes)
+                    return (false, $"文件过大({fi.Length} 字节), 仅支持编辑不超过 {MaxEditableFileBytes / 1024 / 1024} MB 的文本文件", "", fi.Length);
+                var bytes = File.ReadAllBytes(p);
+                if (bytes.Length > 0 && Array.IndexOf(bytes, (byte)0) >= 0)
+                    return (false, "检测到二进制内容, 不支持在面板编辑", "", fi.Length);
+                return (true, "OK", Encoding.UTF8.GetString(bytes), fi.Length);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"读取失败: {ex.Message}", "", 0);
+            }
+        }
+
+        /// <summary>保存工作目录内文本文件内容(自动备份原文件为 .bak)。</summary>
+        public static (bool Success, string Message) WriteInstanceTextFile(string serverKey, string relPath, string content)
+        {
+            try
+            {
+                var p = ResolveInstancePath(serverKey, relPath, out _, out var err);
+                if (p == null) return (false, err);
+                if (Directory.Exists(p)) return (false, "目标路径是目录");
+
+                var size = Encoding.UTF8.GetByteCount(content);
+                if (size > MaxEditableFileBytes)
+                    return (false, $"内容过大({size} 字节), 超出可编辑上限");
+
+                if (File.Exists(p)) File.Copy(p, p + ".bak", true);
+                AtomicFile.WriteAllText(p, content);
+                Output.Log($"实例文件 [{Markup.Escape(relPath ?? "")}] 已由面板编辑保存", 1, "Backend");
+                return (true, $"{Path.GetFileName(relPath)} 已保存(部分配置需服务端重启生效)");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"保存失败: {ex.Message}");
+            }
+        }
 
         // ===== 玩家管理 API =====
 
@@ -2028,6 +2292,106 @@ namespace RtCli.Modules.Unit
                 _buffer.Remove(instanceId);
             }
             return PanelDataManager.ClearPlayerEvents(instanceId);
+        }
+    }
+
+    /// <summary>
+    /// 事件板记录器: 订阅实例生命周期事件(开启/关闭/崩溃/自动重启/stop无响应),
+    /// 缓冲后批量写入 panel_data.json 的 boardEvents 节点, 供面板事件板展示。
+    /// </summary>
+    public static class BoardEventRecorder
+    {
+        private static bool _started = false;
+        private static readonly object _lock = new();
+        // 内存缓冲: 减少磁盘写入频率
+        private static readonly List<BoardEventEntry> _buffer = new();
+        private static Timer? _flushTimer;
+        private const int FlushIntervalMs = 5000; // 5秒批量写入一次
+
+        public static void Start()
+        {
+            lock (_lock)
+            {
+                if (_started) return;
+                _started = true;
+
+                EventBus.Subscribe<ServerStartEvent>(OnServerStart);
+                EventBus.Subscribe<ServerStopEvent>(OnServerStop);
+                EventBus.Subscribe<ServerCrashEvent>(OnServerCrash);
+                EventBus.Subscribe<AutoRestartEvent>(OnAutoRestart);
+                EventBus.Subscribe<ServerStopUnresponsiveEvent>(OnStopUnresponsive);
+
+                _flushTimer = new Timer(_ => FlushAll(), null, FlushIntervalMs, FlushIntervalMs);
+                Output.Log("事件板记录器已启动", 1, "BoardEventRecorder");
+            }
+        }
+
+        private static string ResolveInstanceName(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return "";
+            return Config.App.ServerList.TryGetValue(key, out var entry) && !string.IsNullOrWhiteSpace(entry.ServerName)
+                ? entry.ServerName
+                : key;
+        }
+
+        private static void Buffer(string eventType, string instanceId, string title, string detail)
+        {
+            if (string.IsNullOrEmpty(instanceId)) return;
+            var entry = new BoardEventEntry
+            {
+                EventType = eventType,
+                InstanceId = instanceId,
+                InstanceName = ResolveInstanceName(instanceId),
+                Title = title,
+                Detail = detail ?? "",
+                RecordedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss")
+            };
+            lock (_buffer)
+            {
+                _buffer.Add(entry);
+                // 内存缓冲上限, 防止突发流量内存溢出
+                if (_buffer.Count > 100)
+                    _buffer.RemoveRange(0, _buffer.Count - 100);
+            }
+        }
+
+        private static void OnServerStart(ServerStartEvent e) =>
+            Buffer("started", e.ServerKey, I18n.Get("board_event_started"), $"模式 {Function.Analyzer.CurrentMode}");
+
+        private static void OnServerStop(ServerStopEvent e) =>
+            Buffer("stopped", e.ServerKey, I18n.Get("board_event_stopped"), "");
+
+        private static void OnServerCrash(ServerCrashEvent e) =>
+            Buffer("crashed", e.ServerKey, I18n.Get("board_event_crashed"),
+                I18n.Get("board_event_crashed_detail", e.ExitCode));
+
+        private static void OnAutoRestart(AutoRestartEvent e) =>
+            Buffer("auto_restarted", e.ServerKey, I18n.Get("board_event_auto_restarted"),
+                I18n.Get("board_event_auto_restarted_detail", e.AttemptCount,
+                    e.MaxRetries > 0 ? e.MaxRetries.ToString() : I18n.Get("board_event_retry_unlimited")));
+
+        private static void OnStopUnresponsive(ServerStopUnresponsiveEvent e) =>
+            Buffer("stop_unresponsive", e.ServerKey, I18n.Get("board_event_stop_unresponsive"),
+                I18n.Get("board_event_stop_unresponsive_detail", e.WaitedSeconds,
+                    e.HadLogActivity
+                        ? I18n.Get("board_event_unresponsive_slow")
+                        : I18n.Get("board_event_unresponsive_silent")));
+
+        /// <summary>将内存缓冲的事件批量写入磁盘</summary>
+        private static void FlushAll()
+        {
+            List<BoardEventEntry> snapshot;
+            lock (_buffer)
+            {
+                if (_buffer.Count == 0) return;
+                snapshot = _buffer.ToList();
+                _buffer.Clear();
+            }
+            foreach (var entry in snapshot)
+            {
+                try { PanelDataManager.AppendBoardEvent(entry); }
+                catch (Exception ex) { Output.Log($"写入事件板失败: {ex.Message}", 3, "BoardEventRecorder"); }
+            }
         }
     }
 }

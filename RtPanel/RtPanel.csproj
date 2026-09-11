@@ -10,6 +10,7 @@
     <Description>RutCitrus 管理面板</Description>
     <UserSecretsId>c8d00b30-3f96-43fc-bccf-b17609e7773a</UserSecretsId>
     <ApplicationIcon>rc.ico</ApplicationIcon>
+    <Version>1.9.3</Version>
   </PropertyGroup>
 
   <ItemGroup>

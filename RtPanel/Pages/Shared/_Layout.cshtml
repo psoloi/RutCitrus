@@ -83,9 +83,9 @@
     </style>
 </head>
 <body>
-    <header>
-        <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-dark border-bottom box-shadow mb-3">
-            <div class="container">
+    <header class="island-header">
+        <nav class="navbar navbar-expand-sm navbar-dark island-nav">
+            <div class="container island-inner">
                 <a class="navbar-brand" asp-area="" asp-page="/Index">
                     <span class="brand-block" aria-hidden="true"></span>Rt<span class="brand-sky">Panel</span>
                 </a>
@@ -94,7 +94,7 @@
                     <span class="navbar-toggler-icon"></span>
                 </button>
                 <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
-                    <ul class="navbar-nav flex-grow-1">
+                    <ul class="navbar-nav flex-grow-1 align-items-sm-center">
                         <li class="nav-item">
                             <a class="nav-link" asp-area="" asp-page="/Index">主页</a>
                         </li>
@@ -114,7 +114,7 @@
                             <a class="nav-link" asp-area="" asp-page="/Settings">设置</a>
                         </li>
                     </ul>
-                    <ul class="navbar-nav align-items-center">
+                    <ul class="navbar-nav align-items-center island-actions">
                         <li class="nav-item me-2">
                             <span id="globalConnStatus" class="badge bg-secondary" style="font-size:0.85em;padding:6px 12px;border-radius:12px;">未连接</span>
                         </li>
@@ -123,6 +123,19 @@
                                     title="切换亮色/暗色主题" onclick="toggleTheme()">
                                 <span id="themeIcon">🌙</span>
                             </button>
+                        </li>
+                        <li class="nav-item me-2 event-board-wrap">
+                            <button class="btn btn-sm btn-outline-secondary event-board-btn" id="eventBoardBtn"
+                                    title="事件板" onclick="event.stopPropagation(); EventBoard.toggle();">
+                                <span aria-hidden="true">📋</span><span class="event-board-badge" id="eventBoardBadge" hidden>0</span>
+                            </button>
+                            <div class="event-board-panel" id="eventBoardPanel" hidden>
+                                <div class="event-board-head">
+                                    <span class="event-board-title">事件板</span>
+                                    <button class="btn btn-sm btn-outline-secondary event-board-clear" onclick="EventBoard.clearAll()">清空</button>
+                                </div>
+                                <div class="event-board-list" id="eventBoardList"></div>
+                            </div>
                         </li>
                         <li class="nav-item">
                             <button class="btn btn-sm btn-outline-danger" onclick="logout()">登出</button>
@@ -193,7 +206,7 @@
                 });
             },
 
-            showPrompt(title, placeholder = '') {
+            showPrompt(title, placeholder = '', defaultValue = '') {
                 return new Promise(resolve => {
                     const container = document.getElementById('modalContainer');
                     const overlay = document.createElement('div');
@@ -201,7 +214,7 @@
                     overlay.innerHTML = `
                         <div class="modal-box">
                             <h5>${title}</h5>
-                            <input type="text" id="modalInput" placeholder="${placeholder}" />
+                            <input type="text" id="modalInput" class="form-control form-control-sm" placeholder="${placeholder}" />
                             <div class="modal-actions">
                                 <button class="btn btn-secondary btn-sm" id="modalCancel">取消</button>
                                 <button class="btn btn-primary btn-sm" id="modalConfirm">确定</button>
@@ -209,7 +222,9 @@
                         </div>`;
                     container.appendChild(overlay);
                     const input = overlay.querySelector('#modalInput');
+                    input.value = defaultValue;
                     input.focus();
+                    input.select();
                     input.onkeydown = (e) => { if (e.key === 'Enter') { overlay.remove(); resolve(input.value); } };
                     overlay.querySelector('#modalConfirm').onclick = () => { overlay.remove(); resolve(input.value); };
                     overlay.querySelector('#modalCancel').onclick = () => { overlay.remove(); resolve(null); };
@@ -280,6 +295,180 @@
 
         // 初始化图标与已存主题一致
         applyThemeIcon();
+
+        // 导航岛当前页高亮: 按路径匹配 nav-link 并标记 active
+        (function () {
+            var path = window.location.pathname.toLowerCase().replace(/\/+$/, '') || '/';
+            document.querySelectorAll('.island-nav .navbar-nav .nav-link[href]').forEach(function (a) {
+                var target = (a.getAttribute('href') || '').toLowerCase().replace(/\/+$/, '') || '/';
+                var isRoot = target === '/';
+                if (isRoot ? path === '/' : (path === target || path.startsWith(target + '/'))) {
+                    a.classList.add('active');
+                }
+            });
+        })();
+
+        // === 事件板(VSCode 通知中心式下拉) ===
+        window.EventBoard = {
+            _timer: null,
+            _events: [],
+            _unread: 0,
+
+            start() {
+                // 仅登录后布局(存在事件板按钮)时启动轮询; 登录页/失败均静默
+                if (this._timer || !document.getElementById('eventBoardBtn')) return;
+                this.refresh();
+                this._timer = setInterval(() => this.refresh(), 6000);
+            },
+
+            async refresh() {
+                const btn = document.getElementById('eventBoardBtn');
+                if (!btn) return;
+                try {
+                    const r = await fetch('/api/events/list?limit=100');
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    if (!data.success) return;
+                    // 服务端按时间正序存储, 展示时最新在前
+                    this._events = (data.events || []).slice().reverse();
+                    this._unread = data.unreadCount || 0;
+                    this.updateBadge();
+                    if (this.isOpen()) this.render();
+                } catch { /* 断连等静默 */ }
+            },
+
+            updateBadge() {
+                const badge = document.getElementById('eventBoardBadge');
+                if (!badge) return;
+                if (this._unread > 0) {
+                    badge.textContent = this._unread > 99 ? '99+' : this._unread;
+                    badge.hidden = false;
+                } else {
+                    badge.hidden = true;
+                }
+            },
+
+            isOpen() {
+                const p = document.getElementById('eventBoardPanel');
+                return !!p && !p.hidden;
+            },
+
+            async toggle() {
+                const p = document.getElementById('eventBoardPanel');
+                if (!p) return;
+                if (p.hidden) {
+                    p.hidden = false;
+                    this.render();
+                    this._unread = 0;
+                    this.updateBadge();
+                    try { await fetch('/api/events/read', { method: 'POST' }); } catch { }
+                } else {
+                    p.hidden = true;
+                }
+            },
+
+            async clearAll() {
+                if (!await RtPanel.showConfirm('清空事件板', '确定清空全部事件记录吗？')) return;
+                try {
+                    const r = await fetch('/api/events/clear', { method: 'POST' });
+                    if (r.ok) {
+                        this._events = [];
+                        this._unread = 0;
+                        this.updateBadge();
+                        this.render();
+                        RtPanel.showToast('事件板已清空', 'success');
+                    }
+                } catch { RtPanel.showToast('清空失败', 'error'); }
+            },
+
+            typeMeta(type) {
+                switch (type) {
+                    case 'started': return { icon: '🟢', cls: 'event-type-started' };
+                    case 'stopped': return { icon: '⏹️', cls: 'event-type-stopped' };
+                    case 'crashed': return { icon: '💥', cls: 'event-type-crashed' };
+                    case 'auto_restarted': return { icon: '🔄', cls: 'event-type-auto' };
+                    case 'stop_unresponsive': return { icon: '⚠️', cls: 'event-type-unresponsive' };
+                    default: return { icon: '📌', cls: '' };
+                }
+            },
+
+            render() {
+                const list = document.getElementById('eventBoardList');
+                if (!list) return;
+                if (!this._events.length) {
+                    list.innerHTML = '<div class="event-board-empty">暂无事件</div>';
+                    return;
+                }
+                list.innerHTML = this._events.map(ev => {
+                    const meta = this.typeMeta(ev.eventType);
+                    const time = (ev.recordedAt || '').replace('T', ' ');
+                    const inst = ev.instanceName
+                        ? `<span class="event-instance">${this.esc(ev.instanceName)}</span><span class="event-instance-id">${this.esc(ev.instanceId)}</span>`
+                        : `<span class="event-instance">${this.esc(ev.instanceId)}</span>`;
+                    const forceBtn = ev.eventType === 'stop_unresponsive'
+                        ? `<button class="btn btn-sm btn-danger event-force-btn" onclick="event.stopPropagation(); EventBoard.forceStop('${this.esc(ev.instanceId)}', this)">强制关闭</button>`
+                        : '';
+                    return `
+                    <div class="event-item ${meta.cls}" data-id="${ev.id}">
+                        <div class="event-item-head" onclick="EventBoard.toggleDetail(this)">
+                            <span class="event-icon" aria-hidden="true">${meta.icon}</span>
+                            <div class="event-main">
+                                <div class="event-title-line"><span class="event-title">${this.esc(ev.title || ev.eventType)}</span>${inst}</div>
+                                <div class="event-time">${this.esc(time)}</div>
+                            </div>
+                            <span class="event-chevron" aria-hidden="true">▸</span>
+                        </div>
+                        <div class="event-detail" hidden>
+                            <div class="event-detail-text">${this.esc(ev.detail || '无详细信息')}</div>
+                            ${forceBtn}
+                        </div>
+                    </div>`;
+                }).join('');
+            },
+
+            toggleDetail(headEl) {
+                const item = headEl.closest('.event-item');
+                if (!item) return;
+                const detail = item.querySelector('.event-detail');
+                if (!detail) return;
+                detail.hidden = !detail.hidden;
+                item.classList.toggle('expanded', !detail.hidden);
+            },
+
+            async forceStop(instanceId, btn) {
+                if (!await RtPanel.showConfirm('强制关闭实例',
+                    `确定强制关闭实例 ${instanceId} 吗？\n服务端未响应停止指令, 强制结束进程可能丢失未保存的世界数据!`)) return;
+                btn.disabled = true;
+                btn.textContent = '关闭中...';
+                try {
+                    const r = await fetch('/api/instances/action', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'force_stop', ids: [instanceId] })
+                    });
+                    const d = await r.json();
+                    RtPanel.showToast(d.success ? '强制关闭指令已发送' : (d.message || '强制关闭失败'), d.success ? 'success' : 'error');
+                } catch {
+                    RtPanel.showToast('强制关闭失败', 'error');
+                }
+                this.refresh();
+            },
+
+            esc(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            }
+        };
+        EventBoard.start();
+
+        // 点击事件板区域外时收起面板
+        document.addEventListener('click', (e) => {
+            const wrap = document.querySelector('.event-board-wrap');
+            const panel = document.getElementById('eventBoardPanel');
+            if (!wrap || !panel || panel.hidden) return;
+            if (!wrap.contains(e.target)) panel.hidden = true;
+        });
 
         setInterval(() => RtPanel.checkConnection(), 8000);
         RtPanel.checkConnection();
