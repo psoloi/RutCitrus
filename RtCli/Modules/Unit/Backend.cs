@@ -1,12 +1,15 @@
 using System.Collections.Concurrent;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using Newtonsoft.Json.Linq;
 using RtCli.Modules.Extension;
 using RtCli.Modules.Function;
 using Spectre.Console;
+using YamlDotNet.RepresentationModel;
 
 namespace RtCli.Modules.Unit
 {
@@ -1443,9 +1446,147 @@ namespace RtCli.Modules.Unit
             public string FileName { get; set; } = "";
             public long SizeBytes { get; set; }
             public bool IsDisabled { get; set; }
+            public string Name { get; set; } = "";
+            public string Version { get; set; } = "";
+            public string Description { get; set; } = "";
+            public bool MetaParsed { get; set; }
         }
 
-        private static List<JarFileItem> ListJarFiles(string serverKey, string subDir, string disabledExt)
+        /// <summary>从插件 jar 内解析出的元数据(名称/版本/介绍)</summary>
+        private class PluginJarMeta
+        {
+            public string Name = "";
+            public string Version = "";
+            public string Description = "";
+        }
+
+        /// <summary>
+        /// 尝试从插件 jar 内读取元数据。优先级: plugin.yml(Bukkit/Spigot/Paper/Nukkit)
+        /// → paper-plugin.yml(Paper 原生插件) → bungee.yml(BungeeCord/Waterfall 代理)
+        /// → velocity-plugin.json(Velocity 代理) → sponge_plugins.json(Sponge)。
+        /// 均失败返回 null(面板将标黄提示可能无法加载, 名称回退为文件名)。
+        /// </summary>
+        private static PluginJarMeta? ReadPluginJarMeta(string jarPath)
+        {
+            try
+            {
+                using var zip = ZipFile.OpenRead(jarPath);
+                foreach (var candidate in new[] { "plugin.yml", "paper-plugin.yml", "bungee.yml" })
+                {
+                    var text = ReadZipRootEntryText(zip, candidate);
+                    if (text == null) continue;
+                    var meta = ParseYamlMeta(text);
+                    if (meta != null) return meta;
+                }
+                foreach (var candidate in new[] { "velocity-plugin.json", "sponge_plugins.json" })
+                {
+                    var text = ReadZipRootEntryText(zip, candidate);
+                    if (text == null) continue;
+                    var meta = ParseJsonMeta(text);
+                    if (meta != null) return meta;
+                }
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>读取 zip 根目录下指定名称的文本条目(忽略大小写, 限制 1MB 防御异常大文件)</summary>
+        private static string? ReadZipRootEntryText(ZipArchive zip, string entryName)
+        {
+            foreach (var e in zip.Entries)
+            {
+                var n = e.FullName;
+                if (n.StartsWith("./")) n = n[2..];
+                n = n.TrimStart('/');
+                if (n.Contains('/') || n.Contains('\\')) continue; // 仅根目录
+                if (!string.Equals(n, entryName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (e.Length > 1024 * 1024) return null;
+                using var sr = new StreamReader(e.Open(), Encoding.UTF8);
+                return sr.ReadToEnd();
+            }
+            return null;
+        }
+
+        /// <summary>从 plugin.yml/bungee.yml 等 YAML 元数据中解析 name/version/description</summary>
+        private static PluginJarMeta? ParseYamlMeta(string text)
+        {
+            try
+            {
+                var yaml = new YamlStream();
+                yaml.Load(new StringReader(text));
+                if (yaml.Documents.Count == 0) return null;
+                if (yaml.Documents[0].RootNode is not YamlMappingNode root) return null;
+                string? Get(string key)
+                {
+                    foreach (var kv in root.Children)
+                    {
+                        if (kv.Key is YamlScalarNode k &&
+                            string.Equals(k.Value, key, StringComparison.OrdinalIgnoreCase) &&
+                            kv.Value is YamlScalarNode v)
+                            return v.Value;
+                    }
+                    return null;
+                }
+                var name = Get("name") ?? Get("id");
+                if (string.IsNullOrWhiteSpace(name)) return null;
+                return new PluginJarMeta
+                {
+                    Name = name.Trim(),
+                    Version = (Get("version") ?? "").Trim(),
+                    Description = (Get("description") ?? "").Trim()
+                };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>从 velocity-plugin.json/sponge_plugins.json 等 JSON 元数据中解析 name/version/description</summary>
+        private static PluginJarMeta? ParseJsonMeta(string json)
+        {
+            try
+            {
+                var token = JToken.Parse(json);
+                // sponge_plugins.json 为 {"plugins": [...]}; 也有顶层即数组/对象的情况
+                if (token is JObject obj)
+                {
+                    if (obj["plugins"] is JArray arr && arr.Count > 0)
+                        token = arr[0];
+                }
+                else if (token is JArray topArr && topArr.Count > 0)
+                {
+                    token = topArr[0];
+                }
+                if (token is not JObject o) return null;
+                string? GetStr(params string[] keys)
+                {
+                    foreach (var k in keys)
+                    {
+                        if (o[k] is JValue v && v.Type == JTokenType.String && !string.IsNullOrWhiteSpace(v.Value<string>()))
+                            return v.Value<string>();
+                    }
+                    return null;
+                }
+                var name = GetStr("name", "id");
+                if (string.IsNullOrWhiteSpace(name)) return null;
+                return new PluginJarMeta
+                {
+                    Name = name.Trim(),
+                    Version = GetStr("version") ?? "",
+                    Description = GetStr("description") ?? ""
+                };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static List<JarFileItem> ListJarFiles(string serverKey, string subDir, string disabledExt, bool readPluginMeta = false)
         {
             var result = new List<JarFileItem>();
             var workPath = ResolveWorkPath(serverKey);
@@ -1462,12 +1603,24 @@ namespace RtCli.Modules.Unit
             files = files.OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
             foreach (var f in files)
             {
-                result.Add(new JarFileItem
+                var item = new JarFileItem
                 {
                     FileName = f.Name,
                     SizeBytes = f.Length,
                     IsDisabled = f.Extension.Equals(disabledExt, StringComparison.OrdinalIgnoreCase)
-                });
+                };
+                if (readPluginMeta)
+                {
+                    var meta = ReadPluginJarMeta(f.FullName);
+                    item.MetaParsed = meta != null;
+                    if (meta != null)
+                    {
+                        item.Name = meta.Name;
+                        item.Version = meta.Version;
+                        item.Description = meta.Description;
+                    }
+                }
+                result.Add(item);
             }
             return result;
         }
@@ -1480,7 +1633,7 @@ namespace RtCli.Modules.Unit
             {
                 var workPath = ResolveWorkPath(serverKey);
                 if (workPath == null) return (false, "服务端工作目录未配置或不存在", new List<JarFileItem>());
-                return (true, "OK", ListJarFiles(serverKey, "plugins", ".disjar"));
+                return (true, "OK", ListJarFiles(serverKey, "plugins", ".disjar", readPluginMeta: true));
             }
             catch (Exception ex)
             {
@@ -1765,6 +1918,345 @@ namespace RtCli.Modules.Unit
             catch (Exception ex)
             {
                 return (false, $"删除失败: {ex.Message}");
+            }
+        }
+
+        // ===== 实例增强: Java 扫描 / 克隆 / zip 解压导入 =====
+
+        /// <summary>
+        /// 扫描本机 Java 安装: JAVA_HOME / PATH / 常见安装目录(Java、Eclipse Adoptium、Zulu、Microsoft、BellSoft、Amazon Corretto)。
+        /// 版本号优先从目录名解析, 解析不到时运行 java -version 获取。
+        /// </summary>
+        public static (bool Success, string Message, List<(string Path, string Version, string Source)> Javas)
+            ScanJavaInstallations()
+        {
+            var results = new List<(string Path, string Version, string Source)>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void AddJava(string exePath, string source)
+            {
+                try
+                {
+                    exePath = Path.GetFullPath(exePath);
+                    if (!File.Exists(exePath)) return;
+                }
+                catch { return; }
+                if (!seen.Add(exePath)) return;
+
+                // 从路径目录名解析版本(jdk-17.0.2 / zulu17 / jre1.8.0_301 / corretto11 等)
+                var version = "";
+                var binDir = Path.GetDirectoryName(exePath) ?? "";
+                var installDir = Path.GetDirectoryName(binDir) ?? "";
+                foreach (var cand in new[] { Path.GetFileName(installDir), Path.GetFileName(binDir) })
+                {
+                    if (string.IsNullOrEmpty(cand)) continue;
+                    var m = Regex.Match(cand, @"(?:jdk|jre|zulu|corretto|liberica)[-_\.]?(\d+(?:[._]\d+)*)", RegexOptions.IgnoreCase);
+                    if (m.Success) { version = m.Groups[1].Value.Replace('_', '.'); break; }
+                    m = Regex.Match(cand, @"^v?(\d+(?:\.\d+)+)$", RegexOptions.IgnoreCase); // 纯版本号目录名(如 "17.0.2")
+                    if (m.Success) { version = m.Groups[1].Value; break; }
+                }
+
+                // 目录名解析失败且数量有限时, 运行 java -version 获取精确版本(2秒超时)
+                if (version.Length == 0)
+                {
+                    try
+                    {
+                        var psi = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = exePath,
+                            Arguments = "-version",
+                            RedirectStandardError = true,
+                            RedirectStandardOutput = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        };
+                        using var proc = System.Diagnostics.Process.Start(psi);
+                        if (proc != null && proc.WaitForExit(2000))
+                        {
+                            var output = proc.StandardError.ReadToEnd() + proc.StandardOutput.ReadToEnd();
+                            var vm = Regex.Match(output, @"version\s+""([^""]+)""");
+                            if (vm.Success) version = vm.Groups[1].Value;
+                        }
+                        proc?.Kill(entireProcessTree: true);
+                    }
+                    catch { /* 版本获取失败不影响路径返回 */ }
+                }
+
+                results.Add((exePath, version.Length == 0 ? "未知" : version, source));
+            }
+
+            // 1. JAVA_HOME
+            try
+            {
+                var jhome = Environment.GetEnvironmentVariable("JAVA_HOME");
+                if (!string.IsNullOrWhiteSpace(jhome))
+                {
+                    AddJava(Path.Combine(jhome, "bin", "java.exe"), "JAVA_HOME");
+
+                    // 1b. JAVA_HOME 同级目录(纯 zip 解压的 Java 常与当前 JDK 集中放在同一父目录)
+                    var jhomeParent = Path.GetDirectoryName(jhome.TrimEnd('\\', '/'));
+                    if (!string.IsNullOrEmpty(jhomeParent) && Directory.Exists(jhomeParent))
+                    {
+                        foreach (var sub in Directory.GetDirectories(jhomeParent))
+                            AddJava(Path.Combine(sub, "bin", "java.exe"), "解压目录(JAVA_HOME 同级)");
+                    }
+                }
+            }
+            catch { }
+
+            // 2. PATH 中的 java.exe
+            try
+            {
+                var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
+                foreach (var seg in pathVar.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    var candidate = seg.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? seg : Path.Combine(seg, "java.exe");
+                    if (File.Exists(candidate)) AddJava(candidate, "PATH");
+
+                    // 2b. PATH 段的父目录兄弟版本(如 PATH 含 D:\Java\jdk-21\bin, 扫描 D:\Java 下其他解压版本)
+                    try
+                    {
+                        var segFull = Path.GetFullPath(seg.TrimEnd('\\', '/'));
+                        var segParent = Path.GetDirectoryName(segFull); // bin 的上级 = 安装目录
+                        var segGrand = string.IsNullOrEmpty(segParent) ? null : Path.GetDirectoryName(segParent); // 安装目录的上级
+                        if (!string.IsNullOrEmpty(segGrand) && Directory.Exists(segGrand))
+                        {
+                            foreach (var sub in Directory.GetDirectories(segGrand))
+                                AddJava(Path.Combine(sub, "bin", "java.exe"), "解压目录(PATH 同级)");
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
+            // 3. 常见安装根目录
+            try
+            {
+                var roots = new List<string>();
+                var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+                if (!string.IsNullOrEmpty(pf))
+                {
+                    roots.Add(Path.Combine(pf, "Java"));
+                    roots.Add(Path.Combine(pf, "Eclipse Adoptium"));
+                    roots.Add(Path.Combine(pf, "Zulu"));
+                    roots.Add(Path.Combine(pf, "Microsoft"));
+                    roots.Add(Path.Combine(pf, "BellSoft"));
+                    roots.Add(Path.Combine(pf, "Amazon Corretto"));
+                }
+                if (!string.IsNullOrEmpty(pf86))
+                {
+                    roots.Add(Path.Combine(pf86, "Java"));
+                    roots.Add(Path.Combine(pf86, "Eclipse Adoptium"));
+                    roots.Add(Path.Combine(pf86, "Zulu"));
+                }
+                foreach (var root in roots)
+                {
+                    if (!Directory.Exists(root)) continue;
+                    foreach (var sub in Directory.GetDirectories(root))
+                        AddJava(Path.Combine(sub, "bin", "java.exe"), $"安装目录({Path.GetFileName(root)})");
+                }
+            }
+            catch { }
+
+            // 4. 各驱动器根目录下的 Java(纯 zip 解压未安装、未配置环境变量的场景, 仅扫根目录一层)
+            try
+            {
+                foreach (var drive in Environment.GetLogicalDrives())
+                {
+                    try
+                    {
+                        var di = new DirectoryInfo(drive);
+                        if (!di.Exists) continue;
+
+                        foreach (var sub in di.GetDirectories())
+                        {
+                            var name = sub.Name;
+                            // 根下集中存放目录(如 D:\Java) → 再深入一层
+                            if (name.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                                || name.Equals("JDK", StringComparison.OrdinalIgnoreCase))
+                            {
+                                foreach (var inner in sub.GetDirectories())
+                                    AddJava(Path.Combine(inner.FullName, "bin", "java.exe"), $"解压目录({drive}{name})");
+                                continue;
+                            }
+                            // 根下直接解压的 JDK/JRE 目录(如 D:\jdk-17.0.2、E:\zulu21)
+                            if (Regex.IsMatch(name, @"^(jdk|jre|zulu|corretto|liberica|graalvm|temurin)[-_\.]?\d", RegexOptions.IgnoreCase))
+                                AddJava(Path.Combine(sub.FullName, "bin", "java.exe"), "解压目录(驱动器根)");
+                        }
+                    }
+                    catch (UnauthorizedAccessException) { }
+                    catch (IOException) { }
+                }
+            }
+            catch { }
+
+            return (true, $"共找到 {results.Count} 个 Java", results);
+        }
+
+        /// <summary>递归复制目录(不复制 .rtupload.tmp 临时文件与运行中的日志锁)。</summary>
+        private static void CopyDirectoryRecursive(string src, string dst)
+        {
+            Directory.CreateDirectory(dst);
+            foreach (var file in Directory.GetFiles(src))
+            {
+                if (file.EndsWith(".rtupload.tmp", StringComparison.OrdinalIgnoreCase)) continue;
+                File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), overwrite: true);
+            }
+            foreach (var dir in Directory.GetDirectories(src))
+                CopyDirectoryRecursive(dir, Path.Combine(dst, Path.GetFileName(dir)));
+        }
+
+        /// <summary>实例的默认工作目录(Content/Server/{id}, 相对 RtCli 运行目录, 与 Intelligence 自动路径一致)。</summary>
+        private static string GetDefaultWorkPath(string serverKey)
+            => Path.GetFullPath(Path.Combine("Content", "Server", serverKey));
+
+        /// <summary>
+        /// 克隆实例: 复制配置创建新实例, 可选复制工作目录全部文件。
+        /// 新实例使用默认布局 Content/Server/{newIdentifier} 作为工作目录。
+        /// </summary>
+        public static (bool Success, string Message, string NewId) CloneInstance(
+            string srcId, string newIdentifier, string newName, bool copyFiles)
+        {
+            try
+            {
+                if (!Config.App.ServerList.TryGetValue(srcId ?? "", out var src))
+                    return (false, $"源实例 '{srcId}' 不存在", "");
+
+                newIdentifier = (newIdentifier ?? "").Trim();
+                if (newIdentifier.Length == 0)
+                {
+                    newIdentifier = $"{srcId}-copy";
+                    int n = 2;
+                    while (Config.App.ServerList.ContainsKey(newIdentifier))
+                        newIdentifier = $"{srcId}-copy{n++}";
+                }
+                if (Config.App.ServerList.ContainsKey(newIdentifier))
+                    return (false, $"标识 '{newIdentifier}' 已存在", "");
+                newName = string.IsNullOrWhiteSpace(newName) ? $"{src.ServerName} 副本" : newName.Trim();
+
+                var dstWork = GetDefaultWorkPath(newIdentifier);
+                var srcWork = string.IsNullOrWhiteSpace(src.WorkPath)
+                    ? GetDefaultWorkPath(srcId)
+                    : Path.GetFullPath(src.WorkPath);
+
+                var (ok, msg) = ServerDataManager.CreateInstance(
+                    newIdentifier, newName, dstWork, src.JavaPath ?? "",
+                    src.RunServerFlags ?? "", src.AnalyzerMode ?? "", "");
+                if (!ok) return (false, msg, "");
+
+                if (copyFiles && Directory.Exists(srcWork))
+                {
+                    try
+                    {
+                        CopyDirectoryRecursive(srcWork, dstWork);
+                        Output.Log($"实例 [{Markup.Escape(srcId)}] 已克隆为 [{Markup.Escape(newIdentifier)}] (含文件)", 1, "Backend");
+                        return (true, $"克隆成功: {newIdentifier} (已复制服务端文件)", newIdentifier);
+                    }
+                    catch (Exception ex)
+                    {
+                        return (true, $"实例已创建, 但复制文件失败: {ex.Message}", newIdentifier);
+                    }
+                }
+
+                Output.Log($"实例 [{Markup.Escape(srcId)}] 已克隆为 [{Markup.Escape(newIdentifier)}] (仅配置)", 1, "Backend");
+                return (true, $"克隆成功: {newIdentifier} (仅配置)", newIdentifier);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"克隆失败: {ex.Message}", "");
+            }
+        }
+
+        /// <summary>
+        /// 解压实例工作目录中的 zip 到工作目录根:
+        /// - zip-slip 路径穿越校验
+        /// - 单根目录自动提升(zip 内所有内容都在一个顶层目录时, 将该目录内容直接解压到根)
+        /// - 解压完成后删除 zip
+        /// - 返回工作目录第一层的 bat/cmd/sh 启动脚本列表
+        /// </summary>
+        public static (bool Success, string Message, List<string> Scripts) ExtractInstanceZip(
+            string serverKey, string relPath)
+        {
+            try
+            {
+                var zipPath = ResolveInstancePath(serverKey, relPath, out var workPath, out var err);
+                if (zipPath == null) return (false, err, new List<string>());
+                if (!File.Exists(zipPath)) return (false, $"zip 文件不存在: {relPath}", new List<string>());
+                if (!zipPath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    return (false, "仅支持 .zip 格式", new List<string>());
+
+                using (var archive = System.IO.Compression.ZipFile.OpenRead(zipPath))
+                {
+                    if (archive.Entries.Count == 0)
+                        return (false, "zip 压缩包为空", new List<string>());
+
+                    // zip-slip 校验: 每个条目的目标路径必须位于工作目录内
+                    foreach (var entry in archive.Entries)
+                    {
+                        if (string.IsNullOrEmpty(entry.Name)) continue; // 目录条目
+                        var dest = Path.GetFullPath(Path.Combine(workPath, entry.FullName.Replace('\\', '/')));
+                        if (!IsWithinRoot(workPath, dest))
+                            return (false, $"zip 包含非法路径条目: {entry.FullName}, 已拒绝解压", new List<string>());
+                    }
+
+                    // 单根目录检测: 所有条目第一段相同且存在更深层内容
+                    var firstSegs = archive.Entries
+                        .Where(e => !string.IsNullOrEmpty(e.FullName))
+                        .Select(e => e.FullName.Replace('\\', '/').Split('/')[0])
+                        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    bool singleRoot = firstSegs.Count == 1
+                        && archive.Entries.Any(e => e.FullName.Replace('\\', '/').Contains('/'));
+
+                    var tmpDir = Path.Combine(workPath, "__extract_tmp__");
+                    if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+
+                    try
+                    {
+                        archive.ExtractToDirectory(tmpDir, overwriteFiles: true);
+
+                        // 提升到工作目录根
+                        var moveSrc = singleRoot
+                            ? Path.Combine(tmpDir, firstSegs[0])
+                            : tmpDir;
+                        foreach (var entry in Directory.GetFileSystemEntries(moveSrc))
+                        {
+                            var target = Path.Combine(workPath, Path.GetFileName(entry));
+                            if (Directory.Exists(entry))
+                            {
+                                if (Directory.Exists(target))
+                                    CopyDirectoryRecursive(entry, target);
+                                else
+                                    Directory.Move(entry, target);
+                            }
+                            else
+                            {
+                                File.Copy(entry, target, overwrite: true);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true);
+                    }
+                }
+
+                File.Delete(zipPath);
+
+                // 扫描第一层启动脚本
+                var scripts = Directory.GetFiles(workPath)
+                    .Where(f => { var ext = Path.GetExtension(f).ToLowerInvariant(); return ext == ".bat" || ext == ".cmd" || ext == ".sh"; })
+                    .Select(Path.GetFileName)
+                    .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                    .ToList()!;
+
+                Output.Log($"实例 [{Markup.Escape(serverKey ?? "")}] 已导入 zip [{Markup.Escape(relPath ?? "")}]", 1, "Backend");
+                return (true, "解压完成", scripts);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"解压失败: {ex.Message}", new List<string>());
             }
         }
 

@@ -79,6 +79,12 @@ service RtCliService {
   rpc DownloadServerJar (DownloadServerJarRequest) returns (DownloadServerJarResponse);
   // 面板向导: 群组服务器一键构建(对应 .group build 向导能力)
   rpc GroupBuild (GroupBuildRequest) returns (GroupBuildResponse);
+  // 实例增强: Java 路径扫描(常见安装目录+JAVA_HOME+PATH)
+  rpc ScanJavaPaths (Empty) returns (JavaScanResponse);
+  // 实例增强: 克隆实例(复制配置, 可选复制工作目录文件)
+  rpc CloneInstance (CloneInstanceRequest) returns (InstanceActionResponse);
+  // 实例增强: 解压实例工作目录中的 zip 并返回第一层启动脚本(bat/cmd/sh)
+  rpc ExtractInstanceArchive (ExtractArchiveRequest) returns (ExtractArchiveResponse);
 }
 
 message Empty {}
@@ -516,6 +522,10 @@ message JarFileInfo {
   string file_name = 1;
   int64 size_bytes = 2;
   bool is_disabled = 3;
+  string name = 4;          // 从 jar 内元数据(plugin.yml 等)解析出的插件名
+  string version = 5;       // 解析出的插件版本
+  string description = 6;   // 解析出的插件介绍
+  bool meta_parsed = 7;     // 是否成功解析插件元数据(失败时面板标黄提示可能无法加载)
 }
 
 message JarFileListResponse {
@@ -674,4 +684,36 @@ message GroupBuildResponse {
   string group_id = 3;
   string proxy_instance_id = 4;
   map<string, int32> server_ports = 5;  // 分配结果: 实例ID -> 端口
+}
+
+// ===== 实例增强 =====
+
+message JavaInfo {
+  string path = 1;       // java 可执行文件完整路径
+  string version = 2;    // 版本号(从目录名或 java -version 获取)
+  string source = 3;     // 来源说明(JAVA_HOME / PATH / 安装目录)
+}
+
+message JavaScanResponse {
+  bool success = 1;
+  string message = 2;
+  repeated JavaInfo javas = 3;
+}
+
+message CloneInstanceRequest {
+  string id = 1;             // 源实例 ID
+  string new_identifier = 2; // 新实例标识(空 = 自动 "{id}-copy")
+  string new_name = 3;       // 新实例显示名(空 = 自动)
+  bool copy_files = 4;       // 是否复制工作目录文件
+}
+
+message ExtractArchiveRequest {
+  string id = 1;             // 实例 ID
+  string rel_path = 2;       // zip 相对工作目录路径(如 __import__.zip)
+}
+
+message ExtractArchiveResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string scripts = 3;  // 解压后工作目录第一层的 bat/cmd/sh 文件名
 }

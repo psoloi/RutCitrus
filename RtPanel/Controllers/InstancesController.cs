@@ -118,6 +118,53 @@ namespace RtPanel.Controllers
             return Ok(new { success = resp?.Success ?? false, message = resp?.Message ?? "请求失败" });
         }
 
+        /// <summary>扫描主机 Java 安装路径(JAVA_HOME/PATH/常见安装目录)</summary>
+        [HttpGet("javas")]
+        public async Task<IActionResult> ScanJavas()
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var resp = await _client.ScanJavaPathsAsync();
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+
+            var javas = resp.Javas.Select(j => new
+            {
+                path = j.Path,
+                version = j.Version,
+                source = j.Source
+            }).ToList();
+
+            return Ok(new { success = resp.Success, message = resp.Message, javas });
+        }
+
+        /// <summary>克隆实例(复制配置, 可选复制工作目录文件)</summary>
+        [HttpPost("clone")]
+        public async Task<IActionResult> Clone([FromBody] CloneInstancePayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var resp = await _client.CloneInstanceAsync(
+                payload.Id ?? "", payload.NewIdentifier ?? "", payload.NewName ?? "", payload.CopyFiles);
+            return Ok(new { success = resp?.Success ?? false, message = resp?.Message ?? "请求失败" });
+        }
+
+        /// <summary>解压实例工作目录中的 zip(导入实例用), 返回第一层启动脚本列表</summary>
+        [HttpPost("extract")]
+        public async Task<IActionResult> Extract([FromBody] ExtractInstancePayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var resp = await _client.ExtractInstanceArchiveAsync(payload.Id ?? "", payload.RelPath ?? "");
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+
+            return Ok(new { success = resp.Success, message = resp.Message, scripts = resp.Scripts.ToList() });
+        }
+
         /// <summary>批量操作实例(start/stop/restart)</summary>
         [HttpPost("action")]
         public async Task<IActionResult> Action([FromBody] InstanceActionPayload payload)
@@ -391,7 +438,11 @@ namespace RtPanel.Controllers
             {
                 fileName = f.FileName,
                 sizeBytes = f.SizeBytes,
-                isDisabled = f.IsDisabled
+                isDisabled = f.IsDisabled,
+                name = f.Name,
+                version = f.Version,
+                description = f.Description,
+                metaParsed = f.MetaParsed
             }).ToList();
             return Ok(new { success = resp.Success, message = resp.Message, files });
         }
@@ -912,6 +963,20 @@ namespace RtPanel.Controllers
         {
             public string? Action { get; set; }
             public List<string>? Ids { get; set; }
+        }
+
+        public class CloneInstancePayload
+        {
+            public string? Id { get; set; }
+            public string? NewIdentifier { get; set; }
+            public string? NewName { get; set; }
+            public bool CopyFiles { get; set; }
+        }
+
+        public class ExtractInstancePayload
+        {
+            public string? Id { get; set; }
+            public string? RelPath { get; set; }
         }
 
         public class CreateGroupPayload

@@ -504,6 +504,38 @@ namespace RtPanel.Services
             catch { MarkDisconnected(); return null; }
         }
 
+        /// <summary>扫描主机 Java 安装(JAVA_HOME/PATH/常见安装目录)</summary>
+        public async Task<JavaScanResponse?> ScanJavaPathsAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ScanJavaPathsAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30)); }
+            catch { return null; }
+        }
+
+        /// <summary>克隆实例(复制配置, 可选复制工作目录文件)</summary>
+        public async Task<InstanceActionResponse?> CloneInstanceAsync(string id, string newIdentifier, string newName, bool copyFiles)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new CloneInstanceRequest { Id = id ?? "", NewIdentifier = newIdentifier ?? "", NewName = newName ?? "", CopyFiles = copyFiles };
+                return await _client.CloneInstanceAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddMinutes(5));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        /// <summary>解压实例工作目录中的 zip 并返回第一层启动脚本列表</summary>
+        public async Task<ExtractArchiveResponse?> ExtractInstanceArchiveAsync(string id, string relPath)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new ExtractArchiveRequest { Id = id ?? "", RelPath = relPath ?? "" };
+                return await _client.ExtractInstanceArchiveAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddMinutes(5));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
         public async Task<InstanceActionResponse?> InstanceActionAsync(string action, List<string> ids)
         {
             if (_client == null || !IsConnected) return null;

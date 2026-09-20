@@ -45,11 +45,11 @@
         <div class="card bg-dark text-light border-secondary">
             <div class="card-body">
                 <div class="row mb-3">
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label class="form-label small">显示名称</label>
                         <input type="text" class="form-control form-control-sm" id="mg_inst_name" />
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label class="form-label small">分析模式</label>
                         <select class="form-select form-select-sm" id="mg_inst_mode">
                             @foreach (var m in new[] { ("RM", "RM - 管理(推荐)"), ("RUN", "RUN - 子进程"), ("RR", "RR - 子进程+Rcon"), ("RCON", "RCON - 纯远程") })
@@ -58,18 +58,72 @@
                             }
                         </select>
                     </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">服务端文件 <span class="text-muted">(工作目录第一层 .jar)</span></label>
+                        <div class="d-flex gap-1 align-items-center">
+                        <input type="text" class="form-control form-control-sm" id="mg_inst_serverJar" list="mg_jarList" placeholder="如 server.jar" onchange="syncRunFlags()" />
+                        <datalist id="mg_jarList"></datalist>
+                        <button class="btn btn-sm btn-outline-info flex-shrink-0" onclick="scanServerJars(this)" title="扫描工作目录第一层的 jar 文件">扫描</button>
+                    </div>
+                    </div>
                 </div>
                 <div class="mb-2">
                     <label class="form-label small">工作目录</label>
                     <input type="text" class="form-control form-control-sm" id="mg_inst_workPath" />
                 </div>
                 <div class="mb-2">
-                    <label class="form-label small">Java 路径</label>
-                    <input type="text" class="form-control form-control-sm" id="mg_inst_javaPath" />
+                    <label class="form-label small">Java 路径 <span class="text-muted">(可手动输入)</span></label>
+                    <div class="d-flex gap-1 align-items-center">
+                        <input type="text" class="form-control form-control-sm" id="mg_inst_javaPath" placeholder="如 java 或 C:\...\java.exe" />
+                        <select class="form-select form-select-sm flex-shrink-0" id="mg_javaSelect" style="width:150px;" onchange="onJavaSelected()">
+                            <option value="">选择 Java</option>
+                        </select>
+                        <button class="btn btn-sm btn-outline-info flex-shrink-0" onclick="scanJavas(this)">扫描</button>
+                    </div>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label small">启动参数</label>
-                    <textarea class="form-control form-control-sm" id="mg_inst_runFlags" rows="2"></textarea>
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <label class="form-label small mb-0">启动参数</label>
+                        <select class="form-select form-select-sm" style="width:auto;" id="mg_flagsPreset" onchange="applyFlagsPreset()">
+                            <option value="">预设: 保持当前</option>
+                            <option value="aikar">Aikar's Flags (G1GC 优化)</option>
+                            <option value="velocity">Velocity 代理端推荐</option>
+                            <option value="waterfall">Waterfall 代理端推荐</option>
+                            <option value="none">无 Flags (仅内存+jar)</option>
+                        </select>
+                    </div>
+                    <textarea class="form-control form-control-sm mt-1" id="mg_inst_runFlags" rows="2"></textarea>
+                </div>
+                <div class="mb-3 ps-2 pe-2 border rounded pt-2 pb-1">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="small text-info fw-bold">内存调节</span>
+                        <small class="text-muted" id="mg_memHostInfo">主机总内存: 获取中...</small>
+                    </div>
+                    <div class="row g-2 align-items-center">
+                        <div class="col-auto" style="width:52px;"><small class="text-muted">最小</small></div>
+                        <div class="col">
+                            <input type="range" class="form-range" id="mg_memMin" min="128" step="128" value="1024" oninput="onMemChange()" />
+                        </div>
+                        <div class="col-auto" style="width:150px;">
+                            <div class="input-group input-group-sm">
+                                <input type="number" class="form-control form-control-sm" id="mg_memMinNum" min="128" step="128" value="1024" onchange="onMemNumChange('min')" />
+                                <span class="input-group-text small">MB</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row g-2 align-items-center mt-1">
+                        <div class="col-auto" style="width:52px;"><small class="text-muted">最大</small></div>
+                        <div class="col">
+                            <input type="range" class="form-range" id="mg_memMax" min="128" step="128" value="1024" oninput="onMemChange()" />
+                        </div>
+                        <div class="col-auto" style="width:150px;">
+                            <div class="input-group input-group-sm">
+                                <input type="number" class="form-control form-control-sm" id="mg_memMaxNum" min="128" step="128" value="1024" onchange="onMemNumChange('max')" />
+                                <span class="input-group-text small">MB</span>
+                            </div>
+                        </div>
+                    </div>
+                    <small class="text-muted d-block mt-1">调节后自动同步到启动参数的 -Xms/-Xmx (Aikar's 建议两者相同)</small>
                 </div>
                 <div class="mb-3">
                     <div class="form-check form-check-inline">
@@ -355,7 +409,189 @@
         document.getElementById('mg_inst_hidden').checked = inst.hidden;
         document.getElementById('mg_inst_autoRestart').checked = inst.autoRestart;
 
+        initRunFlagsWidgets();
+
         renderBackups(backups);
+    }
+
+    // ===== 启动参数 / 内存 / 服务端文件 联动 =====
+
+    const FLAGS_PRESETS = {
+        aikar: "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true",
+        velocity: "-XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:MaxInlineLevel=15",
+        waterfall: "-XX:+UseG1GC -XX:MaxInlineLevel=15",
+        none: ""
+    };
+
+    // 解析启动参数: -Xms/-Xmx → xms/xmx(MB), -jar 后第一个 token → jar, 其余为 extra(尾部参数 tail)
+    function parseRunFlags() {
+        const raw = document.getElementById('mg_inst_runFlags').value.trim();
+        const tokens = raw.split(/\s+/).filter(t => t.length > 0);
+        let xms = 0, xmx = 0, jar = '';
+        const extra = [], tail = [];
+        let jarIdx = -1;
+        for (let i = 0; i < tokens.length; i++) {
+            if (tokens[i] === '-jar') { jarIdx = i; break; }
+        }
+        if (jarIdx >= 0 && jarIdx + 1 < tokens.length) jar = tokens[jarIdx + 1];
+        const jarEnd = jarIdx >= 0 ? jarIdx + 2 : tokens.length;
+        for (let i = 0; i < jarEnd; i++) {
+            if (i === jarIdx || (jarIdx >= 0 && i === jarIdx + 1)) continue;
+            const t = tokens[i];
+            let m;
+            if ((m = t.match(/^-Xms(\d+)([KkMmGg]?)$/))) { xms = toMB(m[1], m[2]); continue; }
+            if ((m = t.match(/^-Xmx(\d+)([KkMmGg]?)$/))) { xmx = toMB(m[1], m[2]); continue; }
+            extra.push(t);
+        }
+        for (let i = jarEnd; i < tokens.length; i++) tail.push(tokens[i]);
+        return { xms, xmx, extra, jar, tail };
+    }
+
+    function toMB(v, unit) {
+        v = parseInt(v, 10);
+        if (unit === 'G' || unit === 'g') return v * 1024;
+        if (unit === 'K' || unit === 'k') return Math.round(v / 1024);
+        return v;
+    }
+
+    function mbToToken(mb) { return (mb >= 1024 && mb % 1024 === 0) ? `${mb / 1024}G` : `${mb}M`; }
+
+    // 重组启动参数(保持 -Xms -Xmx extra -jar jar tail 顺序)
+    function rebuildRunFlags(p) {
+        const parts = [];
+        if (p.xms > 0) parts.push(`-Xms${mbToToken(p.xms)}`);
+        if (p.xmx > 0) parts.push(`-Xmx${mbToToken(p.xmx)}`);
+        parts.push(...p.extra);
+        if (p.jar) parts.push('-jar', p.jar);
+        parts.push(...p.tail);
+        return parts.join(' ');
+    }
+
+    // 从启动参数初始化服务端文件框与内存滑块
+    function initRunFlagsWidgets() {
+        const p = parseRunFlags();
+        document.getElementById('mg_inst_serverJar').value = p.jar;
+        document.getElementById('mg_flagsPreset').value = '';
+        const hostMax = window._mgHostMemMB || 8192;
+        setMemWidgets('min', p.xms > 0 ? p.xms : 1024, hostMax);
+        setMemWidgets('max', p.xmx > 0 ? p.xmx : (p.xms > 0 ? p.xms : 1024), hostMax);
+    }
+
+    function setMemWidgets(which, mb, hostMax) {
+        const clamped = Math.max(128, Math.min(mb, hostMax));
+        const slider = document.getElementById(which === 'min' ? 'mg_memMin' : 'mg_memMax');
+        const num = document.getElementById(which === 'min' ? 'mg_memMinNum' : 'mg_memMaxNum');
+        slider.max = hostMax; num.max = hostMax;
+        slider.value = clamped; num.value = clamped;
+    }
+
+    // 滑块/数字框变更 → 联动并写回启动参数
+    function onMemChange() {
+        const minS = document.getElementById('mg_memMin'), maxS = document.getElementById('mg_memMax');
+        let mn = parseInt(minS.value, 10) || 128, mx = parseInt(maxS.value, 10) || 128;
+        if (mn > mx) { // min 超过 max: 联动另一端
+            if (document.activeElement === minS) { maxS.value = mn; document.getElementById('mg_memMaxNum').value = mn; mx = mn; }
+            else { minS.value = mx; document.getElementById('mg_memMinNum').value = mx; mn = mx; }
+        }
+        document.getElementById('mg_memMinNum').value = mn;
+        document.getElementById('mg_memMaxNum').value = mx;
+        writeMemToFlags(mn, mx);
+    }
+
+    function onMemNumChange(which) {
+        const slider = document.getElementById(which === 'min' ? 'mg_memMin' : 'mg_memMax');
+        const num = document.getElementById(which === 'min' ? 'mg_memMinNum' : 'mg_memMaxNum');
+        let v = parseInt(num.value, 10) || 128;
+        const hostMax = window._mgHostMemMB || 8192;
+        v = Math.max(128, Math.min(v, hostMax));
+        num.value = v; slider.value = v;
+        onMemChange();
+    }
+
+    function writeMemToFlags(mn, mx) {
+        const p = parseRunFlags();
+        p.xms = mn; p.xmx = mx;
+        document.getElementById('mg_inst_runFlags').value = rebuildRunFlags(p);
+    }
+
+    // 启动参数预设: 替换 extra 部分, 保留内存/-jar/尾部参数
+    function applyFlagsPreset() {
+        const key = document.getElementById('mg_flagsPreset').value;
+        if (!key) return;
+        const p = parseRunFlags();
+        p.extra = FLAGS_PRESETS[key].length ? FLAGS_PRESETS[key].split(/\s+/) : [];
+        document.getElementById('mg_inst_runFlags').value = rebuildRunFlags(p);
+    }
+
+    // 服务端文件框变更 → 同步 -jar 部分
+    function syncRunFlags() {
+        const p = parseRunFlags();
+        p.jar = document.getElementById('mg_inst_serverJar').value.trim();
+        document.getElementById('mg_inst_runFlags').value = rebuildRunFlags(p);
+    }
+
+    // 扫描工作目录第一层 jar 文件(不深入子目录, 避免扫描到插件/模组)
+    async function scanServerJars(btn) {
+        btn.disabled = true; btn.textContent = '扫描中';
+        try {
+            const resp = await fetch(`/api/instances/file/list?id=${encodeURIComponent(INSTANCE_ID)}&path=`).then(r => r.json());
+            if (!resp.success) { showStatus(resp.message || '扫描失败', 'danger'); return; }
+            const jars = (resp.entries || []).filter(e => !e.isDir && e.name.toLowerCase().endsWith('.jar')).map(e => e.name);
+            const dl = document.getElementById('mg_jarList');
+            dl.innerHTML = jars.map(j => `<option value="${escapeHtml(j)}"></option>`).join('');
+            if (jars.length === 0) { showStatus('工作目录第一层未找到 .jar 文件', 'warning'); return; }
+            const cur = document.getElementById('mg_inst_serverJar').value.trim();
+            if (!cur && jars.length === 1) { // 只有一个 jar 时自动填入
+                document.getElementById('mg_inst_serverJar').value = jars[0];
+                syncRunFlags();
+            }
+            showStatus(`扫描到 ${jars.length} 个 jar: ${jars.slice(0, 5).join(', ')}${jars.length > 5 ? ' ...' : ''}`, 'success');
+        } catch { showStatus('扫描请求失败', 'danger'); }
+        finally { btn.disabled = false; btn.textContent = '扫描'; }
+    }
+
+    // 扫描主机 Java 安装
+    async function scanJavas(btn) {
+        btn.disabled = true; btn.textContent = '扫描中';
+        try {
+            const resp = await fetch('/api/instances/javas').then(r => r.json());
+            if (!resp.success) { showStatus(resp.message || '扫描失败', 'danger'); return; }
+            const sel = document.getElementById('mg_javaSelect');
+            const cur = document.getElementById('mg_inst_javaPath').value.trim();
+            sel.innerHTML = '<option value="">选择 Java</option>' + (resp.javas || []).map(j => {
+                const short = j.path.length > 46 ? '...' + j.path.slice(-44) : j.path;
+                const selAttr = j.path === cur ? ' selected' : '';
+                return `<option value="${escapeHtml(j.path)}"${selAttr}>${escapeHtml(j.version)} · ${escapeHtml(j.source)} · ${escapeHtml(short)}</option>`;
+            }).join('');
+            showStatus(`扫描到 ${resp.javas.length} 个 Java (下拉选择或继续手动输入)`, 'success');
+        } catch { showStatus('扫描请求失败', 'danger'); }
+        finally { btn.disabled = false; btn.textContent = '扫描'; }
+    }
+
+    function onJavaSelected() {
+        const sel = document.getElementById('mg_javaSelect');
+        if (sel.value) document.getElementById('mg_inst_javaPath').value = sel.value;
+    }
+
+    // 获取主机总内存作为内存调节上限
+    async function loadHostMem() {
+        try {
+            const resp = await fetch('/api/system/stats').then(r => r.json());
+            if (resp.success && resp.memoryTotalMb > 0) {
+                window._mgHostMemMB = resp.memoryTotalMb;
+                document.getElementById('mg_memHostInfo').textContent = `主机总内存: ${(resp.memoryTotalMb / 1024).toFixed(1)} GB`;
+                // 若滑块已初始化, 更新上限
+                const mnS = document.getElementById('mg_memMin'), mxS = document.getElementById('mg_memMax');
+                if (parseInt(mnS.max, 10) <= 8192 && mnS.value) { // 仅在默认上限时重置
+                    setMemWidgets('min', parseInt(mnS.value, 10), resp.memoryTotalMb);
+                    setMemWidgets('max', parseInt(mxS.value, 10), resp.memoryTotalMb);
+                }
+            } else {
+                document.getElementById('mg_memHostInfo').textContent = '主机总内存: 获取失败';
+            }
+        } catch {
+            document.getElementById('mg_memHostInfo').textContent = '主机总内存: 获取失败';
+        }
     }
 
     function renderBackups(backups) {
@@ -626,17 +862,47 @@
             container.innerHTML = `<div class="text-muted small p-3">暂无${type === 'plugin' ? '插件' : '模组'}</div>`;
             return;
         }
-        container.innerHTML = files.map(f => `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
-            <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width:0;">
-                <span class="badge ${f.isDisabled ? 'bg-danger' : 'bg-success'}">${f.isDisabled ? '已禁用' : '启用'}</span>
-                <span class="small text-truncate">${escapeHtml(f.fileName)}</span>
-                <small class="text-muted text-nowrap">${formatBytes(f.sizeBytes)}</small>
-            </div>
-            <div class="btn-group btn-group-sm">
+        container.innerHTML = files.map(f => {
+            const badge = `<span class="badge ${f.isDisabled ? 'bg-danger' : 'bg-success'}">${f.isDisabled ? '已禁用' : '启用'}</span>`;
+            const btns = `<div class="btn-group btn-group-sm">
                 <button class="btn btn-outline-warning" onclick="toggleJar('${type}','${escapeHtml(f.fileName)}')" title="${f.isDisabled ? '启用' : '禁用'}">${f.isDisabled ? '启用' : '禁用'}</button>
                 <button class="btn btn-outline-danger" onclick="deleteJar('${type}','${escapeHtml(f.fileName)}')" title="删除">删</button>
-            </div>
-        </div>`).join('');
+            </div>`;
+            if (type === 'plugin') {
+                if (f.metaParsed) {
+                    // 已从 jar 内解析出插件元数据(plugin.yml/bungee.yml/velocity-plugin.json 等)
+                    const ver = f.version ? `<span class="badge text-bg-info" title="版本">v${escapeHtml(f.version)}</span>` : '';
+                    const desc = f.description ? `<small class="text-muted text-truncate d-inline-block" style="max-width:320px;" title="${escapeHtml(f.description)}">${escapeHtml(f.description)}</small>` : '';
+                    return `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
+                        <div class="d-flex align-items-center gap-2 flex-grow-1 flex-wrap" style="min-width:0;">
+                            ${badge}
+                            <strong class="small text-truncate" title="${escapeHtml(f.fileName)}">${escapeHtml(f.name || f.fileName)}</strong>
+                            ${ver}
+                            ${desc}
+                            <small class="text-muted text-nowrap">${escapeHtml(f.fileName)} · ${formatBytes(f.sizeBytes)}</small>
+                        </div>
+                        ${btns}
+                    </div>`;
+                }
+                // 无法解析元数据: 标黄提示可能无法加载, 名称回退为文件名
+                return `<div class="d-flex justify-content-between align-items-center border-bottom p-2" style="background:rgba(255,193,7,.08);border-left:3px solid #ffc107;" title="无法从插件 jar 内解析插件信息(plugin.yml 等), 该插件可能无法加载">
+                    <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width:0;">
+                        <span class="badge bg-warning text-dark">⚠ 未识别</span>
+                        <span class="small text-truncate">${escapeHtml(f.fileName)}</span>
+                        <small class="text-muted text-nowrap">${formatBytes(f.sizeBytes)}</small>
+                    </div>
+                    ${btns}
+                </div>`;
+            }
+            return `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
+                <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width:0;">
+                    ${badge}
+                    <span class="small text-truncate">${escapeHtml(f.fileName)}</span>
+                    <small class="text-muted text-nowrap">${formatBytes(f.sizeBytes)}</small>
+                </div>
+                ${btns}
+            </div>`;
+        }).join('');
     }
     async function toggleJar(type, fileName) {
         const resp = await fetch('/api/instances/jar/toggle', {
@@ -1139,6 +1405,7 @@
 
     // === 初始化 ===
     loadDetail();
+    loadHostMem();
     // 玩家事件定时刷新(当处于玩家标签页时)
     setInterval(() => {
         if (document.getElementById('tab-players').style.display !== 'none') loadPlayerEvents();

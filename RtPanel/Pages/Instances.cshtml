@@ -20,6 +20,8 @@
                 <button class="btn btn-sm btn-outline-danger" onclick="batchDelete()" title="删除所有选中(需逐一确认)">删除</button>
                 <div class="vr"></div>
                 <button class="btn btn-sm btn-outline-info" onclick="openGroupWizard()" title="群组服务器一键构建向导(代理+端口+配置)">⚙ 创建群组服</button>
+                <input type="file" id="importZipInput" accept=".zip" style="display:none;" onchange="onImportZipSelected(this)" />
+                <button class="btn btn-sm btn-outline-success" onclick="document.getElementById('importZipInput').click()" title="上传 zip 压缩包, 自动解压并配置为实例">⬆ 导入实例</button>
                 <button class="btn btn-sm btn-primary" onclick="openInstanceWizard()">+ 创建新实例</button>
                 <div class="ms-auto small text-muted">
                     <span id="instanceCount">0</span> 个实例 · <span id="groupCount">0</span> 个群组
@@ -112,6 +114,89 @@
         <div class="text-end">
             <button class="btn btn-sm btn-secondary" onclick="closeModal('confirmModal')">取消</button>
             <button class="btn btn-sm btn-danger" id="confirmBtn">确认删除</button>
+        </div>
+    </div>
+</div>
+
+<!-- 克隆实例弹窗 -->
+<div class="modal-overlay" id="cloneModal" style="display:none;">
+    <div class="modal-box" style="max-width:460px;">
+        <h5>克隆实例</h5>
+        <p class="text-muted small mb-3">将 <strong id="cloneSrcName"></strong> 的配置复制为新实例, 可选复制工作目录全部文件。</p>
+        <div class="mb-2">
+            <label class="form-label small mb-1">新实例标识 <span class="text-muted">(唯一 ID)</span></label>
+            <input type="text" class="form-control form-control-sm" id="cloneIdentifier" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label small mb-1">显示名称</label>
+            <input type="text" class="form-control form-control-sm" id="cloneName" />
+        </div>
+        <div class="form-check mb-3">
+            <input type="checkbox" class="form-check-input" id="cloneCopyFiles" checked />
+            <label class="form-check-label small" for="cloneCopyFiles">复制服务端文件 (工作目录全部内容)</label>
+        </div>
+        <div class="text-end">
+            <button class="btn btn-sm btn-secondary" onclick="closeModal('cloneModal')">取消</button>
+            <button class="btn btn-sm btn-primary" id="cloneConfirmBtn" onclick="doClone()">克隆</button>
+        </div>
+    </div>
+</div>
+
+<!-- 导入实例配置弹窗(zip 解压后填写) -->
+<div class="modal-overlay" id="importModal" style="display:none;">
+    <div class="modal-box" style="max-width:560px;">
+        <h5>配置导入的实例</h5>
+        <p class="text-muted small">压缩包已解压到实例工作目录, 请完成以下配置。</p>
+        <div class="mb-2">
+            <label class="form-label small mb-1">显示名称</label>
+            <input type="text" class="form-control form-control-sm" id="imp_name" />
+        </div>
+        <div class="mb-2">
+            <label class="form-label small mb-1">分析模式</label>
+            <select class="form-select form-select-sm" id="imp_mode">
+                <option value="RM">RM - 管理(推荐)</option>
+                <option value="RUN">RUN - 子进程</option>
+                <option value="RR">RR - 子进程+Rcon</option>
+                <option value="RCON">RCON - 纯远程</option>
+            </select>
+        </div>
+        <div id="imp_scriptsBlock" class="mb-2" style="display:none;">
+            <label class="form-label small mb-1">启动脚本 <span class="text-muted">(读取 bat/cmd/sh 解析启动参数)</span></label>
+            <div id="imp_scriptsList" class="border rounded p-2" style="max-height:140px;overflow-y:auto;"></div>
+        </div>
+        <div class="mb-2">
+            <label class="form-label small mb-1">Java 路径</label>
+            <div class="d-flex gap-1 align-items-center">
+                <input type="text" class="form-control form-control-sm" id="imp_javaPath" placeholder="java" />
+                <select class="form-select form-select-sm flex-shrink-0" id="imp_javaSelect" style="width:130px;" onchange="if(this.value) document.getElementById('imp_javaPath').value = this.value;">
+                    <option value="">选择</option>
+                </select>
+                <button class="btn btn-sm btn-outline-info flex-shrink-0" onclick="impScanJavas(this)">扫描</button>
+            </div>
+        </div>
+        <div class="mb-2">
+            <div class="d-flex justify-content-between align-items-center">
+                <label class="form-label small mb-1">启动参数</label>
+                <select class="form-select form-select-sm" style="width:auto;" id="imp_flagsPreset" onchange="impApplyPreset()">
+                    <option value="">预设: 保持当前</option>
+                    <option value="aikar">Aikar's Flags</option>
+                    <option value="velocity">Velocity 代理端</option>
+                    <option value="waterfall">Waterfall 代理端</option>
+                    <option value="none">无 Flags</option>
+                </select>
+            </div>
+            <textarea class="form-control form-control-sm" id="imp_runFlags" rows="2" placeholder="-Xms1024M -Xmx1024M -jar server.jar --nogui"></textarea>
+        </div>
+        <div class="mb-2">
+            <label class="form-label small mb-1">服务端文件 <span class="text-muted">(工作目录第一层 .jar)</span></label>
+            <div class="d-flex gap-1 align-items-center">
+                <input type="text" class="form-control form-control-sm" id="imp_serverJar" placeholder="server.jar" />
+                <button class="btn btn-sm btn-outline-info flex-shrink-0" onclick="impScanJars(this)">扫描</button>
+            </div>
+        </div>
+        <div class="text-end mt-3">
+            <button class="btn btn-sm btn-secondary" onclick="closeImportModal()">跳过, 稍后配置</button>
+            <button class="btn btn-sm btn-primary" id="imp_saveBtn" onclick="saveImportConfig()">保存配置</button>
         </div>
     </div>
 </div>
@@ -248,6 +333,7 @@
                 <button class="btn btn-sm btn-outline-danger instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','stop')" title="停止" ${!inst.isRunning?'disabled':''}>■</button>
                 <button class="btn btn-sm btn-outline-warning instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','restart')" title="重启">⟳</button>
                 <a class="btn btn-sm btn-outline-info instance-icon-btn" href="/Instances/Manage/${encodeURIComponent(inst.id)}" title="管理">⚙</a>
+                <button class="btn btn-sm btn-outline-secondary instance-icon-btn" onclick="showCloneModal('${escapeHtml(inst.id)}')" title="克隆实例(复制配置与文件)">⧉</button>
             </div>
         `;
         return row;
@@ -1253,6 +1339,276 @@
             };
             openModal('confirmModal');
         });
+    }
+
+    // ===== 克隆实例 =====
+    let cloneSrcId = '';
+
+    function showCloneModal(id) {
+        const inst = allInstances.find(i => i.id === id);
+        if (!inst) return;
+        cloneSrcId = id;
+        document.getElementById('cloneSrcName').textContent = `${inst.name} (${inst.id})`;
+        let base = `${id}-copy`, n = 2;
+        while (allInstances.some(i => i.id === base)) base = `${id}-copy${n++}`;
+        document.getElementById('cloneIdentifier').value = base;
+        document.getElementById('cloneName').value = `${inst.name} 副本`;
+        document.getElementById('cloneCopyFiles').checked = true;
+        openModal('cloneModal');
+    }
+
+    async function doClone() {
+        const btn = document.getElementById('cloneConfirmBtn');
+        const identifier = document.getElementById('cloneIdentifier').value.trim();
+        if (!identifier) { showStatus('请输入新实例标识', 'danger'); return; }
+        btn.disabled = true; btn.textContent = '克隆中...';
+        try {
+            const resp = await fetch('/api/instances/clone', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({
+                    id: cloneSrcId,
+                    newIdentifier: identifier,
+                    newName: document.getElementById('cloneName').value.trim(),
+                    copyFiles: document.getElementById('cloneCopyFiles').checked
+                })
+            }).then(r => r.json());
+            showStatus(resp.message, resp.success ? 'success' : 'danger');
+            if (resp.success) { closeModal('cloneModal'); loadInstances(); }
+        } catch {
+            showStatus('克隆请求失败', 'danger');
+        } finally {
+            btn.disabled = false; btn.textContent = '克隆';
+        }
+    }
+
+    // ===== 导入实例(zip 上传 → 解压 → 配置) =====
+    let importInstanceId = '';
+
+    // zip 文件名 → 合法实例标识
+    function zipNameToIdentifier(fileName) {
+        return (fileName.replace(/\.zip$/i, '').replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'imported').slice(0, 40);
+    }
+
+    async function onImportZipSelected(input) {
+        const file = input.files && input.files[0];
+        input.value = ''; // 允许重复选择同一文件
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith('.zip')) { showStatus('请选择 .zip 压缩包', 'danger'); return; }
+
+        const identifier = zipNameToIdentifier(file.name);
+        if (allInstances.some(i => i.id === identifier)) {
+            showStatus(`标识 '${identifier}' 已存在, 请先将压缩包重命名(如 ${identifier}-2.zip)`, 'danger');
+            return;
+        }
+
+        showStatus(`导入中: 正在上传 ${file.name} (${formatBytes(file.size)})...`, 'info');
+        try {
+            // 1. 创建实例(默认布局 Content/Server/{identifier} 作为工作目录)
+            const createResp = await fetch('/api/instances/create', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ identifier, name: identifier, workPath: `Content/Server/${identifier}`, javaPath: '', runFlags: '', analyzerMode: 'RM' })
+            }).then(r => r.json());
+            if (!createResp.success) { showStatus(`创建实例失败: ${createResp.message}`, 'danger'); return; }
+            importInstanceId = identifier;
+
+            // 2. 上传 zip(服务端自动分块转发)
+            const form = new FormData();
+            form.append('id', identifier);
+            form.append('path', '');
+            form.append('file', file, '__import__.zip');
+            const upResp = await fetch('/api/instances/file/upload', { method: 'POST', body: form }).then(r => r.json());
+            if (!upResp.success) {
+                showStatus(`上传失败: ${upResp.message}`, 'danger');
+                await fetch('/api/instances/delete', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ id: identifier, deleteFiles: true }) });
+                return;
+            }
+
+            // 3. 解压 + 扫描启动脚本
+            showStatus('解压中...', 'info');
+            const exResp = await fetch('/api/instances/extract', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ id: identifier, relPath: '__import__.zip' })
+            }).then(r => r.json());
+            if (!exResp.success) {
+                showStatus(`解压失败: ${exResp.message} (实例已创建, 可在管理页手动处理)`, 'danger');
+                loadInstances();
+                return;
+            }
+
+            // 4. 弹出配置窗口
+            openImportModal(identifier, exResp.scripts || []);
+        } catch {
+            showStatus('导入请求失败', 'danger');
+            loadInstances();
+        }
+    }
+
+    function openImportModal(identifier, scripts) {
+        document.getElementById('imp_name').value = identifier;
+        document.getElementById('imp_mode').value = 'RM';
+        document.getElementById('imp_javaPath').value = '';
+        document.getElementById('imp_runFlags').value = '';
+        document.getElementById('imp_serverJar').value = '';
+        document.getElementById('imp_flagsPreset').value = '';
+
+        // 启动脚本列表
+        const block = document.getElementById('imp_scriptsBlock');
+        const list = document.getElementById('imp_scriptsList');
+        if (scripts.length > 0) {
+            block.style.display = '';
+            list.innerHTML = scripts.map((s, i) => `
+                <div class="form-check">
+                    <input type="radio" class="form-check-input" name="imp_script" id="imp_script_${i}" value="${escapeHtml(s)}" ${i === 0 ? 'checked' : ''} onchange="onImportScriptSelected()" />
+                    <label class="form-check-label small" for="imp_script_${i}">${escapeHtml(s)}</label>
+                </div>`).join('') +
+                `<div class="form-check"><input type="radio" class="form-check-input" name="imp_script" id="imp_script_none" value="" onchange="onImportScriptSelected()" /><label class="form-check-label small text-muted" for="imp_script_none">不使用脚本, 手动配置</label></div>`;
+            if (scripts.length > 1)
+                showStatus(`发现 ${scripts.length} 个启动脚本, 已默认选择第一个, 可切换`, 'info');
+            onImportScriptSelected();
+        } else {
+            block.style.display = 'none';
+            showStatus('未找到启动脚本(bat/cmd/sh), 请手动选择 Java 并输入启动参数', 'warning');
+        }
+        openModal('importModal');
+    }
+
+    // 选择启动脚本 → 读取内容解析 java 路径与启动参数
+    async function onImportScriptSelected() {
+        const checked = document.querySelector('input[name="imp_script"]:checked');
+        if (!checked || !checked.value) return;
+        try {
+            const resp = await fetch(`/api/instances/file/read?id=${encodeURIComponent(importInstanceId)}&path=${encodeURIComponent(checked.value)}`).then(r => r.json());
+            if (!resp.success) { showStatus(resp.message || '读取脚本失败', 'danger'); return; }
+            const content = resp.content || '';
+            // 逐行找包含 java 的启动行
+            let javaToken = '', args = '';
+            for (const rawLine of content.split(/\r?\n/)) {
+                const line = rawLine.trim();
+                if (!/^(@@(?:echo|rem)|#|:)/i.test(line) && /\bjava\b/i.test(line)) {
+                    // 去掉 bat 的 call/ start 前缀和 sh 的变量前缀
+                    let cmd = line.replace(/^(call\s+|start\s+.*?\s+)?/i, '').replace(/^\$\{?[A-Z_]+\}?\s*\/?\s*/, '');
+                    const m = cmd.match(/("[^"]*java[^"]*"|'?[^'\s]*java(?:\.exe)?'?)/i);
+                    if (m) {
+                        javaToken = m[1].replace(/^["']|["']$/g, '');
+                        args = cmd.substring(cmd.indexOf(m[1]) + m[1].length).trim();
+                        break;
+                    }
+                }
+            }
+            if (args) {
+                // 解析出 jar 文件名与 JVM 参数
+                const jm = args.match(/-jar\s+([^\s]+)/);
+                if (jm) {
+                    document.getElementById('imp_serverJar').value = jm[1].replace(/^["']|["']$/g, '');
+                    document.getElementById('imp_runFlags').value = args.replace(jm[0], '-jar ' + jm[1]).trim();
+                } else {
+                    document.getElementById('imp_runFlags').value = args;
+                }
+            }
+            // java 命令路径写入 Java 路径框(环境变量/相对名保留原样)
+            if (javaToken) document.getElementById('imp_javaPath').value = javaToken;
+            showStatus(checked.value ? `已从 ${checked.value} 解析启动配置` : '已切换为手动配置', 'success');
+        } catch {
+            showStatus('读取脚本失败', 'danger');
+        }
+    }
+
+    function closeImportModal() {
+        closeModal('importModal');
+        loadInstances();
+    }
+
+    async function saveImportConfig() {
+        const btn = document.getElementById('imp_saveBtn');
+        const jar = document.getElementById('imp_serverJar').value.trim();
+        let runFlags = document.getElementById('imp_runFlags').value.trim();
+        // 若填写了服务端文件但启动参数中没有 -jar, 自动附加
+        if (jar && !/-jar\s+\S+/.test(runFlags)) {
+            runFlags = `${runFlags} -jar ${jar} --nogui`.trim();
+        }
+        btn.disabled = true; btn.textContent = '保存中...';
+        try {
+            const resp = await fetch('/api/instances/update', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({
+                    id: importInstanceId,
+                    name: document.getElementById('imp_name').value.trim() || importInstanceId,
+                    analyzerMode: document.getElementById('imp_mode').value,
+                    javaPath: document.getElementById('imp_javaPath').value.trim(),
+                    runFlags,
+                    hidden: false,
+                    autoRestart: false
+                })
+            }).then(r => r.json());
+            showStatus(resp.message || (resp.success ? '导入完成' : '保存失败'), resp.success ? 'success' : 'danger');
+            if (resp.success) closeImportModal();
+        } catch {
+            showStatus('保存请求失败', 'danger');
+        } finally {
+            btn.disabled = false; btn.textContent = '保存配置';
+        }
+    }
+
+    // 导入弹窗: 扫描 Java
+    async function impScanJavas(btn) {
+        btn.disabled = true; btn.textContent = '扫描中';
+        try {
+            const resp = await fetch('/api/instances/javas').then(r => r.json());
+            if (!resp.success) { showStatus(resp.message || 'Java 扫描失败', 'danger'); return; }
+            const sel = document.getElementById('imp_javaSelect');
+            sel.innerHTML = '<option value="">选择</option>' + (resp.javas || []).map(j => {
+                const short = j.path.length > 40 ? '...' + j.path.slice(-38) : j.path;
+                return `<option value="${escapeHtml(j.path)}">${escapeHtml(j.version)} · ${escapeHtml(short)}</option>`;
+            }).join('');
+            showStatus(`扫描到 ${resp.javas.length} 个 Java`, 'success');
+        } catch { showStatus('Java 扫描请求失败', 'danger'); }
+        finally { btn.disabled = false; btn.textContent = '扫描'; }
+    }
+
+    // 导入弹窗: 扫描服务端 jar(工作目录第一层)
+    async function impScanJars(btn) {
+        btn.disabled = true; btn.textContent = '扫描中';
+        try {
+            const resp = await fetch(`/api/instances/file/list?id=${encodeURIComponent(importInstanceId)}&path=`).then(r => r.json());
+            if (!resp.success) { showStatus(resp.message || '扫描失败', 'danger'); return; }
+            const jars = (resp.entries || []).filter(e => !e.isDir && e.name.toLowerCase().endsWith('.jar')).map(e => e.name);
+            if (jars.length === 0) { showStatus('工作目录第一层未找到 .jar 文件', 'warning'); return; }
+            const input = document.getElementById('imp_serverJar');
+            if (!input.value.trim() && jars.length > 0) input.value = jars[0];
+            showStatus(`扫描到 ${jars.length} 个 jar: ${jars.slice(0, 5).join(', ')}${jars.length > 5 ? ' ...' : ''}`, 'success');
+        } catch { showStatus('扫描请求失败', 'danger'); }
+        finally { btn.disabled = false; btn.textContent = '扫描'; }
+    }
+
+    // 导入弹窗: 启动参数预设(替换 -jar 前的 JVM 参数部分)
+    const IMP_PRESETS = {
+        aikar: "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true",
+        velocity: "-XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:MaxInlineLevel=15",
+        waterfall: "-XX:+UseG1GC -XX:MaxInlineLevel=15",
+        none: ""
+    };
+
+    function impApplyPreset() {
+        const key = document.getElementById('imp_flagsPreset').value;
+        if (!key) return;
+        const ta = document.getElementById('imp_runFlags');
+        const raw = ta.value.trim();
+        const tokens = raw.split(/\s+/).filter(t => t.length > 0);
+        // 找 -jar 位置, 保留内存 token / -jar 及其后内容, 替换其余 JVM 参数
+        let jarIdx = -1;
+        for (let i = 0; i < tokens.length; i++) if (tokens[i] === '-jar') { jarIdx = i; break; }
+        const keep = [];
+        for (let i = 0; i < tokens.length; i++) {
+            const t = tokens[i];
+            if (i === jarIdx) { keep.push(t); continue; }
+            if (jarIdx >= 0 && i === jarIdx + 1) { keep.push(t); continue; }
+            if (/^-Xm[sx]/.test(t)) keep.push(t); // 保留内存参数
+        }
+        const preset = IMP_PRESETS[key];
+        // 顺序: 内存 → 预设 → (-jar 及其后已含在 keep)
+        const mem = keep.filter(t => /^-Xm[sx]/.test(t));
+        const rest = keep.filter(t => !/^-Xm[sx]/.test(t));
+        ta.value = [...mem, ...(preset ? preset.split(/\s+/) : []), ...rest].join(' ');
     }
 
     // === 初始化 ===

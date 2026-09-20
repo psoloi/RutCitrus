@@ -742,12 +742,51 @@ namespace RtCli.Modules.Unit
         {
             ValidateAuthKey(context);
             EnsureClientTracked(context);
+            // gRPC proto3 的 string 默认为空串, 无法与"未提供"区分;
+            // 将可选字段的空串转为 null 以保留 Hub 层"null=不更新"语义,
+            // 避免面板部分更新请求(如仅改分析模式)清空其他配置。
+            // groupId 例外: 空串是合法值(表示移出群组)。
             var (ok, msg) = ServerDataManager.UpdateInstance(
-                request.Id ?? "", request.Name ?? "", request.GroupId ?? "",
+                request.Id ?? "",
+                string.IsNullOrEmpty(request.Name) ? null : request.Name,
+                request.GroupId ?? "",
                 request.Hidden, request.AutoRestart,
-                request.WorkPath ?? "", request.JavaPath ?? "",
-                request.RunFlags ?? "", request.AnalyzerMode ?? "");
+                string.IsNullOrEmpty(request.WorkPath) ? null : request.WorkPath,
+                string.IsNullOrEmpty(request.JavaPath) ? null : request.JavaPath,
+                string.IsNullOrEmpty(request.RunFlags) ? null : request.RunFlags,
+                string.IsNullOrEmpty(request.AnalyzerMode) ? null : request.AnalyzerMode);
             return Task.FromResult(new InstanceActionResponse { Success = ok, Message = msg });
+        }
+
+        public override Task<JavaScanResponse> ScanJavaPaths(Empty request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg, javas) = Backend.ScanJavaInstallations();
+            var resp = new JavaScanResponse { Success = ok, Message = msg };
+            foreach (var j in javas)
+                resp.Javas.Add(new Grpc.JavaInfo { Path = j.Path, Version = j.Version, Source = j.Source });
+            return Task.FromResult(resp);
+        }
+
+        public override Task<InstanceActionResponse> CloneInstance(CloneInstanceRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg, _) = Backend.CloneInstance(
+                request.Id ?? "", request.NewIdentifier ?? "", request.NewName ?? "", request.CopyFiles);
+            return Task.FromResult(new InstanceActionResponse { Success = ok, Message = msg });
+        }
+
+        public override Task<ExtractArchiveResponse> ExtractInstanceArchive(ExtractArchiveRequest request, ServerCallContext context)
+        {
+            ValidateAuthKey(context);
+            EnsureClientTracked(context);
+            var (ok, msg, scripts) = Backend.ExtractInstanceZip(request.Id ?? "", request.RelPath ?? "");
+            var resp = new ExtractArchiveResponse { Success = ok, Message = msg };
+            foreach (var s in scripts)
+                resp.Scripts.Add(s);
+            return Task.FromResult(resp);
         }
 
         public override Task<InstanceActionResponse> InstanceAction(InstanceActionRequest request, ServerCallContext context)
@@ -958,7 +997,11 @@ namespace RtCli.Modules.Unit
                     {
                         FileName = p.FileName ?? "",
                         SizeBytes = p.SizeBytes,
-                        IsDisabled = p.IsDisabled
+                        IsDisabled = p.IsDisabled,
+                        Name = p.Name ?? "",
+                        Version = p.Version ?? "",
+                        Description = p.Description ?? "",
+                        MetaParsed = p.MetaParsed
                     });
                 }
             }

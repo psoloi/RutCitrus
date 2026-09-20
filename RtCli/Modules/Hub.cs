@@ -785,6 +785,21 @@ namespace RtCli.Modules
                 };
                 Unit.Config.App.ServerList[identifier] = entry;
 
+                // 工作目录不存在时自动创建(相对路径基于 RtCli 运行目录)
+                if (!string.IsNullOrEmpty(workPath))
+                {
+                    try
+                    {
+                        var fullWorkPath = Path.GetFullPath(workPath);
+                        if (!Directory.Exists(fullWorkPath))
+                            Directory.CreateDirectory(fullWorkPath);
+                    }
+                    catch
+                    {
+                        // 路径非法时不阻断实例创建, 后续操作会给出明确错误
+                    }
+                }
+
                 // 添加到 server_data.json
                 var instance = new ServerInstance
                 {
