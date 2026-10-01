@@ -50,11 +50,11 @@ namespace RtPanel.Controllers
             });
         }
 
-        /// <summary>获取 server.properties 在指定版本下的字段 schema(用于界面版本选择器)。</summary>
+        /// <summary>获取 server.properties 的字段 schema(界面不再按版本筛选, 默认返回全部字段)。</summary>
         [HttpGet("propertiesSchema")]
         public async Task<IActionResult> GetPropertiesSchema([FromQuery] string? version = null)
         {
-            var ver = string.IsNullOrEmpty(version) ? "26.2" : version;
+            var ver = string.IsNullOrEmpty(version) ? "all" : version;
             var fields = _schema.GetVisiblePropertiesFields(ver);
 
             // 从 RtCli Repository 获取 server.properties 字段描述
@@ -81,7 +81,8 @@ namespace RtPanel.Controllers
                     @default = f.Default,
                     category = f.Category,
                     sinceVer = f.SinceVer,
-                    removedVer = f.RemovedVer
+                    removedVer = f.RemovedVer,
+                    options = f.Options
                 })
             });
         }
@@ -109,7 +110,7 @@ namespace RtPanel.Controllers
                     ? new Dictionary<string, string>(docsResponse.Docs)
                     : new Dictionary<string, string>();
 
-                var nodes = _schema.ParseProperties(response.Content, string.IsNullOrEmpty(version) ? "26.2" : version, externalDescs);
+                var nodes = _schema.ParseProperties(response.Content, string.IsNullOrEmpty(version) ? "all" : version, externalDescs);
                 return Ok(new
                 {
                     response.Success,

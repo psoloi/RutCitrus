@@ -2,7 +2,10 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Grpc.Core;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using RtCli.Grpc;
 using RtPanel.Services;
 
@@ -60,7 +63,7 @@ namespace RtPanel.Controllers
                 createdAt = g.CreatedAt
             }).ToList();
 
-            return Ok(new { success = true, instances, groups });
+            return Ok(new { success = true, instances, groups, currentServerKey = resp.CurrentServerKey ?? "" });
         }
 
         /// <summary>创建实例</summary>
@@ -329,6 +332,31 @@ namespace RtPanel.Controllers
             return Ok(new { success = resp.Success, message = resp.Message, errors });
         }
 
+        /// <summary>基础分析实例错误(对应控制台 .fx base)</summary>
+        [HttpPost("errors/base")]
+        public async Task<IActionResult> BaseAnalyzeErrors([FromBody] AiAnalyzeErrorsPayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var resp = await _client.BaseAnalyzeInstanceErrorsAsync(payload?.Id ?? "", payload?.Range ?? "");
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+
+            return Ok(new
+            {
+                success = resp.Success,
+                message = resp.Message,
+                matches = resp.Matches.Select(m => new
+                {
+                    topic = m.Topic,
+                    solution = m.Solution,
+                    action = m.Action,
+                    matched = m.Matched
+                })
+            });
+        }
+
         /// <summary>AI分析实例错误</summary>
         [HttpPost("errors/ai")]
         public async Task<IActionResult> AiAnalyzeErrors([FromBody] AiAnalyzeErrorsPayload payload)
@@ -460,13 +488,27 @@ namespace RtPanel.Controllers
             if (resp == null)
                 return Ok(new { success = false, message = "请求失败" });
 
+            // 模组也解析元数据(fabric.mod.json / mcmod.info / META-INF/mods.toml), 透传给面板显示名称与版本
             var files = resp.Files.Select(f => new
             {
                 fileName = f.FileName,
                 sizeBytes = f.SizeBytes,
-                isDisabled = f.IsDisabled
+                isDisabled = f.IsDisabled,
+                name = f.Name,
+                version = f.Version,
+                description = f.Description,
+                metaParsed = f.MetaParsed
             }).ToList();
             return Ok(new { success = resp.Success, message = resp.Message, files });
+        }
+
+        /// <summary>插件更新请求负载</summary>
+        public class PluginUpdatePayload
+        {
+            public string Id { get; set; } = "";
+            public string FileName { get; set; } = "";
+            /// <summary>false=只检查版本, true=下载并替换</summary>
+            public bool Apply { get; set; }
         }
 
         public class JarFileActionPayload
@@ -503,6 +545,31 @@ namespace RtPanel.Controllers
         }
 
         /// <summary>上传插件/模组文件(multipart)</summary>
+        /// <summary>插件更新: 用 plugin.yml 的插件名去 Modrinth 比对版本并下载替换。</summary>
+        [HttpPost("jar/update")]
+        public async Task<IActionResult> UpdatePlugin([FromBody] PluginUpdatePayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+            if (payload == null || string.IsNullOrWhiteSpace(payload.FileName))
+                return Ok(new { success = false, message = "缺少插件文件名" });
+
+            var resp = await _client.UpdatePluginAsync(payload.Id ?? "", payload.FileName, payload.Apply);
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败(可能是网络或超时)" });
+
+            return Ok(new
+            {
+                resp.Success,
+                resp.Message,
+                hasUpdate = resp.HasUpdate,
+                localVersion = resp.LocalVersion,
+                remoteVersion = resp.RemoteVersion,
+                projectTitle = resp.ProjectTitle,
+                newFileName = resp.NewFileName
+            });
+        }
+
         [HttpPost("jar/upload")]
         [RequestSizeLimit(64 * 1024 * 1024)]
         public async Task<IActionResult> UploadJarFile([FromForm] string id, [FromForm] string type, IFormFile file)
@@ -583,7 +650,7 @@ namespace RtPanel.Controllers
             }
         }
 
-        /// <summary>上传文件到实例工作目录(1MB 分块转发 gRPC, 避免单消息大小限制)</summary>
+        /// <summary>上传文件到实例工作目录(1MB 分块转发 gRPC, 避免单消息大小限制); 过程中向事件板上报进度</summary>
         [HttpPost("file/upload")]
         [RequestSizeLimit(1024L * 1024 * 1024)]
         [RequestFormLimits(MultipartBodyLengthLimit = 1024L * 1024 * 1024)]
@@ -601,29 +668,74 @@ namespace RtPanel.Controllers
                 ? fileName
                 : $"{path.Trim().Replace('\\', '/').Trim('/')}/{fileName}";
 
-            const int chunkSize = 1024 * 1024;
-            var buffer = new byte[chunkSize];
-            long offset = 0;
-            await using var stream = file.OpenReadStream();
-            while (true)
+            // 事件板进度上报: 同一次上传共用一个 event_key, 事件板只占一行并原地刷新进度
+            var totalBytes = file.Length;
+            var boardKey = $"file_upload:{Guid.NewGuid():N}";
+            async Task ReportAsync(string title, string detail)
             {
-                int read = 0;
-                while (read < chunkSize)
-                {
-                    var n = await stream.ReadAsync(buffer, read, chunkSize - read);
-                    if (n == 0) break;
-                    read += n;
-                }
-                bool final = read < chunkSize; // 不足一块即文件读完, 本块为最后一块
-                var resp = await _client.UploadInstanceFileChunkAsync(id ?? "", relPath, offset, buffer[..read], final);
-                if (resp == null)
-                    return Ok(new { success = false, message = "上传请求失败" });
-                if (!resp.Success)
-                    return Ok(new { success = resp.Success, message = resp.Message });
-                offset += read;
-                if (final) break;
+                try { await _client.ReportBoardEventAsync(boardKey, "file_upload", id ?? "", title, detail); }
+                catch { /* 旁路上报失败不应影响上传主流程 */ }
             }
-            return Ok(new { success = true, message = $"已上传: {fileName}" });
+
+            try
+            {
+                await ReportAsync($"上传文件: {fileName}", $"0% (0 B / {FormatSize(totalBytes)})");
+
+                const int chunkSize = 1024 * 1024;
+                var buffer = new byte[chunkSize];
+                long offset = 0;
+                int lastPct = 0;
+                await using var stream = file.OpenReadStream();
+                while (true)
+                {
+                    int read = 0;
+                    while (read < chunkSize)
+                    {
+                        var n = await stream.ReadAsync(buffer, read, chunkSize - read);
+                        if (n == 0) break;
+                        read += n;
+                    }
+                    bool final = read < chunkSize; // 不足一块即文件读完, 本块为最后一块
+                    var resp = await _client.UploadInstanceFileChunkAsync(id ?? "", relPath, offset, buffer[..read], final);
+                    if (resp == null)
+                    {
+                        await ReportAsync($"上传失败: {fileName}", "上传请求失败");
+                        return Ok(new { success = false, message = "上传请求失败" });
+                    }
+                    if (!resp.Success)
+                    {
+                        await ReportAsync($"上传失败: {fileName}", resp.Message ?? "上传失败");
+                        return Ok(new { success = resp.Success, message = resp.Message });
+                    }
+                    offset += read;
+                    if (final) break;
+
+                    // 进度每前进 5% 刷新一次事件板(避免每块都上报造成额外开销)
+                    var pct = totalBytes > 0 ? (int)(offset * 100 / totalBytes) : 100;
+                    if (pct - lastPct >= 5)
+                    {
+                        lastPct = pct;
+                        await ReportAsync($"上传文件: {fileName} ({pct}%)", $"{FormatSize(offset)} / {FormatSize(totalBytes)}");
+                    }
+                }
+                await ReportAsync($"上传完成: {fileName}", $"共 {FormatSize(totalBytes)}");
+                return Ok(new { success = true, message = $"已上传: {fileName}" });
+            }
+            catch (Exception ex)
+            {
+                await ReportAsync($"上传失败: {fileName}", ex.Message);
+                return Ok(new { success = false, message = $"上传失败: {ex.Message}" });
+            }
+        }
+
+        /// <summary>字节数格式化(用于事件板上传进度显示)</summary>
+        private static string FormatSize(long bytes)
+        {
+            string[] units = { "B", "KB", "MB", "GB", "TB" };
+            double v = bytes;
+            int u = 0;
+            while (v >= 1024 && u < units.Length - 1) { v /= 1024; u++; }
+            return u == 0 ? $"{bytes} B" : $"{v:0.##} {units[u]}";
         }
 
         public class FileDeletePayload
@@ -642,6 +754,7 @@ namespace RtPanel.Controllers
             var resp = await _client.DeleteInstanceEntryAsync(payload.Id, payload.Path, payload.Recursive);
             if (resp == null)
                 return Ok(new { success = false, message = "请求失败" });
+            // 事件由 RtCli 的 Backend 在删除成功后统一记录(含 CLI/桥接通道), 此处不再重复上报
             return Ok(new { success = resp.Success, message = resp.Message });
         }
 
@@ -717,6 +830,174 @@ namespace RtPanel.Controllers
             if (resp == null)
                 return Ok(new { success = false, message = "请求失败" });
             return Ok(new { success = resp.Success, message = resp.Message });
+        }
+
+        // ===== 全服配置 (RM 管理协议 serversettings) =====
+
+        /// <summary>读取全服配置(仅 RM 模式且已连接管理协议的实例可用)</summary>
+        [HttpGet("serversettings")]
+        public async Task<IActionResult> GetServerSettings([FromQuery] string? serverKey)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var resp = await _client.GetServerSettingsAsync(serverKey ?? "");
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+            var settings = resp.Settings.Select(s => new
+            {
+                key = s.Key,
+                value = s.Value,
+                type = s.Type,
+                label = s.Label,
+                options = s.Options.ToList()
+            });
+            return Ok(new { success = resp.Success, message = resp.Message, settings });
+        }
+
+        public class ServerSettingsSavePayload
+        {
+            public string ServerKey { get; set; } = "";
+            public List<ServerSettingValueItem> Values { get; set; } = new();
+        }
+
+        public class ServerSettingValueItem
+        {
+            public string Key { get; set; } = "";
+            public string Value { get; set; } = "";
+        }
+
+        /// <summary>保存全服配置(仅 RM 模式且已连接管理协议的实例可用)</summary>
+        [HttpPost("serversettings/save")]
+        public async Task<IActionResult> SaveServerSettings([FromBody] ServerSettingsSavePayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var values = (payload.Values ?? new()).Select(v => new ServerSettingValue { Key = v.Key ?? "", Value = v.Value ?? "" }).ToList();
+            var resp = await _client.SetServerSettingsAsync(payload.ServerKey ?? "", values);
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+            return Ok(new { success = resp.Success, message = resp.Message });
+        }
+
+        // ===== RM 管理协议通用操作(游戏规则/名单/服务器控制/能力发现) =====
+
+        public class RmManagePayload
+        {
+            public string InstanceId { get; set; } = "";
+            public string Category { get; set; } = ""; // gamerules/allowlist/operators/bans/ip_bans/server/discover
+            public string Action { get; set; } = "";   // get/add/remove/clear/set/save/stop/system_message/status
+            public string Target { get; set; } = "";
+            public string Value { get; set; } = "";
+            public bool Flag { get; set; }
+        }
+
+        /// <summary>RM 管理协议通用操作(非 RM 实例部分操作自动降级为命令通道)</summary>
+        [HttpPost("rm/manage")]
+        public async Task<IActionResult> RmManage([FromBody] RmManagePayload payload)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, message = "未连接到服务器" });
+
+            var resp = await _client.ManageServerAsync(payload.InstanceId ?? "", payload.Category ?? "",
+                payload.Action ?? "", payload.Target ?? "", payload.Value ?? "", payload.Flag);
+            if (resp == null)
+                return Ok(new { success = false, message = "请求失败" });
+            var entries = resp.Entries.Select(e => new { name = e.Name, value = e.Value, extra = e.Extra }).ToList();
+            return Ok(new { success = resp.Success, message = resp.Message, entries, raw = resp.Raw });
+        }
+
+        /// <summary>
+        /// 查询玩家 UUID(供 ops.json / whitelist.json 界面编辑新增条目使用)。
+        /// 依据实例 server.properties 的 online-mode 决定: 正版 → Mojang API; 离线 → 本地离线算法;
+        /// 读不到 server.properties 或没有 online-mode 时不自动生成, 由用户手动填写。
+        /// </summary>
+        [HttpGet("player/uuid")]
+        public async Task<IActionResult> LookupPlayerUuid([FromQuery] string? serverKey, [FromQuery] string? name)
+        {
+            if (!_client.IsConnected)
+                return Ok(new { success = false, reason = "disconnected", message = "未连接到服务器" });
+
+            var playerName = (name ?? "").Trim();
+            if (playerName.Length == 0)
+                return Ok(new { success = false, reason = "invalid-name", message = "请输入玩家名称" });
+            if (!Regex.IsMatch(playerName, "^[A-Za-z0-9_]{1,16}$"))
+                return Ok(new { success = false, reason = "invalid-name", message = "玩家名只能是 1-16 位字母/数字/下划线" });
+
+            var props = await _client.GetServerFileAsync(serverKey ?? "", "server.properties");
+            if (props == null || !props.Success || string.IsNullOrWhiteSpace(props.Content))
+                return Ok(new { success = false, reason = "no-server-properties", message = "未找到该实例的 server.properties，无法判断正版/离线模式，请手动填写 UUID" });
+
+            var onlineMode = ParseOnlineMode(props.Content);
+            if (onlineMode == null)
+                return Ok(new { success = false, reason = "no-online-mode", message = "server.properties 中未找到 online-mode，请手动填写 UUID" });
+
+            if (onlineMode == true)
+            {
+                try
+                {
+                    using var resp = await _httpClient.GetAsync(
+                        $"https://api.mojang.com/users/profiles/minecraft/{Uri.EscapeDataString(playerName)}");
+                    if (resp.StatusCode == System.Net.HttpStatusCode.NoContent ||
+                        resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+                        return Ok(new { success = false, reason = "not-found", onlineMode = true, message = "正版数据库中未找到该玩家，请确认名称拼写或手动填写 UUID" });
+                    if (!resp.IsSuccessStatusCode)
+                        return Ok(new { success = false, reason = "api-error", onlineMode = true, message = $"正版 API 返回 {(int)resp.StatusCode}，请稍后重试或手动填写 UUID" });
+
+                    var json = await resp.Content.ReadAsStringAsync();
+                    using var doc = JsonDocument.Parse(json);
+                    var rawId = doc.RootElement.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+                    var uuid = FormatMojangUuid(rawId);
+                    if (string.IsNullOrEmpty(uuid))
+                        return Ok(new { success = false, reason = "api-error", onlineMode = true, message = "正版 API 返回的 UUID 无法解析，请手动填写" });
+
+                    return Ok(new { success = true, onlineMode = true, source = "mojang", uuid, name = playerName });
+                }
+                catch (Exception ex)
+                {
+                    return Ok(new { success = false, reason = "api-error", onlineMode = true, message = "请求正版 API 失败: " + ex.Message });
+                }
+            }
+
+            // 离线模式: 等价于 Java 的 UUID.nameUUIDFromBytes("OfflinePlayer:" + name)
+            return Ok(new { success = true, onlineMode = false, source = "offline", uuid = OfflinePlayerUuid(playerName), name = playerName });
+        }
+
+        /// <summary>从 server.properties 内容解析 online-mode, 未找到返回 null</summary>
+        private static bool? ParseOnlineMode(string content)
+        {
+            foreach (var raw in content.Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#")) continue;
+                var idx = line.IndexOf('=');
+                if (idx <= 0) continue;
+                if (!line.Substring(0, idx).Trim().Equals("online-mode", StringComparison.OrdinalIgnoreCase)) continue;
+                var value = line.Substring(idx + 1).Trim();
+                if (value.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
+                if (value.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return null;
+        }
+
+        /// <summary>Mojang API 返回 32 位无连字符 hex, 补成标准 UUID 字符串</summary>
+        private static string? FormatMojangUuid(string? raw)
+        {
+            var hex = (raw ?? "").Replace("-", "").Trim().ToLowerInvariant();
+            if (hex.Length != 32) return null;
+            return $"{hex.Substring(0, 8)}-{hex.Substring(8, 4)}-{hex.Substring(12, 4)}-{hex.Substring(16, 4)}-{hex.Substring(20, 12)}";
+        }
+
+        /// <summary>离线模式 UUID(MD5 v3), 与 Minecraft 服务端离线模式对同一玩家名的计算结果一致</summary>
+        private static string OfflinePlayerUuid(string name)
+        {
+            using var md5 = MD5.Create();
+            var hash = md5.ComputeHash(Encoding.UTF8.GetBytes("OfflinePlayer:" + name));
+            hash[6] = (byte)((hash[6] & 0x0F) | 0x30); // 版本 = 3 (MD5 命名 UUID)
+            hash[8] = (byte)((hash[8] & 0x3F) | 0x80); // 变体 = RFC4122
+            var hex = Convert.ToHexString(hash).ToLowerInvariant();
+            return $"{hex.Substring(0, 8)}-{hex.Substring(8, 4)}-{hex.Substring(12, 4)}-{hex.Substring(16, 4)}-{hex.Substring(20, 12)}";
         }
 
         // ===== 自定义命令(保存在 panel_data.json) =====

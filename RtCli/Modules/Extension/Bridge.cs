@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -23,6 +24,13 @@ namespace RtCli.Modules.Extension
         private static HttpListener? _listener;
         private static CancellationTokenSource? _cts;
         private static readonly object _lock = new();
+
+        /// <summary>并发处理上限: 超出后直接返回 503, 防止大量并发请求拖垮进程</summary>
+        private const int MaxConcurrentRequests = 16;
+        private static readonly SemaphoreSlim _requestSlots = new(MaxConcurrentRequests, MaxConcurrentRequests);
+
+        /// <summary>请求体大小上限(4MB): 防止超大 body 占用内存</summary>
+        private const long MaxRequestBodyBytes = 4L * 1024 * 1024;
 
         public static int ApiPort => Config.App.GrpcPort + 1;
         public static bool IsRunning => _listener != null && _listener.IsListening;
@@ -79,13 +87,36 @@ namespace RtCli.Modules.Extension
                 HttpListenerContext ctx;
                 try { ctx = await _listener.GetContextAsync(); }
                 catch { break; }
-                _ = Task.Run(() => HandleRequestSafe(ctx));
+                _ = Task.Run(() => HandleRequestLimited(ctx));
             }
+        }
+
+        /// <summary>并发上限内的请求处理入口: 超出上限直接返回 503, 避免大量并发拖垮进程</summary>
+        private static async Task HandleRequestLimited(HttpListenerContext ctx)
+        {
+            if (!_requestSlots.Wait(0))
+            {
+                try
+                {
+                    SetCors(ctx.Request, ctx.Response);
+                    await WriteJson(ctx.Response, new { success = false, message = "服务繁忙: 并发请求过多, 请稍后重试" }, 503);
+                }
+                catch { }
+                return;
+            }
+
+            try { await HandleRequestSafe(ctx); }
+            finally { _requestSlots.Release(); }
         }
 
         private static async Task HandleRequestSafe(HttpListenerContext ctx)
         {
-            try { await HandleRequest(ctx); }
+            try
+            {
+                // CORS 头在入口统一设置(需要 Origin 请求头做来源判断)
+                SetCors(ctx.Request, ctx.Response);
+                await HandleRequest(ctx);
+            }
             catch (Exception ex)
             {
                 try { await WriteJson(ctx.Response, new { success = false, message = ex.Message }, 500); }
@@ -97,24 +128,52 @@ namespace RtCli.Modules.Extension
         private static bool ValidateAuth(HttpListenerRequest req)
         {
             var key = Config.App.GrpcAuthKey;
-            if (string.IsNullOrEmpty(key)) return true;
+            // fail-close: 未配置密钥时拒绝所有请求, 绝不因空密钥放行
+            if (string.IsNullOrEmpty(key)) return false;
+
             var auth = req.Headers["Authorization"];
-            return auth == key;
+            if (string.IsNullOrEmpty(auth)) return false;
+
+            // 常量时间比较, 避免响应时间侧信道
+            var provided = Encoding.UTF8.GetBytes(auth);
+            var expected = Encoding.UTF8.GetBytes(key);
+            return provided.Length == expected.Length
+                && CryptographicOperations.FixedTimeEquals(provided, expected);
         }
 
         // ===== CORS 与响应 =====
-        private static void SetCors(HttpListenerResponse resp)
+        /// <summary>
+        /// 设置 CORS 头: 仅反射本机来源(面板与 RtCli 同机部署), 不再返回通配符 "*"。
+        /// 非本机来源不返回 Allow-Origin, 浏览器会按跨域策略拒绝。
+        /// </summary>
+        private static void SetCors(HttpListenerRequest req, HttpListenerResponse resp)
         {
-            resp.Headers["Access-Control-Allow-Origin"] = "*";
+            var origin = ResolveAllowedOrigin(req);
+            if (origin != null)
+            {
+                resp.Headers["Access-Control-Allow-Origin"] = origin;
+                resp.Headers["Vary"] = "Origin";
+            }
             resp.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
             resp.Headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+        }
+
+        private static string? ResolveAllowedOrigin(HttpListenerRequest req)
+        {
+            var origin = req.Headers["Origin"];
+            if (string.IsNullOrWhiteSpace(origin)) return null;
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return null;
+            if (uri.Scheme != "http" && uri.Scheme != "https") return null;
+            // 仅允许回环地址/本机名来源
+            if (!uri.IsLoopback && !string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+                return null;
+            return origin;
         }
 
         private static async Task WriteJson(HttpListenerResponse resp, object data, int status = 200)
         {
             resp.StatusCode = status;
             resp.ContentType = "application/json; charset=utf-8";
-            SetCors(resp);
             var json = JsonSerializer.Serialize(data, _jsonOpts);
             var bytes = Encoding.UTF8.GetBytes(json);
             resp.ContentLength64 = bytes.Length;
@@ -126,7 +185,6 @@ namespace RtCli.Modules.Extension
         {
             resp.StatusCode = status;
             resp.ContentType = contentType;
-            SetCors(resp);
             var bytes = Encoding.UTF8.GetBytes(text);
             resp.ContentLength64 = bytes.Length;
             await resp.OutputStream.WriteAsync(bytes);
@@ -135,8 +193,23 @@ namespace RtCli.Modules.Extension
 
         private static async Task<string> ReadBody(HttpListenerRequest req)
         {
+            if (req.ContentLength64 > MaxRequestBodyBytes)
+                throw new InvalidOperationException($"请求体过大({req.ContentLength64} 字节), 上限 {MaxRequestBodyBytes} 字节");
+
             using var reader = new StreamReader(req.InputStream, req.ContentEncoding);
-            return await reader.ReadToEndAsync();
+            var sb = new StringBuilder();
+            var buffer = new char[8192];
+            long total = 0;
+            int read;
+            // 无 Content-Length(分块传输)时同样在超限时中止, 避免无上限读取
+            while ((read = await reader.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                total += read;
+                if (total > MaxRequestBodyBytes)
+                    throw new InvalidOperationException($"请求体超过上限 {MaxRequestBodyBytes} 字节");
+                sb.Append(buffer, 0, read);
+            }
+            return sb.ToString();
         }
 
         // ===== 主路由 =====
@@ -147,8 +220,8 @@ namespace RtCli.Modules.Extension
             var method = req.HttpMethod;
             var path = req.Url?.AbsolutePath?.TrimEnd('/') ?? "";
 
-            // OPTIONS 预检
-            if (method == "OPTIONS") { SetCors(resp); resp.StatusCode = 204; resp.Close(); return; }
+            // OPTIONS 预检(CORS 头已在 HandleRequestSafe 入口统一设置)
+            if (method == "OPTIONS") { resp.StatusCode = 204; resp.Close(); return; }
 
             // Swagger UI 和 OpenAPI 文档不需要认证
             if (path == "/api/docs" && method == "GET") { await WriteText(resp, GetSwaggerUiHtml()); return; }
@@ -675,11 +748,7 @@ namespace RtCli.Modules.Extension
 <script src=""https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js""></script>
 <script>
 window.onload=function(){
-SwaggerUIBundle({url:'/api/openapi.json',dom_id:'#swagger-ui',
-requestInterceptor:function(req){
-req.headers['Authorization']='" + Config.App.GrpcAuthKey + @"';
-return req;
-}});
+SwaggerUIBundle({url:'/api/openapi.json',dom_id:'#swagger-ui'});
 };
 </script>
 </body></html>";

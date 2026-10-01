@@ -11,7 +11,7 @@ namespace Rt.Core
     /// Minecraft服务器状态查询主类
     /// 实现 rte get 命令，遵循MC服务器Ping协议(Server List Ping)
     /// </summary>
-    public static class McStatusQuery
+    public static class MCStatusQuery
     {
         private const string Name = "McStatus";
 
@@ -95,7 +95,7 @@ namespace Rt.Core
 
             try
             {
-                var (status, latency) = McPingProtocol.Query(host, port, timeoutSeconds);
+                var (status, latency) = MCPingProtocol.Query(host, port, timeoutSeconds);
                 DisplayResult(host, port, status, latency);
             }
             catch (TimeoutException)
@@ -112,7 +112,7 @@ namespace Rt.Core
             }
         }
 
-        private static void DisplayResult(string host, int port, McStatusResponse status, int latency)
+        private static void DisplayResult(string host, int port, MCStatusResponse status, int latency)
         {
             var table = new Table()
                 .Border(TableBorder.Rounded)

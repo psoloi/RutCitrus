@@ -24,6 +24,8 @@ namespace RtCli.Modules.Extension
 
         /// <summary>
         /// 触发加载/执行的事件名称
+        /// 仅支持内置事件类名(如ServerStartEvent)、CustomPlayerEvent(通配全部自定义玩家事件)
+        /// 或player_event.customs中定义的自定义事件键；其他值无效并告警，脚本不会订阅
         /// </summary>
         public string TriggerEvent { get; set; } = "";
 
@@ -57,6 +59,12 @@ namespace RtCli.Modules.Extension
         private const string ThisName = "Scripts";
         private static readonly string ScriptsDirectory = Path.Combine("Content", "Scripts");
         private static readonly string AbsoluteScriptsPath = Path.GetFullPath(ScriptsDirectory);
+
+        /// <summary>Python脚本执行超时(毫秒), 超时强制终止, 避免卡死事件线程</summary>
+        private const int PythonTimeoutMs = 120_000;
+
+        /// <summary>脚本单次输出最大字符数</summary>
+        private const int PythonMaxOutputChars = 4000;
         private static ScriptsSettings _settings = new();
         private static readonly Dictionary<string, dynamic> _loadedCsScripts = new();
         private static bool _isInitialized = false;
@@ -214,47 +222,14 @@ if __name__ == ""__main__"":
         /// </summary>
         private static void SubscribeToEvent(string scriptName, ScriptItem item)
         {
-            var eventMap = new Dictionary<string, Action<RtEvent>>
+            // 先校验事件名有效性，避免不存在的事件名被静默当作自定义事件订阅
+            if (!EventNames.IsValidEventName(item.TriggerEvent))
             {
-                { "ModeSelectedEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ProgramStartupEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ProgramShutdownEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ExtensionLoadEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ExtensionUnloadEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ServerStartEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ServerStopEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ServerDoneEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ServerCrashEvent", e => ExecuteScript(scriptName, item, e) },
-                { "AutoRestartEvent", e => ExecuteScript(scriptName, item, e) },
-                { "BackupStartEvent", e => ExecuteScript(scriptName, item, e) },
-                { "BackupCompleteEvent", e => ExecuteScript(scriptName, item, e) },
-                { "TaskExecuteEvent", e => ExecuteScript(scriptName, item, e) },
-                { "SchedulerStartEvent", e => ExecuteScript(scriptName, item, e) },
-                { "SchedulerStopEvent", e => ExecuteScript(scriptName, item, e) },
-                { "CommandExecuteEvent", e => ExecuteScript(scriptName, item, e) },
-                { "ConfigReloadEvent", e => ExecuteScript(scriptName, item, e) },
-                { "PlayerJoinEvent", e => ExecuteScript(scriptName, item, e) },
-                { "PlayerConnectEvent", e => ExecuteScript(scriptName, item, e) },
-                { "PlayerLostEvent", e => ExecuteScript(scriptName, item, e) },
-                { "PlayerLeaveEvent", e => ExecuteScript(scriptName, item, e) },
-                { "PlayerCommandEvent", e => ExecuteScript(scriptName, item, e) },
-                { "PlayerChatEvent", e => ExecuteScript(scriptName, item, e) },
-                { "PlayerSetModeEvent", e => ExecuteScript(scriptName, item, e) },
-                { "CustomPlayerEvent", e => ExecuteScript(scriptName, item, e) },
-                { "LuckPermsChangeEvent", e => ExecuteScript(scriptName, item, e) },
-            };
-
-            // 支持自定义事件名（player_event.customs中定义的事件名）
-            if (!eventMap.ContainsKey(item.TriggerEvent))
-            {
-                eventMap[item.TriggerEvent] = e => ExecuteScript(scriptName, item, e);
-            }
-
-            if (!eventMap.TryGetValue(item.TriggerEvent, out var handler))
-            {
-                Log($"脚本 {scriptName} 的事件 {item.TriggerEvent} 未找到，可用事件: {string.Join(", ", eventMap.Keys)}", 2, ThisName);
+                Log($"脚本 {scriptName} 的事件名无效: {item.TriggerEvent}；合法事件: {EventNames.GetValidEventsDescription()}", 3, ThisName);
                 return;
             }
+
+            Action<RtEvent> handler = e => ExecuteScript(scriptName, item, e);
 
             switch (item.TriggerEvent)
             {
@@ -284,6 +259,9 @@ if __name__ == ""__main__"":
                     break;
                 case "ServerCrashEvent":
                     EventBus.Subscribe<ServerCrashEvent>(e => handler(e), ThisName);
+                    break;
+                case "ServerStopUnresponsiveEvent":
+                    EventBus.Subscribe<ServerStopUnresponsiveEvent>(e => handler(e), ThisName);
                     break;
                 case "AutoRestartEvent":
                     EventBus.Subscribe<AutoRestartEvent>(e => handler(e), ThisName);
@@ -333,10 +311,39 @@ if __name__ == ""__main__"":
                 case "LuckPermsChangeEvent":
                     EventBus.Subscribe<LuckPermsChangeEvent>(e => handler(e), ThisName);
                     break;
+                case "PacketInitializeEvent":
+                    EventBus.Subscribe<PacketInitializeEvent>(e => handler(e), ThisName);
+                    break;
+                case "PacketStopEvent":
+                    EventBus.Subscribe<PacketStopEvent>(e => handler(e), ThisName);
+                    break;
+                case "PacketClientEvent":
+                    EventBus.Subscribe<PacketClientEvent>(e => handler(e), ThisName);
+                    break;
+                case "PacketServerEvent":
+                    EventBus.Subscribe<PacketServerEvent>(e => handler(e), ThisName);
+                    break;
+                case "PlayerOpEvent":
+                    EventBus.Subscribe<PlayerOpEvent>(e => handler(e), ThisName);
+                    break;
+                case "PlayerBanEvent":
+                    EventBus.Subscribe<PlayerBanEvent>(e => handler(e), ThisName);
+                    break;
+                case "ServerStatusEvent":
+                    EventBus.Subscribe<ServerStatusEvent>(e => handler(e), ThisName);
+                    break;
                 case "CustomPlayerEvent":
-                default:
-                    // 自定义事件名和CustomPlayerEvent都通过CustomPlayerEvent订阅
+                    // 字面量CustomPlayerEvent为通配名: 订阅全部自定义玩家事件
                     EventBus.Subscribe<CustomPlayerEvent>(e => handler(e), ThisName);
+                    break;
+                default:
+                    // 其余合法事件名为player_event.customs中定义的自定义事件键: 按事件名过滤后触发
+                    EventBus.Subscribe<CustomPlayerEvent>(e =>
+                    {
+                        if (!string.Equals(e.EventName, item.TriggerEvent, StringComparison.OrdinalIgnoreCase))
+                            return;
+                        handler(e);
+                    }, ThisName);
                     break;
             }
 
@@ -344,51 +351,14 @@ if __name__ == ""__main__"":
         }
 
         /// <summary>
-        /// 获取事件名称对应的Type
-        /// </summary>
-        private static Type GetEventType(string eventName)
-        {
-            return eventName switch
-            {
-                "ModeSelectedEvent" => typeof(ModeSelectedEvent),
-                "ProgramStartupEvent" => typeof(ProgramStartupEvent),
-                "ProgramShutdownEvent" => typeof(ProgramShutdownEvent),
-                "ExtensionLoadEvent" => typeof(ExtensionLoadEvent),
-                "ExtensionUnloadEvent" => typeof(ExtensionUnloadEvent),
-                "ServerStartEvent" => typeof(ServerStartEvent),
-                "ServerStopEvent" => typeof(ServerStopEvent),
-                "ServerDoneEvent" => typeof(ServerDoneEvent),
-                "ServerCrashEvent" => typeof(ServerCrashEvent),
-                "AutoRestartEvent" => typeof(AutoRestartEvent),
-                "BackupStartEvent" => typeof(BackupStartEvent),
-                "BackupCompleteEvent" => typeof(BackupCompleteEvent),
-                "TaskExecuteEvent" => typeof(TaskExecuteEvent),
-                "SchedulerStartEvent" => typeof(SchedulerStartEvent),
-                "SchedulerStopEvent" => typeof(SchedulerStopEvent),
-                "CommandExecuteEvent" => typeof(CommandExecuteEvent),
-                "ConfigReloadEvent" => typeof(ConfigReloadEvent),
-                "PlayerJoinEvent" => typeof(PlayerJoinEvent),
-                "PlayerConnectEvent" => typeof(PlayerConnectEvent),
-                "PlayerLostEvent" => typeof(PlayerLostEvent),
-                "PlayerLeaveEvent" => typeof(PlayerLeaveEvent),
-                "PlayerCommandEvent" => typeof(PlayerCommandEvent),
-                "PlayerChatEvent" => typeof(PlayerChatEvent),
-                "PlayerSetModeEvent" => typeof(PlayerSetModeEvent),
-                "CustomPlayerEvent" => typeof(CustomPlayerEvent),
-                "LuckPermsChangeEvent" => typeof(LuckPermsChangeEvent),
-                _ => typeof(CustomPlayerEvent) // 自定义事件名也映射为CustomPlayerEvent
-            };
-        }
-
-        /// <summary>
         /// 执行脚本（无事件触发）
         /// </summary>
         public static void ExecuteScript(string scriptName, ScriptItem item)
         {
-            ExecuteScript(scriptName, item, null);
+            ExecuteScript(scriptName, item, null, CancellationToken.None);
         }
 
-        public static bool ExecuteScriptByName(string scriptName)
+        public static bool ExecuteScriptByName(string scriptName, CancellationToken ct = default)
         {
             if (_settings.Scripts.TryGetValue(scriptName, out var item))
             {
@@ -398,7 +368,7 @@ if __name__ == ""__main__"":
                     return false;
                 }
 
-                ExecuteScript(scriptName, item);
+                ExecuteScript(scriptName, item, null, ct);
                 return true;
             }
             else
@@ -409,11 +379,19 @@ if __name__ == ""__main__"":
         }
 
         /// <summary>
-        /// 执行脚本
+        /// 执行脚本(可传入取消令牌; Python 脚本取消时强制终止子进程, C# 脚本无法中断但会拒绝启动)
         /// </summary>
-        public static void ExecuteScript(string scriptName, ScriptItem item, RtEvent? eventArgs)
+        public static void ExecuteScript(string scriptName, ScriptItem item, RtEvent? eventArgs, CancellationToken ct = default)
         {
+            if (ct.IsCancellationRequested)
+            {
+                Log($"脚本 {scriptName} 已取消执行", 2, ThisName);
+                return;
+            }
+
             string filePath = ResolveScriptPath(item.File);
+            if (string.IsNullOrEmpty(filePath))
+                return;
             if (!File.Exists(filePath))
             {
                 Log($"脚本文件不存在: {filePath}", 2, ThisName);
@@ -427,35 +405,57 @@ if __name__ == ""__main__"":
                 switch (extension)
                 {
                     case ".cs":
-                        ExecuteCsScript(scriptName, filePath, item, eventArgs);
+                        ExecuteCsScript(scriptName, filePath, item, eventArgs, ct);
                         break;
                     case ".py":
-                        ExecutePyScript(scriptName, filePath, item, eventArgs);
+                        ExecutePyScript(scriptName, filePath, item, eventArgs, ct);
                         break;
                 }
             }
             catch (Exception ex)
             {
-                Log($"脚本执行失败 {scriptName}: {ex.Message}", 3, ThisName);
+                var inner = ex;
+                while (inner is System.Reflection.TargetInvocationException && inner.InnerException != null)
+                    inner = inner.InnerException;
+                Log($"脚本执行失败 {scriptName}: {inner.GetType().Name}: {inner.Message}", 3, ThisName);
+                Output.Debug(ex, $"脚本执行异常堆栈: {scriptName}", ThisName);
             }
         }
 
         /// <summary>
-        /// 解析脚本文件路径
+        /// 解析脚本文件路径(只允许 Scripts 目录内的文件, 拒绝绝对路径越界/../ 穿越)
         /// </summary>
         private static string ResolveScriptPath(string file)
         {
-            if (Path.IsPathRooted(file))
-                return file;
+            if (string.IsNullOrWhiteSpace(file))
+                return "";
 
-            return Path.Combine(AbsoluteScriptsPath, file);
+            string full = Path.GetFullPath(Path.IsPathRooted(file)
+                ? file
+                : Path.Combine(AbsoluteScriptsPath, file));
+
+            string root = AbsoluteScriptsPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                          + Path.DirectorySeparatorChar;
+            if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                Log($"脚本路径越界(仅允许 {AbsoluteScriptsPath} 内的文件): {file}", 3, ThisName);
+                return "";
+            }
+
+            return full;
         }
 
         /// <summary>
         /// 执行C#脚本（使用CS-Script）
         /// </summary>
-        private static void ExecuteCsScript(string scriptName, string filePath, ScriptItem item, RtEvent? eventArgs)
+        private static void ExecuteCsScript(string scriptName, string filePath, ScriptItem item, RtEvent? eventArgs, CancellationToken ct)
         {
+            if (ct.IsCancellationRequested)
+            {
+                Log($"C#脚本 {scriptName} 已取消执行", 2, ThisName);
+                return;
+            }
+
             if (!_loadedCsScripts.TryGetValue(scriptName, out var script))
             {
                 script = CSScript.Evaluator
@@ -514,12 +514,17 @@ if __name__ == ""__main__"":
         /// <summary>
         /// 执行Python脚本（使用Python解释器）
         /// </summary>
-        private static void ExecutePyScript(string scriptName, string filePath, ScriptItem item, RtEvent? eventArgs)
+        private static void ExecutePyScript(string scriptName, string filePath, ScriptItem item, RtEvent? eventArgs, CancellationToken ct)
         {
+            if (ct.IsCancellationRequested)
+            {
+                Log($"Python脚本 {scriptName} 已取消执行", 2, ThisName);
+                return;
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = "python",
-                Arguments = "-X utf8 " + BuildPythonArgs(filePath, item, eventArgs),
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -529,6 +534,22 @@ if __name__ == ""__main__"":
             };
             psi.Environment["PYTHONUTF8"] = "1";
 
+            // 用 ArgumentList 传参: 不再拼接命令行字符串, 空格/引号/中文由运行时转义, 不会截断或注入
+            psi.ArgumentList.Add("-X");
+            psi.ArgumentList.Add("utf8");
+            psi.ArgumentList.Add(filePath);
+
+            string input = item.Input ?? "";
+            if (eventArgs != null && IsPlayerEvent(eventArgs))
+                input = SerializePlayerEvent(eventArgs);
+            if (!string.IsNullOrEmpty(input))
+                psi.ArgumentList.Add(input);
+            if (eventArgs != null)
+            {
+                psi.ArgumentList.Add("--event");
+                psi.ArgumentList.Add(eventArgs.EventName);
+            }
+
             using var process = Process.Start(psi);
             if (process == null)
             {
@@ -536,47 +557,49 @@ if __name__ == ""__main__"":
                 return;
             }
 
-            string output = process.StandardOutput.ReadToEnd();
-            string error = process.StandardError.ReadToEnd();
-            process.WaitForExit();
-
-            if (!string.IsNullOrEmpty(output))
+            // 取消(超时/调度器停止)时强制终止子进程, 避免长脚本继续占用资源
+            using var cancelRegistration = ct.Register(() =>
             {
-                Log($"[Python:{scriptName}] {output.Trim()}", 1, ThisName);
+                try { process.Kill(entireProcessTree: true); } catch { }
+            });
+
+            // stdout/stderr 必须异步并行读取: 同步 ReadToEnd 在子进程写满管道缓冲区时会互相等待导致永久死锁
+            Task<string> outTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> errTask = process.StandardError.ReadToEndAsync();
+
+            bool exited = process.WaitForExit(PythonTimeoutMs);
+            if (!exited)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                try { process.WaitForExit(5000); } catch { }
+                Log($"Python脚本执行超时({PythonTimeoutMs / 1000}秒) {scriptName}, 已强制终止", 3, ThisName);
             }
 
-            if (process.ExitCode != 0 && !string.IsNullOrEmpty(error))
+            string output = TruncateScriptOutput(outTask.GetAwaiter().GetResult());
+            string error = TruncateScriptOutput(errTask.GetAwaiter().GetResult());
+
+            if (!string.IsNullOrEmpty(output))
+                Log($"[Python:{scriptName}] {output}", 1, ThisName);
+
+            if (!exited)
             {
-                Log($"Python脚本执行错误 {scriptName}: {error.Trim()}", 3, ThisName);
+                if (!string.IsNullOrEmpty(error))
+                    Log($"Python脚本超时输出 {scriptName}: {error}", 3, ThisName);
+            }
+            else if (process.ExitCode != 0 && !string.IsNullOrEmpty(error))
+            {
+                Log($"Python脚本执行错误 {scriptName}: {error}", 3, ThisName);
             }
         }
 
-        /// <summary>
-        /// 构建Python命令行参数
-        /// </summary>
-        private static string BuildPythonArgs(string filePath, ScriptItem item, RtEvent? eventArgs)
+        /// <summary>限制脚本输出长度, 避免刷屏与内存占用(保留尾部截断提示)</summary>
+        private static string TruncateScriptOutput(string? text)
         {
-            var sb = new StringBuilder();
-            sb.Append($"\"{filePath}\"");
-
-            // 玩家事件触发时，将事件参数JSON作为input传入
-            string input = item.Input ?? "";
-            if (eventArgs != null && IsPlayerEvent(eventArgs))
-            {
-                input = SerializePlayerEvent(eventArgs);
-            }
-
-            if (!string.IsNullOrEmpty(input))
-            {
-                sb.Append($" \"{input}\"");
-            }
-
-            if (eventArgs != null)
-            {
-                sb.Append($" --event {eventArgs.EventName}");
-            }
-
-            return sb.ToString();
+            if (string.IsNullOrEmpty(text)) return "";
+            string trimmed = text.Trim();
+            if (trimmed.Length <= PythonMaxOutputChars) return trimmed;
+            return trimmed.Substring(0, PythonMaxOutputChars)
+                 + $"\n...(输出过长已截断, 原始 {trimmed.Length} 字符)";
         }
 
         /// <summary>

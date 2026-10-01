@@ -12,7 +12,7 @@
         <!-- 外观设置 -->
         <h6 class="text-info mb-3">外观</h6>
         <div class="row g-3 mb-4">
-            <div class="col-md-6">
+            <div class="col-lg-4 col-md-6">
                 <div class="card stat-card h-100">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-center">
@@ -25,7 +25,25 @@
                     </div>
                 </div>
             </div>
-            <div class="col-md-6">
+            <div class="col-lg-4 col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>主题风格</strong>
+                                <small class="text-muted d-block">经典默认 / 北欧极简 / 深空蓝运维 / Stripe 式克制</small>
+                            </div>
+                            <select class="form-select form-select-sm" id="themeStyleSetting" style="width:auto;" onchange="saveThemeStyle()">
+                                <option value="classic">经典默认风格</option>
+                                <option value="nordic">北欧极简风格</option>
+                                <option value="space">深空蓝运维风格</option>
+                                <option value="stripe">Stripe式克制风格</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4 col-md-6">
                 <div class="card stat-card h-100">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-center">
@@ -86,6 +104,9 @@
                                 <small class="text-muted d-block">主页数据采集频率</small>
                             </div>
                             <select class="form-select form-select-sm" id="refreshInterval" style="width:auto;" onchange="saveRefreshSetting()">
+                                <option value="500">0.5 秒</option>
+                                <option value="1000">1 秒</option>
+                                <option value="2000">2 秒</option>
                                 <option value="3000">3 秒</option>
                                 <option value="5000" selected>5 秒</option>
                                 <option value="10000">10 秒</option>
@@ -112,6 +133,49 @@
                                 <option value="24">24 小时</option>
                                 <option value="48">48 小时</option>
                                 <option value="72">72 小时</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 事件板 -->
+        <h6 class="text-info mb-3">事件板</h6>
+        <div class="row g-3 mb-4">
+            <div class="col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>显示 RM 实例事件</strong>
+                                <small class="text-muted d-block">通过服务端管理协议获取 op/封禁等事件并显示在事件板</small>
+                            </div>
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="showRmEvents" checked onchange="saveRmEventsSetting()" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card stat-card h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>事件显示时长</strong>
+                                <small class="text-muted d-block">事件板与详细页面只显示该时间范围内的事件</small>
+                            </div>
+                            <select class="form-select form-select-sm" id="eventWindow" style="width:auto;" onchange="saveEventWindowSetting()">
+                                <option value="15">15 分钟</option>
+                                <option value="30">30 分钟</option>
+                                <option value="60" selected>1 小时</option>
+                                <option value="120">2 小时</option>
+                                <option value="180">3 小时</option>
+                                <option value="360">6 小时</option>
+                                <option value="720">12 小时</option>
+                                <option value="1440">24 小时</option>
+                                <option value="2880">48 小时</option>
                             </select>
                         </div>
                     </div>
@@ -170,6 +234,21 @@
         document.getElementById('settingsThemeBtn').textContent = current === 'light' ? '暗色' : '亮色';
     }
 
+    // 主题风格(经典默认 / 北欧极简 / 深空蓝运维 / Stripe式克制)
+    function applyThemeStyle(style) {
+        const value = style || 'classic';
+        document.documentElement.setAttribute('data-style', value);
+        try { localStorage.setItem('themeStyle', value); } catch (e) { }
+    }
+
+    function saveThemeStyle() {
+        const value = document.getElementById('themeStyleSetting').value;
+        applyThemeStyle(value);
+        panelData.themeStyle = value;
+        savePanelData();
+        showToast('已切换主题风格');
+    }
+
     // 从服务器加载 panel_data.json
     async function loadPanelData() {
         try {
@@ -190,6 +269,12 @@
         }
         updateThemeButton();
 
+        // 主题风格(优先服务端保存值, 其次本地缓存)
+        let style = panelData.themeStyle;
+        if (!style) { try { style = localStorage.getItem('themeStyle'); } catch (e) { } }
+        applyThemeStyle(style || 'classic');
+        document.getElementById('themeStyleSetting').value = style || 'classic';
+
         // 图表默认
         document.getElementById('chartDefaultSetting').value = panelData.chartDefault || 'collapsed';
 
@@ -201,6 +286,14 @@
 
         // 历史数据保留(小时)
         document.getElementById('historyLimit').value = String(panelData.historyRetention || 2);
+
+        // 显示 RM 实例事件(默认开启)
+        document.getElementById('showRmEvents').checked = panelData.showRmEvents !== false;
+
+        // 事件显示时长(默认 1 小时); 同步到 localStorage 供事件板读取
+        const evMin = String(panelData.eventWindowMinutes || 60);
+        document.getElementById('eventWindow').value = evMin;
+        try { localStorage.setItem('eventWindowMinutes', evMin); } catch (e) { }
     }
 
     // 保存到 panel_data.json
@@ -233,6 +326,20 @@
         panelData.historyRetention = parseInt(document.getElementById('historyLimit').value);
         savePanelData();
         showToast('已保存, 刷新页面后生效');
+    }
+
+    function saveRmEventsSetting() {
+        panelData.showRmEvents = document.getElementById('showRmEvents').checked;
+        savePanelData();
+        showToast('已保存');
+    }
+
+    function saveEventWindowSetting() {
+        const min = parseInt(document.getElementById('eventWindow').value, 10) || 60;
+        panelData.eventWindowMinutes = min;
+        try { localStorage.setItem('eventWindowMinutes', String(min)); } catch (e) { }
+        savePanelData();
+        showToast('已保存');
     }
 
     function showToast(msg) {

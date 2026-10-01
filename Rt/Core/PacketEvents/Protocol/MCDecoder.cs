@@ -9,7 +9,7 @@ namespace Rt.Core.PacketEvents.Protocol
     /// <summary>
     /// Minecraft 连接所处的网络状态(阶段)。
     /// </summary>
-    public enum McConnectionState
+    public enum MCConnectionState
     {
         Handshaking,
         Status,
@@ -96,14 +96,14 @@ namespace Rt.Core.PacketEvents.Protocol
     /// <summary>
     /// 单条 MC 连接的解码状态：TCP 流重组、连接阶段跟踪、压缩阈值、协议版本。
     /// </summary>
-    internal sealed class McConnection
+    internal sealed class MCConnection
     {
         private const int MaxFrameLength = 8 * 1024 * 1024; // 8MB 上限, 防止异常长度
 
         private readonly ReassemblyBuffer _serverBound = new();
         private readonly ReassemblyBuffer _clientBound = new();
 
-        public McConnectionState State { get; private set; } = McConnectionState.Handshaking;
+        public MCConnectionState State { get; private set; } = MCConnectionState.Handshaking;
         public int ProtocolVersion { get; private set; } = -1;
         public long LastActivityTicks { get; private set; }
 
@@ -207,14 +207,14 @@ namespace Rt.Core.PacketEvents.Protocol
             pkt.DataHex = ToHex(data, 256);
 
             // 状态迁移(需解析载荷)
-            if (State == McConnectionState.Handshaking && flow == PacketFlow.ServerBound && packetId == 0)
+            if (State == MCConnectionState.Handshaking && flow == PacketFlow.ServerBound && packetId == 0)
                 ParseHandshake(data, pkt);
-            else if (State == McConnectionState.Login && flow == PacketFlow.ClientBound && packetId == 3)
+            else if (State == MCConnectionState.Login && flow == PacketFlow.ClientBound && packetId == 3)
                 ParseSetCompression(data);
-            else if (State == McConnectionState.Login && flow == PacketFlow.ClientBound && packetId == 2)
-                State = McConnectionState.Configuration;
-            else if (State == McConnectionState.Configuration && flow == PacketFlow.ClientBound && packetId == 3)
-                State = McConnectionState.Play;
+            else if (State == MCConnectionState.Login && flow == PacketFlow.ClientBound && packetId == 2)
+                State = MCConnectionState.Configuration;
+            else if (State == MCConnectionState.Configuration && flow == PacketFlow.ClientBound && packetId == 3)
+                State = MCConnectionState.Play;
 
             return pkt;
         }
@@ -239,9 +239,9 @@ namespace Rt.Core.PacketEvents.Protocol
             pkt.ProtocolVersion = protocolVersion;
 
             if (nextState == 1)
-                State = McConnectionState.Status;
+                State = MCConnectionState.Status;
             else if (nextState == 2)
-                State = McConnectionState.Login;
+                State = MCConnectionState.Login;
         }
 
         private void ParseSetCompression(byte[] data)
@@ -253,23 +253,23 @@ namespace Rt.Core.PacketEvents.Protocol
             }
         }
 
-        private void FillName(PacketFlow flow, DecodedMcPacket pkt, McConnectionState state)
+        private void FillName(PacketFlow flow, DecodedMcPacket pkt, MCConnectionState state)
         {
             int proto = ProtocolVersion > 0 ? ProtocolVersion : 774; // 版本未知时按最新表给出名称(握手/状态包跨版本一致)
             string flowName = flow == PacketFlow.ServerBound ? "toServer" : "toClient";
-            if (McPacketTables.TryGetName(proto, StateName(state), flowName, pkt.PacketId, out string name))
+            if (MCPacketTables.TryGetName(proto, StateName(state), flowName, pkt.PacketId, out string name))
                 pkt.PacketName = name;
             else
                 pkt.PacketName = "unknown";
         }
 
-        private static string StateName(McConnectionState s) => s switch
+        private static string StateName(MCConnectionState s) => s switch
         {
-            McConnectionState.Handshaking => "handshaking",
-            McConnectionState.Status => "status",
-            McConnectionState.Login => "login",
-            McConnectionState.Configuration => "configuration",
-            McConnectionState.Play => "play",
+            MCConnectionState.Handshaking => "handshaking",
+            MCConnectionState.Status => "status",
+            MCConnectionState.Login => "login",
+            MCConnectionState.Configuration => "configuration",
+            MCConnectionState.Play => "play",
             _ => "play"
         };
 
@@ -367,12 +367,12 @@ namespace Rt.Core.PacketEvents.Protocol
     /// <summary>
     /// MC 数据包解码器：按连接(客户端IP:端口)维护 TCP 重组与协议状态，输出解码后的数据包。
     /// </summary>
-    public sealed class McDecoder
+    public sealed class MCDecoder
     {
         private const int PruneIntervalCalls = 1000;
         private const long PruneAfterTicks = 10 * 60 * 1000; // 10 分钟无活动则清理
 
-        private readonly ConcurrentDictionary<string, McConnection> _connections = new();
+        private readonly ConcurrentDictionary<string, MCConnection> _connections = new();
         private int _callCount;
 
         public IReadOnlyList<DecodedMcPacket> Process(RawCapture raw, PacketFlow flow, string clientIp, DateTime timestamp)
@@ -381,7 +381,7 @@ namespace Rt.Core.PacketEvents.Protocol
                 return Array.Empty<DecodedMcPacket>();
 
             string key = clientIp + ":" + clientPort;
-            var conn = _connections.GetOrAdd(key, _ => new McConnection());
+            var conn = _connections.GetOrAdd(key, _ => new MCConnection());
 
             List<DecodedMcPacket> result;
             lock (conn)

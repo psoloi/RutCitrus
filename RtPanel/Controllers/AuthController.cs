@@ -33,37 +33,59 @@ namespace RtPanel.Controllers
 
             if (_client.IsConnected)
             {
-                return Ok(new { success = false, message = "已有活动连接，请先登出" });
+                // 全局只有一条 gRPC 连接(由所有面板会话共享)。若本次登录的目标与当前连接完全一致
+                // (主机+端口+认证密钥相同), 则视为"登出后重新登录", 直接复用现有连接签发 Cookie,
+                // 解决"登出后无法再登录"的死锁。必须认证密钥一致才允许复用, 避免绕过密钥校验。
+                var sameTarget =
+                    string.Equals(_client.Host, request.Host, StringComparison.OrdinalIgnoreCase) &&
+                    _client.Port == request.Port &&
+                    string.Equals(_client.AuthKey ?? "", request.AuthKey ?? "", StringComparison.Ordinal);
+
+                if (sameTarget)
+                {
+                    LoginRateLimiter.Reset(ip);
+                    await HttpContext.SignInAsync("RtPanelCookie", BuildPrincipal(request));
+                    return Ok(new { success = true, message = "已复用现有连接", serverName = _client.ConnectedServerName });
+                }
+
+                // 目标不同: 不能直接顶掉现有连接(会踢掉其他已登录会话),
+                // 由前端提供"断开当前连接并登录"入口, 让用户显式确认。
+                return Ok(new
+                {
+                    success = false,
+                    message = $"已有活动连接（{_client.Host}:{_client.Port}），请先断开后再连接其他服务器",
+                    requiresDisconnect = true
+                });
             }
 
             // 用户确认重新信任: 清除该主机的 TOFU 证书指纹记录后重连
             if (request.Retrust)
                 _client.ResetKnownHost(request.Host, request.Port);
 
-            var success = await _client.ConnectAsync(request.Host, request.Port, request.AuthKey);
+            var success = await _client.ConnectAsync(request.Host, request.Port, request.AuthKey, request.TrustNew);
             if (!success)
             {
-                // 证书不匹配时认证密钥尚未被校验, 不计入登录失败次数
-                if (!_client.CertMismatch)
+                // 证书未确认/不匹配时认证密钥尚未被校验, 不计入登录失败次数
+                if (!_client.CertMismatch && !_client.CertUntrusted)
                     LoginRateLimiter.RegisterFailure(ip);
                 var reason = _client.LastError;
                 var message = string.IsNullOrEmpty(reason)
                     ? "连接失败，请检查端口和密钥是否正确，以及服务器是否运行"
                     : $"连接失败：{reason}";
-                return Ok(new { success = false, message, certMismatch = _client.CertMismatch });
+                return Ok(new
+                {
+                    success = false,
+                    message,
+                    certMismatch = _client.CertMismatch,
+                    certUntrusted = _client.CertUntrusted,
+                    fingerprint = _client.PendingFingerprint
+                });
             }
 
             LoginRateLimiter.Reset(ip);
 
             // 创建认证票据，写入 cookie
-            var claims = new List<Claim>
-            {
-                new(ClaimTypes.Name, $"panel@{request.Host}:{request.Port}"),
-                new("ServerName", _client.ConnectedServerName ?? "unknown"),
-            };
-            var identity = new ClaimsIdentity(claims, "RtPanelCookie");
-            var principal = new ClaimsPrincipal(identity);
-            await HttpContext.SignInAsync("RtPanelCookie", principal);
+            await HttpContext.SignInAsync("RtPanelCookie", BuildPrincipal(request));
 
             return Ok(new
             {
@@ -71,6 +93,17 @@ namespace RtPanel.Controllers
                 message = "登录成功",
                 serverName = _client.ConnectedServerName
             });
+        }
+
+        /// <summary>按登录目标构建面板认证票据</summary>
+        private ClaimsPrincipal BuildPrincipal(LoginRequest request)
+        {
+            var claims = new List<Claim>
+            {
+                new(ClaimTypes.Name, $"panel@{request.Host}:{request.Port}"),
+                new("ServerName", _client.ConnectedServerName ?? "unknown"),
+            };
+            return new ClaimsPrincipal(new ClaimsIdentity(claims, "RtPanelCookie"));
         }
 
         /// <summary>
@@ -141,6 +174,8 @@ namespace RtPanel.Controllers
         public string AuthKey { get; set; } = "";
         /// <summary>为 true 时清除该主机的 TOFU 证书指纹后重连(用户确认重新信任新证书)</summary>
         public bool Retrust { get; set; }
+        /// <summary>为 true 表示用户已确认首次连接的服务器证书指纹(TOFU 首连确认)</summary>
+        public bool TrustNew { get; set; }
     }
 
     /// <summary>

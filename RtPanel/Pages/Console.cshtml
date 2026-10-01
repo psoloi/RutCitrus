@@ -11,7 +11,16 @@
                 <span>命令执行</span>
                 <div>
                     <button class="btn btn-sm btn-outline-info" onclick="clearLogs()">清空</button>
-                    <label class="btn btn-sm btn-outline-secondary mb-0">
+                    <select id="logSourceFilter" class="form-select form-select-sm log-source-select" onchange="applyLogFilter()" title="按来源过滤日志(选 AiAuto/AiTools 可只看AI与工具调用)">
+                        <option value="">全部来源</option>
+                        <option value="AiAuto">AiAuto(AI任务)</option>
+                        <option value="AiAnalyze">AiAnalyze(AI分析)</option>
+                        <option value="AiThink">AiThink(AI思考)</option>
+                        <option value="AiTools">AiTools(工具调用)</option>
+                        <option value="RtEM">RtEM(扩展)</option>
+                        <option value="Backend">Backend(面板命令)</option>
+                    </select>
+                    <label class="btn btn-sm btn-outline-secondary mb-0 d-inline-flex align-items-center gap-1">
                         <input type="checkbox" id="autoScroll" checked onchange="toggleAutoScroll()" /> 自动滚动
                     </label>
                 </div>
@@ -22,11 +31,23 @@
                 </div>
             </div>
             <div class="card-footer">
-                <div class="input-group">
-                    <input type="text" id="cmdInput" class="form-control bg-dark text-light border-secondary"
-                           placeholder="输入命令 (如 rt status, .cfg reload, /say hello) 后按回车"
-                           autocomplete="off" list="commandList" />
-                    <datalist id="commandList"></datalist>
+                <div class="d-flex gap-1 align-items-center">
+                    <div class="jar-select">
+                        <input type="text" id="cmdInput" class="form-control bg-dark text-light border-secondary"
+                               placeholder="输入命令 (如 rt status, .cfg reload, /say hello) 后按回车, TAB 补全"
+                               autocomplete="off" />
+                        <div class="jar-dropdown" id="cmdDropdown" hidden></div>
+                    </div>
+                    <button type="button" class="btn btn-outline-info" id="cmdExpandBtn" title="展开命令列表" aria-label="展开命令列表">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <line x1="8" y1="6" x2="21" y2="6"></line>
+                            <line x1="8" y1="12" x2="21" y2="12"></line>
+                            <line x1="8" y1="18" x2="21" y2="18"></line>
+                            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                        </svg>
+                    </button>
                     <button class="btn btn-primary" onclick="executeCommand()" id="execBtn">执行</button>
                 </div>
             </div>
@@ -65,7 +86,7 @@
                     </div>
                     <span class="ai-status-badge" id="aiStatusBadge"><span class="ai-status-dot"></span><span id="aiStatusText">检测中</span></span>
                 </div>
-                <p class="small text-muted mb-3" style="font-size:12px;">自动守护 MC 服务端 · 智能分析错误日志 · 自动执行运维任务</p>
+                <p class="small text-muted mb-3 ai-hero-tagline" id="aiHeroTagline" style="font-size:12px;">自动守护服务运行 · 智能分析错误日志 · 自动执行运维任务</p>
                 <div class="d-grid mb-2">
                     <button class="btn ai-hero-btn" id="aiHeroToggleBtn" onclick="aiHeroToggle()">▶ 启动 AI 自动化</button>
                 </div>
@@ -83,6 +104,12 @@
                 <small class="text-muted">一键控制</small>
             </div>
             <div class="card-body">
+                <div class="mb-2"><small class="text-info fw-bold">当前实例</small></div>
+                <div class="mb-3">
+                    <select id="consoleInstanceFilter" class="form-select form-select-sm" onchange="switchConsoleInstance()" title="选择要查看/控制的实例(多实例并发运行)">
+                        <option value="">全部实例</option>
+                    </select>
+                </div>
                 <div class="mb-2"><small class="text-info fw-bold">计划任务调度器</small></div>
                 <div class="d-grid gap-2 mb-3">
                     <div class="btn-group btn-group-sm" role="group">
@@ -134,50 +161,205 @@
     let autoScroll = true;
     let commandHistory = [];
     let historyIndex = -1;
+    // 当前控制台操作/查看的实例(null = 尚未初始化, 加载实例列表后默认选中当前实例; 空串 = 全部实例)
+    let consoleInstanceId = null;
+
+    // ===== 控制台命令自动补全状态 =====
+    let availableCommands = [];          // 来自 /api/console/commands 的 [{command, description}]
+    let knownCommandSet = new Set();     // 小写命令名集合(词边界匹配用)
+    let cmdDropdownOpen = false;
+    let cmdCandidates = [];              // 当前候选 [{value, description, isCommand}]
+    let cmdHighlightIndex = -1;
+
+    // 叶子命令 -> 参数类型(用于 TAB 参数补全)
+    const PARAM_SPECS = {
+        '.server change': 'instance',
+        '.server get': 'instance',
+        '.server start': 'instance',
+        '.server stop': 'instance',
+        '.server del': 'instance',
+        '.server status': 'instance',
+        '.server detach': 'instance',
+        '.group set': 'instance',
+        '.group unset': 'instance',
+        'rt extensions load': 'extension',
+        'rt extensions unload': 'extension',
+        '.ai run': 'aiTask'
+    };
+
+    // 参数数据源缓存(懒加载一次，失败静默置空)
+    const paramCache = { instance: null, extension: null, aiTask: null };
+    const paramLoading = { instance: false, extension: false, aiTask: false };
 
     function toggleAutoScroll() {
         autoScroll = document.getElementById('autoScroll').checked;
     }
 
+    // ==== 日志缓冲与来源过滤 ====
+    // 服务端日志行格式: [时间] |级别| (来源) 消息
+    const logStore = [];          // { line, src }
+    let logSourceFilter = '';
+
+    function logSourceOf(line) {
+        const m = line.match(/^\[[^\]]*\]\s*\|[^|]*\|\s*\(([^)]*)\)/);
+        return m ? m[1] : '';
+    }
+
+    // 一次性渲染当前可见日志: 交给 RtLog 做级别着色 + 多行错误(堆栈)合并,
+    // 逐行 append 无法知道下一行是不是堆栈续行, 会把错误拆散。
+    function renderLogs() {
+        const panel = document.getElementById('logPanel');
+        // 整批重绘会重置滚动位置: 记录是否贴底, 贴底才自动跟随, 否则保持原位置
+        const prevTop = panel.scrollTop;
+        const atBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 40;
+        let shown = logStore.filter(e => !logSourceFilter || e.src === logSourceFilter);
+        shown = shown.slice(-500);
+        if (shown.length === 0) {
+            panel.innerHTML = '<div class="text-muted p-2">' + (logSourceFilter ? '该来源暂无日志' : '等待日志...') + '</div>';
+            return;
+        }
+        if (window.RtLog) {
+            panel.innerHTML = RtLog.render(shown.map(e => e.line));
+        } else {
+            panel.innerHTML = shown.map(function (e) {
+                var d = document.createElement('div');
+                d.textContent = e.line;
+                return d.innerHTML;
+            }).join('<br>');
+        }
+        // 贴底才自动跟随; 用户向上翻查历史时保持原位置, 不被新日志顶走
+        if (autoScroll && atBottom) panel.scrollTop = panel.scrollHeight;
+        else panel.scrollTop = prevTop;
+    }
+
+    /// 来源下拉里没有的新来源自动补一个选项, 便于过滤任意来源
+    function ensureSourceOption(src) {
+        if (!src) return;
+        const sel = document.getElementById('logSourceFilter');
+        if (!sel) return;
+        const exists = Array.prototype.some.call(sel.options, o => o.value === src);
+        if (exists) return;
+        const opt = document.createElement('option');
+        opt.value = src;
+        opt.textContent = src;
+        sel.appendChild(opt);
+    }
+
     function clearLogs() {
-        document.getElementById('logPanel').innerHTML = '<div class="text-muted">日志已清空</div>';
+        logStore.length = 0;
+        setAiThinking('');
+        renderLogs();
+    }
+
+    function applyLogFilter() {
+        logSourceFilter = document.getElementById('logSourceFilter').value;
+        renderLogs();
     }
 
     function appendLog(line) {
-        const panel = document.getElementById('logPanel');
-        const div = document.createElement('div');
-
-        // 根据日志级别着色
-        if (line.includes('|错误|')) div.className = 'text-danger';
-        else if (line.includes('|警告|')) div.className = 'text-warning';
-        else if (line.includes('|信息|')) div.className = 'text-success';
-        else div.className = 'text-secondary';
-
-        div.textContent = line;
-        panel.appendChild(div);
-
-        // 限制日志条数
-        while (panel.children.length > 500) {
-            panel.removeChild(panel.firstChild);
+        const src = logSourceOf(line);
+        ensureSourceOption(src);
+        // AI 思考内容(AiThink)实时替换 AI 卡片下方的说明文字
+        if (src === 'AiThink') {
+            const m = line.match(/\(AiThink\)\s*(.*)$/);
+            setAiThinking(m ? m[1] : '');
+        } else if (src === 'AiAuto' || src === 'AiTools' || src === 'AiAnalyze') {
+            // AI 任务/工具调用/分析动作: 作为"活动"状态显示, 让卡片文字能反映自动化是否在工作
+            const m = line.match(/\((?:AiAuto|AiTools|AiAnalyze)\)\s*(.*)$/);
+            if (m && m[1]) setAiActivity(m[1]);
         }
-
-        if (autoScroll) {
-            panel.scrollTop = panel.scrollHeight;
-        }
+        logStore.push({ line, src });
+        if (logStore.length > 500) logStore.shift();
+        scheduleRender();
     }
 
+    // 批量追加日志时只在下一帧重绘一次: 逐行 renderLogs 会对 500 行做 500 次全量解析
+    let logRenderPending = false;
+    function scheduleRender() {
+        if (logRenderPending) return;
+        logRenderPending = true;
+        const run = function () { logRenderPending = false; renderLogs(); };
+        if (window.requestAnimationFrame) requestAnimationFrame(run);
+        else setTimeout(run, 16);
+    }
+
+    // 首屏/切换实例时只回放末尾若干行, 避免整块缓冲区全量重放
+    let logFirstFetch = true;
+    let logDisconnectedNotified = false;
+    let logPolling = false;   // 上一次轮询未返回时跳过, 防止请求堆积
+
     async function pollLogs() {
+        if (logPolling) return;
+        logPolling = true;
         try {
-            const res = await fetch(`/api/console/logs?afterSeq=${lastLogSeq}`);
+            const qs = (consoleInstanceId !== null && consoleInstanceId !== '')
+                ? `&instanceId=${encodeURIComponent(consoleInstanceId)}` : '';
+            const maxQs = logFirstFetch ? '&max=200' : '';
+            const res = await fetch(`/api/console/logs?afterSeq=${lastLogSeq}${qs}${maxQs}`);
             if (res.ok) {
                 const data = await res.json();
+                logFirstFetch = false;
                 if (data.lines && data.lines.length > 0) {
                     data.lines.forEach(line => appendLog(line));
                     lastLogSeq = data.latestSeq;
+                } else if (data.latestSeq !== lastLogSeq) {
+                    lastLogSeq = data.latestSeq;
                 }
                 if (data.connected === false) {
-                    appendLog('[系统] 与服务器的连接已断开');
+                    if (!logDisconnectedNotified) {
+                        logDisconnectedNotified = true;
+                        appendLog('[系统] 与服务器的连接已断开');
+                    }
+                } else {
+                    logDisconnectedNotified = false;
                 }
+            }
+        } catch (e) {
+        } finally {
+            logPolling = false;
+        }
+    }
+
+    // ===== 实例选择(多实例并发) =====
+    function switchConsoleInstance() {
+        consoleInstanceId = document.getElementById('consoleInstanceFilter').value;
+        // 切换实例后重新从缓冲区拉取该实例的日志(只拉末尾 200 行)
+        logStore.length = 0;
+        lastLogSeq = 0;
+        logFirstFetch = true;
+        logDisconnectedNotified = false;
+        renderLogs();
+        pollLogs();
+    }
+
+    async function loadInstanceFilter() {
+        try {
+            const instRes = await fetch('/api/instances/list').then(r => r.ok ? r.json() : null).catch(() => null);
+            const sel = document.getElementById('consoleInstanceFilter');
+            if (!sel) return;
+            const currentKey = (instRes && instRes.currentServerKey) || '';
+            const items = (instRes && instRes.success && Array.isArray(instRes.instances)) ? instRes.instances : [];
+
+            let html = '<option value="">当前实例' + (currentKey ? ' (' + escapeHtmlSimple(currentKey) + ')' : '') + '</option>';
+            items.forEach(function (i) {
+                if (!i || !i.id) return;
+                const suffix = i.id === currentKey ? '（当前）' : '';
+                const name = i.name ? ' - ' + i.name : '';
+                html += '<option value="' + escapeHtmlSimple(i.id) + '">'
+                    + escapeHtmlSimple(i.id) + escapeHtmlSimple(name) + suffix + '</option>';
+            });
+            sel.innerHTML = html;
+
+            // 首次加载: 默认选中 RtCli 当前实例, 清空已显示的其他实例日志
+            if (consoleInstanceId === null) {
+                consoleInstanceId = currentKey || '';
+                sel.value = consoleInstanceId;
+                logStore.length = 0;
+                lastLogSeq = 0;
+                logFirstFetch = true;
+                renderLogs();
+            } else {
+                sel.value = consoleInstanceId || '';
             }
         } catch (e) { }
     }
@@ -186,6 +368,8 @@
         const input = document.getElementById('cmdInput');
         const cmd = input.value.trim();
         if (!cmd) return;
+
+        closeCmdDropdown();
 
         const btn = document.getElementById('execBtn');
         btn.disabled = true;
@@ -196,7 +380,7 @@
             const res = await fetch('/api/console/execute', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command: cmd })
+                body: JSON.stringify({ command: cmd, instanceId: consoleInstanceId || null })
             });
             const data = await res.json();
             if (!data.success) {
@@ -300,18 +484,289 @@
         executeCommand();
     }
 
-    // 命令历史导航
-    document.getElementById('cmdInput').addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
+    // ===== 命令补全下拉框：候选计算 =====
+    // 根据当前输入决定"补命令"还是"补参数"。
+    // 规则：先求已输入部分里匹配到的最长完整命令链(词边界精确匹配)；
+    //       若该命令是带参数的叶子命令且已进入参数区(有尾随空格或多输入了词)，则补参数，否则补命令。
+    function computeCandidates(rawInput) {
+        const input = rawInput || '';
+        const trimmed = input.replace(/^\s+/, '').replace(/\s+$/, '');
+        const hasTrailingSpace = /\s$/.test(input);
+        const tokens = trimmed ? trimmed.split(/\s+/) : [];
+
+        let matchedCmd = null;
+        let matchedLen = 0;
+        for (let len = tokens.length; len >= 1; len--) {
+            const cand = tokens.slice(0, len).join(' ').toLowerCase();
+            if (knownCommandSet.has(cand)) {
+                matchedCmd = cand;
+                matchedLen = len;
+                break;
+            }
+        }
+
+        // 参数补全位置
+        if (matchedCmd && PARAM_SPECS[matchedCmd] && (hasTrailingSpace || tokens.length > matchedLen)) {
+            const prefix = tokens.slice(0, matchedLen).join(' ');
+            const argPartial = tokens.length > matchedLen ? tokens.slice(matchedLen).join(' ') : '';
+            return buildParamCandidates(matchedCmd, prefix, argPartial);
+        }
+
+        // 命令补全：以当前输入为前缀匹配命令全集
+        const lower = trimmed.toLowerCase();
+        const seen = new Set();
+        const out = [];
+        for (const c of availableCommands) {
+            const cmd = c && c.command;
+            if (!cmd) continue;
+            const key = cmd.toLowerCase();
+            if (lower && !key.startsWith(lower)) continue;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ value: cmd, description: c.description || '', isCommand: true });
+        }
+        return out;
+    }
+
+    function buildParamCandidates(cmd, prefix, argPartial) {
+        const values = getParamValues(PARAM_SPECS[cmd]);
+        const p = (argPartial || '').toLowerCase();
+        const seen = new Set();
+        const out = [];
+        for (const v of values) {
+            if (!v) continue;
+            const key = v.toLowerCase();
+            if (p && !key.startsWith(p)) continue;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ value: prefix + ' ' + v, description: '', isCommand: false });
+        }
+        return out;
+    }
+
+    // 参数数据源：懒加载一次并缓存，失败静默
+    function getParamValues(type) {
+        if (!type) return [];
+        if (paramCache[type] !== null) return paramCache[type];
+        loadParamValues(type);
+        return [];
+    }
+
+    async function loadParamValues(type) {
+        if (!type || paramLoading[type] || paramCache[type] !== null) return;
+        paramLoading[type] = true;
+        try {
+            if (type === 'instance') {
+                const d = await fetch('/api/instances/list').then(r => r.ok ? r.json() : null).catch(() => null);
+                paramCache[type] = (d && d.success && Array.isArray(d.instances))
+                    ? d.instances.map(i => i.id).filter(Boolean) : [];
+            } else if (type === 'extension') {
+                const d = await fetch('/api/extensions').then(r => r.ok ? r.json() : null).catch(() => null);
+                paramCache[type] = Array.isArray(d) ? d.map(e => e.key).filter(Boolean) : [];
+            } else if (type === 'aiTask') {
+                const d = await fetch('/api/system/tasks/ai').then(r => r.ok ? r.json() : null).catch(() => null);
+                paramCache[type] = (d && d.success && Array.isArray(d.tasks))
+                    ? d.tasks.map(t => t.key).filter(Boolean) : [];
+            } else {
+                paramCache[type] = [];
+            }
+        } catch (e) {
+            paramCache[type] = [];
+        } finally {
+            paramLoading[type] = false;
+            // 数据就绪后，若输入框仍聚焦且当前输入产生候选，则刷新/展开下拉
+            maybeReopenDropdown();
+        }
+    }
+
+    // ===== 命令补全下拉框：渲染与显隐 =====
+    function rebuildCandidates() {
+        cmdCandidates = computeCandidates(document.getElementById('cmdInput').value);
+    }
+
+    function openCmdDropdown() {
+        document.getElementById('cmdDropdown').hidden = false;
+        cmdDropdownOpen = true;
+    }
+
+    function closeCmdDropdown() {
+        document.getElementById('cmdDropdown').hidden = true;
+        cmdDropdownOpen = false;
+        cmdHighlightIndex = -1;
+    }
+
+    function renderCandidates() {
+        const dd = document.getElementById('cmdDropdown');
+        if (!cmdCandidates.length) {
+            dd.innerHTML = '<div class="jar-dropdown-empty">无匹配项</div>';
+            return;
+        }
+        let html = '';
+        cmdCandidates.forEach((c, i) => {
+            const activeStyle = i === cmdHighlightIndex
+                ? ' style="background-color:var(--bg-card-hover);color:var(--accent);"'
+                : '';
+            html += '<div class="jar-dropdown-item" data-idx="' + i + '"' + activeStyle + '>'
+                + '<span>' + escapeHtmlSimple(c.value) + '</span>'
+                + (c.description
+                    ? '<span class="text-muted ms-2" style="font-size:.68rem;">' + escapeHtmlSimple(c.description) + '</span>'
+                    : '')
+                + '</div>';
+        });
+        dd.innerHTML = html;
+    }
+
+    function scrollHighlightIntoView() {
+        const dd = document.getElementById('cmdDropdown');
+        const el = dd.querySelector('.jar-dropdown-item[data-idx="' + cmdHighlightIndex + '"]');
+        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    }
+
+    // 参数数据懒加载完成后，尝试按当前输入重新展开下拉
+    function maybeReopenDropdown() {
+        const input = document.getElementById('cmdInput');
+        if (document.activeElement !== input) return;
+        rebuildCandidates();
+        if (cmdCandidates.length > 0) {
+            if (cmdHighlightIndex < 0) cmdHighlightIndex = 0;
+            openCmdDropdown();
+            renderCandidates();
+        } else {
+            closeCmdDropdown();
+        }
+    }
+
+    function moveHighlight(delta) {
+        if (!cmdCandidates.length) return;
+        if (cmdHighlightIndex < 0) cmdHighlightIndex = 0;
+        else cmdHighlightIndex = (cmdHighlightIndex + delta + cmdCandidates.length) % cmdCandidates.length;
+        renderCandidates();
+        scrollHighlightIntoView();
+    }
+
+    // 点击/填充候选（命令补命令补一个尾随空格，便于继续输入参数）
+    function fillCandidate(c) {
+        if (!c) return;
+        document.getElementById('cmdInput').value = c.isCommand ? c.value + ' ' : c.value;
+    }
+
+    // 点击候选项：填充、收起、焦点回到输入框
+    function selectCandidate(idx) {
+        const c = cmdCandidates[idx];
+        if (!c) return;
+        const input = document.getElementById('cmdInput');
+        fillCandidate(c);
+        input.focus();
+        closeCmdDropdown();
+    }
+
+    // TAB 补全：下拉不可见则先展开；可见则用高亮项填充并高亮下一项(可循环)
+    function handleTab(e) {
+        e.preventDefault();
+        const input = document.getElementById('cmdInput');
+        if (!cmdDropdownOpen || cmdCandidates.length === 0) {
+            rebuildCandidates();
+            if (cmdCandidates.length > 0) {
+                cmdHighlightIndex = 0;
+                openCmdDropdown();
+                renderCandidates();
+                scrollHighlightIntoView();
+            }
+            return;
+        }
+        const idx = cmdHighlightIndex < 0 ? 0 : cmdHighlightIndex;
+        fillCandidate(cmdCandidates[idx]);
+        cmdHighlightIndex = (idx + 1) % cmdCandidates.length;
+        renderCandidates();
+        scrollHighlightIntoView();
+    }
+
+    // 输入时自动展开(不修改输入、不阻止默认、不抢焦点)
+    document.getElementById('cmdInput').addEventListener('input', function () {
+        rebuildCandidates();
+        if (cmdCandidates.length > 0) {
+            cmdHighlightIndex = 0;
+            openCmdDropdown();
+            renderCandidates();
+            scrollHighlightIntoView();
+        } else {
+            closeCmdDropdown();
+        }
+    });
+
+    // 右侧展开按钮：切换下拉显隐
+    document.getElementById('cmdExpandBtn').addEventListener('mousedown', function (e) {
+        e.preventDefault(); // 保持输入框焦点，避免 blur 收起
+        const input = document.getElementById('cmdInput');
+        if (cmdDropdownOpen) {
+            closeCmdDropdown();
+        } else {
+            rebuildCandidates();
+            cmdHighlightIndex = cmdCandidates.length ? 0 : -1;
+            renderCandidates();
+            openCmdDropdown();
+            input.focus();
+            scrollHighlightIntoView();
+        }
+    });
+
+    // 候选项选中：用 mousedown + preventDefault，避免先触发 blur 收起
+    document.getElementById('cmdDropdown').addEventListener('mousedown', function (e) {
+        const item = e.target.closest('.jar-dropdown-item');
+        if (!item) return;
+        e.preventDefault();
+        selectCandidate(parseInt(item.dataset.idx, 10));
+    });
+
+    // 点击输入区/下拉框以外区域 → 收起
+    document.addEventListener('mousedown', function (e) {
+        if (!cmdDropdownOpen) return;
+        const wrap = document.querySelector('.jar-select');
+        const btn = document.getElementById('cmdExpandBtn');
+        if (wrap && wrap.contains(e.target)) return;
+        if (btn && (e.target === btn || btn.contains(e.target))) return;
+        closeCmdDropdown();
+    });
+
+    // 输入框失焦 → 收起
+    document.getElementById('cmdInput').addEventListener('blur', function () {
+        closeCmdDropdown();
+    });
+
+    // 命令历史导航 + 下拉框键盘操作
+    document.getElementById('cmdInput').addEventListener('keydown', function (e) {
+        if (e.key === 'Tab') {
+            handleTab(e);
+            return;
+        } else if (e.key === 'Escape') {
+            if (cmdDropdownOpen) {
+                e.preventDefault();
+                closeCmdDropdown();
+            }
+            return;
+        } else if (e.key === 'Enter') {
+            if (cmdDropdownOpen) closeCmdDropdown();
             executeCommand();
+            return;
         } else if (e.key === 'ArrowUp') {
+            if (cmdDropdownOpen && cmdCandidates.length > 0) {
+                e.preventDefault();
+                moveHighlight(-1);
+                return;
+            }
             e.preventDefault();
             if (commandHistory.length > 0) {
                 if (historyIndex === -1) historyIndex = commandHistory.length - 1;
                 else if (historyIndex > 0) historyIndex--;
                 this.value = commandHistory[historyIndex];
             }
+            return;
         } else if (e.key === 'ArrowDown') {
+            if (cmdDropdownOpen && cmdCandidates.length > 0) {
+                e.preventDefault();
+                moveHighlight(1);
+                return;
+            }
             e.preventDefault();
             if (historyIndex !== -1) {
                 if (historyIndex < commandHistory.length - 1) {
@@ -322,6 +777,7 @@
                     this.value = '';
                 }
             }
+            return;
         }
     });
 
@@ -331,20 +787,53 @@
             const res = await fetch('/api/console/commands');
             if (res.ok) {
                 const commands = await res.json();
-                const datalist = document.getElementById('commandList');
-                datalist.innerHTML = '';
-                commands.forEach(c => {
-                    const opt = document.createElement('option');
-                    opt.value = c.command;
-                    opt.label = c.description;
-                    datalist.appendChild(opt);
-                });
+                availableCommands = [];
+                knownCommandSet = new Set();
+                if (Array.isArray(commands)) {
+                    commands.forEach(c => {
+                        if (!c || !c.command) return;
+                        availableCommands.push({ command: c.command, description: c.description || '' });
+                        knownCommandSet.add(c.command.toLowerCase());
+                    });
+                    availableCommands.sort((a, b) => a.command.localeCompare(b.command));
+                }
             }
         } catch (e) { }
     }
 
     // ===== AI 自动化状态 =====
     let aiRunningState = false;
+    const AI_TAGLINE = '自动守护服务运行 · 智能分析错误日志 · 自动执行运维任务';
+    let aiThinkingText = '';
+    let aiActivityText = '';
+
+    // 优先显示 AI 思考内容; 无思考时显示最近一条自动化活动(状态), 否则回退默认文案
+    function refreshAiTagline() {
+        const el = document.getElementById('aiHeroTagline');
+        if (!el) return;
+        if (aiThinkingText) {
+            el.textContent = '思考：' + aiThinkingText;
+            el.classList.add('ai-thinking');
+        } else if (aiActivityText && aiRunningState) {
+            el.textContent = '活动：' + aiActivityText;
+            el.classList.add('ai-thinking');
+        } else {
+            el.textContent = AI_TAGLINE;
+            el.classList.remove('ai-thinking');
+        }
+    }
+
+    // 有 AI 思考内容时替换标题下方的说明文字, 没有时回退到默认文案
+    function setAiThinking(text) {
+        aiThinkingText = (text || '').trim();
+        refreshAiTagline();
+    }
+
+    // 最近一次自动化活动(任务触发/工具调用/分析完成), 让卡片文字能反映当前状态
+    function setAiActivity(text) {
+        aiActivityText = (text || '').trim();
+        refreshAiTagline();
+    }
 
     function aiHeroToggle() {
         if (aiRunningState) {
@@ -366,10 +855,15 @@
         text.textContent = aiRunningState ? '运行中' : '已停止';
         btn.classList.toggle('stop', aiRunningState);
         btn.innerHTML = aiRunningState ? '■ 停止 AI 自动化' : '▶ 启动 AI 自动化';
+        // 停止后清空动态思考文字, 恢复默认说明
+        if (!aiRunningState) { aiActivityText = ''; setAiThinking(''); }
     }
 
     // 加载连接信息(表格形式)
+    let connInfoLoading = false;
     async function loadConnInfo() {
+        if (connInfoLoading) return;   // 上一次请求未返回时跳过, 避免慢统计接口导致请求堆积
+        connInfoLoading = true;
         try {
             const [authRes, statsRes] = await Promise.all([
                 fetch('/api/auth/status').then(r => r.ok ? r.json() : null).catch(() => null),
@@ -389,11 +883,13 @@
             const schedRunning = stats.schedulerRunning;
             const mcRunning = servers.some(s => s.isRunning);
 
-            // 启动按钮随服务端真实状态置灰: 已运行则禁用, 防止重复启动
+            // 启动按钮按"当前选中的实例"置灰: 该实例已运行则禁用, 防止重复启动
             const autoStartBtn = document.getElementById('autoStartBtn');
             const serverStartBtn = document.getElementById('serverStartBtn');
+            const selectedKey = consoleInstanceId || currentKey;
+            const selectedServer = servers.find(s => s.serverKey === selectedKey);
             if (autoStartBtn) autoStartBtn.disabled = !!schedRunning;
-            if (serverStartBtn) serverStartBtn.disabled = !!mcRunning;
+            if (serverStartBtn) serverStartBtn.disabled = selectedServer ? !!selectedServer.isRunning : !!mcRunning;
 
             updateAiHeroStatus(aiRunning);
 
@@ -429,14 +925,23 @@
             }
 
             el.innerHTML = html;
-        } catch (e) { }
+        } catch (e) {
+        } finally {
+            connInfoLoading = false;
+        }
     }
 
     // 初始化
     loadCommands();
+    loadInstanceFilter();
     loadConnInfo();
     setInterval(pollLogs, 1000);
-    setInterval(loadConnInfo, 5000);
+    // 连接信息刷新速度跟随"设置"页的刷新间隔(最低 500ms), 不在本页写死
+    fetch('/api/system/paneldata').then(r => r.ok ? r.json() : null).catch(() => null).then(data => {
+        const v = parseInt(data && data.refreshInterval, 10);
+        setInterval(loadConnInfo, v >= 500 ? v : 5000);
+    });
+    setInterval(loadInstanceFilter, 15000);
     document.getElementById('cmdInput').focus();
 </script>
 
@@ -455,6 +960,9 @@
     .ai-status-badge.running { color: var(--color-success, #4ade80); border-color: var(--color-success, #4ade80); }
     .ai-status-dot { width: 8px; height: 8px; border-radius: 0; background: #6b6b78; display: inline-block; }
     .ai-status-badge.running .ai-status-dot { background: var(--color-success, #4ade80); animation: aiPulse 1.6s infinite; }
+    .ai-hero-tagline { transition: color 0.2s; }
+    .ai-hero-tagline.ai-thinking { color: var(--color-info, #38bdf8) !important; animation: aiThinkFade 1.8s ease-in-out infinite; }
+    @@keyframes aiThinkFade { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
     @@keyframes aiPulse { 0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55); } 70% { box-shadow: 0 0 0 8px rgba(74, 222, 128, 0); } 100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); } }
 
     /* 亮色主题适配 */

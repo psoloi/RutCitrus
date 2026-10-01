@@ -21,7 +21,7 @@ namespace Rt
         // Core里面放主功能，Com则是模块
         // 这是一个示例扩展，详细展示了如何使用RtCli框架的功能和模块
         public override string Name => "Rt";
-        public override string Version => "1.8.8";
+        public override string Version => "1.8.9";
         public override string Description => "RtCli扩展插件，扩展了MC服务器安全方面的功能";
 
         private bool _isLoaded = false;
@@ -29,6 +29,7 @@ namespace Rt
         private static PacketsLimitMonitor? _packetsLimitMonitor;
         private static AntibotMonitor? _antibotMonitor;
         private static PacketEventsMonitor? _packetEventsMonitor;
+        private static ServerStatusMonitor? _serverStatusMonitor;
 
         public override void Load()
         {
@@ -78,6 +79,11 @@ namespace Rt
                 Output.Log("  [cyan]rte packetevents start[/]   启动数据包事件功能(需先启动monitor)", 1, "Rt");
                 Output.Log("  [cyan]rte packetevents stop[/]    停止数据包事件功能", 1, "Rt");
                 Output.Log("  [cyan]rte packetevents debug[/]   显示事件及获取的数据包详细", 1, "Rt");
+                Output.Log("[grey]── MC服务器状态监测子功能 ──[/]", 1, "Rt");
+                Output.Log("  [cyan]rte status[/]              查看状态监测配置与最近一次查询结果", 1, "Rt");
+                Output.Log("  [cyan]rte status start[/]        启动周期状态查询(按 status_query 配置)", 1, "Rt");
+                Output.Log("  [cyan]rte status stop[/]         停止周期状态查询", 1, "Rt");
+                Output.Log("  [cyan]rte status query[/]        立即查询一次全部服务器并发布状态事件", 1, "Rt");
                 Output.Log("[grey]── 其他 ──[/]", 1, "Rt");
                 Output.Log("  [cyan]rte get [[host:port]][/]   查询MC服务器状态(Server List Ping协议)", 1, "Rt");
                 Output.Log("  [cyan]rte reload[/]              热重载 rt_config.yml 配置", 1, "Rt");
@@ -86,7 +92,7 @@ namespace Rt
             // rte get - MC服务器状态查询
             CommandRegistry.RegisterCommand("rte get", args =>
             {
-                McStatusQuery.Execute(args);
+                MCStatusQuery.Execute(args);
             }, "Rt扩展获取Minecraft服务器状态信息");
 
             // ============================================================
@@ -287,11 +293,68 @@ namespace Rt
                 _packetEventsMonitor.ShowDebug();
             }, "显示事件订阅情况及获取的数据包详细(5秒实时观察)");
 
+            // ============================================================
+            // MC 服务器状态监测子功能命令
+            // ============================================================
+
+            // rte status - 查看监测配置与最近一次结果
+            CommandRegistry.RegisterCommand("rte status", args =>
+            {
+                if (_serverStatusMonitor == null)
+                    _serverStatusMonitor = new ServerStatusMonitor();
+
+                _serverStatusMonitor.ShowStatus();
+            }, "查看MC服务器状态监测配置与最近一次查询结果");
+
+            // rte status start - 启动周期查询
+            CommandRegistry.RegisterCommand("rte status start", args =>
+            {
+                if (_serverStatusMonitor == null)
+                    _serverStatusMonitor = new ServerStatusMonitor();
+
+                _serverStatusMonitor.Start();
+            }, "启动周期状态查询(按 rt_config status_query 配置发布 ServerStatusEvent)");
+
+            // rte status stop - 停止周期查询
+            CommandRegistry.RegisterCommand("rte status stop", args =>
+            {
+                if (_serverStatusMonitor == null || !_serverStatusMonitor.IsRunning)
+                {
+                    Output.Log("MC 服务器状态监测未运行", 2, "Rt");
+                    return;
+                }
+                _serverStatusMonitor.Stop();
+            }, "停止MC服务器周期状态查询");
+
+            // rte status query - 立即查询一次
+            CommandRegistry.RegisterCommand("rte status query", args =>
+            {
+                if (_serverStatusMonitor == null)
+                    _serverStatusMonitor = new ServerStatusMonitor();
+
+                _serverStatusMonitor.QueryOnceAsync().GetAwaiter().GetResult();
+                _serverStatusMonitor.ShowStatus();
+            }, "立即查询一次全部服务器并发布 ServerStatusEvent");
+
             // rte reload - 热重载配置
             CommandRegistry.RegisterCommand("rte reload", args =>
             {
                 RtConfig.Reload();
                 Output.Log("Rt扩展配置已重新加载", 1, "Rt");
+
+                // 状态监测按新配置重启(运行中的重启, 未运行但 enabled=true 则启动)
+                var wasRunning = _serverStatusMonitor?.IsRunning == true;
+                if (wasRunning)
+                {
+                    _serverStatusMonitor!.Stop();
+                    _serverStatusMonitor = null;
+                }
+
+                if (RtConfig.Current.StatusQuery.Enabled)
+                {
+                    _serverStatusMonitor = new ServerStatusMonitor();
+                    _serverStatusMonitor.Start();
+                }
             }, "热重载Rt扩展配置文件");
 
             // ============================================================
@@ -325,6 +388,13 @@ namespace Rt
             {
                 _packetEventsMonitor = new PacketEventsMonitor();
                 _packetEventsMonitor.Start();
+            }
+
+            // 5) 若 status_query.enabled=true，自动启动周期多服务器状态查询
+            if (RtConfig.Current.StatusQuery.Enabled)
+            {
+                _serverStatusMonitor = new ServerStatusMonitor();
+                _serverStatusMonitor.Start();
             }
 
             _isLoaded = true;
@@ -372,6 +442,9 @@ namespace Rt
             _packetEventsMonitor?.Stop();
             _packetEventsMonitor = null;
 
+            _serverStatusMonitor?.Stop();
+            _serverStatusMonitor = null;
+
             // 再停止 NetworkMonitor
             NetworkMonitor.Instance.Stop();
 
@@ -395,6 +468,10 @@ namespace Rt
             CommandRegistry.UnregisterCommand("rte packetevents start");
             CommandRegistry.UnregisterCommand("rte packetevents stop");
             CommandRegistry.UnregisterCommand("rte packetevents debug");
+            CommandRegistry.UnregisterCommand("rte status");
+            CommandRegistry.UnregisterCommand("rte status start");
+            CommandRegistry.UnregisterCommand("rte status stop");
+            CommandRegistry.UnregisterCommand("rte status query");
             CommandRegistry.UnregisterCommand("rte reload");
 
             base.Unload();

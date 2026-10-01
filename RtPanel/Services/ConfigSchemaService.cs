@@ -106,13 +106,16 @@ namespace RtPanel.Services
             regex.TopLevelKeys.UnionWith(new[]
             {
                 "console_error", "client_guide", "custom_client_errors",
-                "custom_troubleshoot", "custom_base_entries", "custom_tips"
+                "custom_troubleshoot", "custom_base_entries", "custom_tips", "server_query"
             });
             regex.Sections["console_error"] = new SectionSchema(new[] { "handler", "limit" });
             regex.Sections["client_guide"] = new SectionSchema(new[]
             {
                 "player_join", "player_disconnect", "client_error", "error_handler", "timeout"
             });
+            regex.Sections["server_query"] = new SectionSchema(new[] { "tps", "player_count" });
+            regex.Sections["server_query.tps"] = new SectionSchema(new[] { "enabled", "interval_seconds", "command", "regex" });
+            regex.Sections["server_query.player_count"] = new SectionSchema(new[] { "enabled", "interval_seconds", "command", "regex" });
             foreach (var (k, v) in new Dictionary<string, string>
             {
                 ["console_error.handler"] = "longstring",
@@ -126,6 +129,14 @@ namespace RtPanel.Services
                 ["custom_troubleshoot"] = "list",
                 ["custom_base_entries"] = "list",
                 ["custom_tips"] = "list",
+                ["server_query.tps.enabled"] = "bool",
+                ["server_query.tps.interval_seconds"] = "int",
+                ["server_query.tps.command"] = "string",
+                ["server_query.tps.regex"] = "longstring",
+                ["server_query.player_count.enabled"] = "bool",
+                ["server_query.player_count.interval_seconds"] = "int",
+                ["server_query.player_count.command"] = "string",
+                ["server_query.player_count.regex"] = "longstring",
             })
                 regex.ValueTypes[k] = v;
             profiles["regex_settings.yml"] = regex;
@@ -228,6 +239,28 @@ namespace RtPanel.Services
                 ["tasks.*.rules.queue"] = "string",
             })
                 sched.ValueTypes[k] = v;
+
+            // 队列枚举: 界面提供下拉建议(Fast/Default/Long), 同时仍允许手填
+            sched.Options["tasks.*.rules.queue"] = new[] { "Fast", "Default", "Long" };
+
+            foreach (var (k, v) in new Dictionary<string, string>
+            {
+                ["tasks.*.enabled"] = "是否启用该任务",
+                ["tasks.*.server_keys"] = "目标实例标识列表(为空则只作用于当前实例)，命令类执行会按实例逐个发送",
+                ["tasks.*.trigger"] = "触发条件，如 every: 30 / daily: \"08:00\" / event: ServerStartEvent，可用 and/or 组合",
+                ["tasks.*.condition"] = "执行前置条件，如 {rt.server_running} == \"true\"，留空则不检查",
+                ["tasks.*.execute"] = "执行内容，可写多行(每行一个动作，按顺序执行)；支持 script:名称 / command:/say hi / cli:.auto list 等",
+                ["tasks.*.pass_parameters"] = "是否把条件产生的参数传递给脚本",
+                ["tasks.*.rules.timeout_ms"] = "单个任务超时时间(ms)，0=不限制",
+                ["tasks.*.rules.delay_minutes"] = "延迟执行(分钟)",
+                ["tasks.*.rules.delay_until"] = "延迟执行(指定日期时间)",
+                ["tasks.*.rules.continue_tasks"] = "执行完成后延续开启的其他任务标识",
+                ["tasks.*.rules.execute_immediately"] = "任务创建后是否立即异步执行",
+                ["tasks.*.rules.max_executions"] = "执行 n 次后关闭，0=不限制",
+                ["tasks.*.rules.expire_at"] = "在指定日期时间关闭",
+                ["tasks.*.rules.queue"] = "任务队列: Fast(短任务, 优先) / Default(普通) / Long(长任务)",
+            })
+                sched.Comments[k] = v;
             profiles["scheduler_settings.yml"] = sched;
 
             // ===== scripts_settings.yml =====
@@ -698,10 +731,14 @@ namespace RtPanel.Services
                     comment = "";
                 firstKeySeen = true;
 
-                // 优先使用外部注释(RtCli Repository)，其次回退到 profile 内置 Comments
+                // 优先使用外部注释(RtCli Repository)，无对应项时回退到 profile 内置 Comments
                 var schemaPath = profile?.ToSchemaPath(path) ?? "";
-                var commentsSrc = externalComments ?? profile?.Comments;
-                if (commentsSrc != null && commentsSrc.TryGetValue(schemaPath, out var zhComment) && !string.IsNullOrEmpty(zhComment))
+                string? zhComment = null;
+                if (externalComments != null && externalComments.TryGetValue(schemaPath, out var extDoc) && !string.IsNullOrEmpty(extDoc))
+                    zhComment = extDoc;
+                else if (profile != null && profile.Comments.TryGetValue(schemaPath, out var builtinDoc) && !string.IsNullOrEmpty(builtinDoc))
+                    zhComment = builtinDoc;
+                if (!string.IsNullOrEmpty(zhComment))
                     comment = "# " + zhComment;
 
                 var node = new ConfigNode
@@ -716,8 +753,55 @@ namespace RtPanel.Services
 
                 if (!string.IsNullOrEmpty(valuePart))
                 {
-                    node.Value = UnquoteYaml(valuePart);
-                    node.ValueType = ResolveType(profile!, path, valuePart, false, false);
+                    if (IsBlockScalarIndicator(valuePart))
+                    {
+                        // 块标量(| / >): 收集缩进更深的后续行作为一个整体值,
+                        // 避免内容行(如 execute 的多步骤 "script:xxx")被误当成新配置项
+                        var contentLines = new List<string>();
+                        int lastContentLine = i;
+                        int j = i + 1;
+                        for (; j < lines.Length; j++)
+                        {
+                            string inner = lines[j];
+                            if (string.IsNullOrWhiteSpace(inner))
+                            {
+                                contentLines.Add("");
+                                continue;
+                            }
+                            int innerIndent = inner.Length - inner.TrimStart().Length;
+                            if (innerIndent <= depth) break;
+                            contentLines.Add(inner);
+                            lastContentLine = j;
+                        }
+
+                        while (contentLines.Count > 0 && contentLines[^1].Trim().Length == 0)
+                            contentLines.RemoveAt(contentLines.Count - 1);
+
+                        int baseIndent = int.MaxValue;
+                        foreach (var l in contentLines)
+                        {
+                            if (l.Trim().Length == 0) continue;
+                            baseIndent = Math.Min(baseIndent, l.Length - l.TrimStart().Length);
+                        }
+                        if (baseIndent == int.MaxValue) baseIndent = depth + 2;
+
+                        var cleaned = contentLines.Select(l => l.Trim().Length == 0
+                            ? ""
+                            : l.Substring(Math.Min(baseIndent, l.Length)).TrimEnd()).ToList();
+
+                        node.Value = (valuePart[0] == '|' ? string.Join("\n", cleaned) : FoldBlockScalar(cleaned)).TrimEnd('\n');
+                        node.ValueType = ResolveType(profile!, path, node.Value, false, false);
+                        node.IsBlockScalar = true;
+                        node.BlockEndLine = lastContentLine;
+                        i = lastContentLine;
+                    }
+                    else
+                    {
+                        node.Value = UnquoteYaml(valuePart);
+                        node.ValueType = ResolveType(profile!, path, valuePart, false, false);
+                        if (profile!.Options.TryGetValue(schemaPath, out var opts))
+                            node.Options = opts;
+                    }
                 }
                 else
                 {
@@ -773,7 +857,10 @@ namespace RtPanel.Services
                 {
                     var vtype = !string.IsNullOrEmpty(ch.ValueType) ? ch.ValueType : node.ValueType;
                     var newLine = node.Indent + node.Key + ": " + FormatScalar(ch.Value ?? "", vtype);
-                    patches.Add((node.LineIndex, node.LineIndex, new List<string> { newLine }));
+                    // 块标量占多行: 必须整块替换, 否则残留的续行会被当成新配置项
+                    int start = node.LineIndex;
+                    int end = node.IsBlockScalar && node.BlockEndLine >= node.LineIndex ? node.BlockEndLine : node.LineIndex;
+                    patches.Add((start, end, new List<string> { newLine }));
                 }
             }
 
@@ -799,14 +886,14 @@ namespace RtPanel.Services
             new("motd", "服务器 MOTD", "在多人服务器列表中显示的服务器描述文本。\n支持旧版格式化代码(§)和 JSON 文本。", "longstring", "A Minecraft Server", "basic", ""),
             new("level-name", "世界名称", "世界存档文件夹的名称。\n修改后会在服务器目录下生成新的世界存档。", "string", "world", "basic", ""),
             new("level-seed", "世界种子", "世界生成种子。留空则随机生成。\n不同种子会生成不同的地形。", "string", "", "basic", ""),
-            new("level-type", "世界类型", "世界生成类型。\nminecraft\\:default=默认；minecraft\\:flat=超平坦；minecraft\\:large_biomes=巨型生物群系；minecraft\\:amplified=放大化(1.13 前)。", "string", "minecraft\\:default", "basic", ""),
+            new("level-type", "世界类型", "世界生成类型。\n1.13+ 使用命名空间 ID：minecraft\\:normal=默认；minecraft\\:flat=超平坦；minecraft\\:large_biomes=巨型生物群系；minecraft\\:amplified=放大化；minecraft\\:single_biome_surface=单一生物群系。", "string", "minecraft\\:normal", "basic", "1.13", "", new[] { "minecraft:normal", "minecraft:flat", "minecraft:large_biomes", "minecraft:amplified", "minecraft:single_biome_surface" }),
             new("generator-settings", "生成器设置", "自定义世界生成参数。JSON 格式。\n例如超平坦层的方块配置。", "longstring", "", "basic", ""),
             new("max-world-size", "最大世界尺寸", "世界边界的最大半径(方块)。\n范围 1-29999984。", "int", "29999984", "basic", "1.14"),
 
             // === 游戏模式与规则 ===
-            new("gamemode", "游戏模式", "新玩家默认进入的游戏模式。\nsurvival=生存；creative=创造；adventure=冒险；spectator=旁观。", "string", "survival", "gameplay", ""),
+            new("gamemode", "游戏模式", "新玩家默认进入的游戏模式。\nsurvival=生存；creative=创造；adventure=冒险；spectator=旁观。", "string", "survival", "gameplay", "", "", new[] { "survival", "creative", "adventure", "spectator" }),
             new("force-gamemode", "强制游戏模式", "为 true 时玩家加入时强制重置为默认游戏模式，覆盖其离线前的模式。", "bool", "false", "gameplay", ""),
-            new("difficulty", "难度", "游戏难度。\npeaceful=和平；easy=简单；normal=普通；hard=困难。", "string", "easy", "gameplay", ""),
+            new("difficulty", "难度", "游戏难度。\npeaceful=和平；easy=简单；normal=普通；hard=困难。", "string", "easy", "gameplay", "", "", new[] { "peaceful", "easy", "normal", "hard" }),
             new("hardcore", "极限模式", "为 true 时启用极限模式：难度锁定为困难，玩家死亡后被永久封禁。", "bool", "false", "gameplay", ""),
             new("pvp", "PVP", "是否允许玩家互相攻击。\n26.2+ 已移至 gamerule pvp。", "bool", "true", "gameplay", "", "26.2"),
             new("allow-flight", "允许飞行", "是否允许玩家在生存模式下使用飞行(如 Mod)。开启后可避免反作弊误判。", "bool", "false", "gameplay", ""),
@@ -814,11 +901,11 @@ namespace RtPanel.Services
             new("allow-end", "允许末地", "是否加载末地维度。", "bool", "true", "gameplay", "1.19.4"),
             new("generate-structures", "生成结构", "是否生成村庄、要塞、神殿等结构。", "bool", "true", "gameplay", ""),
             new("view-distance", "视距", "服务器向客户端发送的区块半径。范围 3-32。值越大网络/内存占用越高。", "int", "10", "gameplay", ""),
-            new("simulation-distance", "模拟距离", "实体/方块激活的区块半径。范围 0-32；0 表示使用视距。", "int", "10", "gameplay", "1.18"),
-            new("max-build-height", "最大建筑高度", "玩家可放置方块的最大 Y 坐标。建议为 16 的倍数。", "int", "256", "gameplay", ""),
+            new("simulation-distance", "模拟距离", "实体、方块随机刻等逻辑激活的区块半径。\n范围 3-32，默认 10；值越大实体 AI 与红石越活跃，但 CPU 占用也越高。", "int", "10", "gameplay", "1.18"),
+            new("max-build-height", "最大建筑高度(已废弃)", "玩家可放置方块的最大 Y 坐标。\n1.13 起世界高度固定为 0-256，1.18 起由维度类型决定(-64~320)，该键已不再生效，仅保留兼容旧版。", "int", "256", "deprecated", ""),
             new("enable-command-block", "命令方块", "是否启用命令方块。\n26.2+ 已移至 gamerule commandBlockEnabled。", "bool", "false", "gameplay", "", "26.2"),
             new("spawn-protection", "出生点保护", "出生点保护半径(方块)。0 表示禁用；只有 OP 可在该范围建造。", "int", "16", "gameplay", ""),
-            new("announce-player-achievements", "成就广播", "是否在玩家获得成就时向全服广播。", "bool", "true", "gameplay", ""),
+            new("announce-player-achievements", "成就广播(已废弃)", "是否在玩家获得成就时向全服广播。\n1.12 起成就改为「进度(advancements)」，该键已无实际作用。", "bool", "true", "deprecated", "", "1.12"),
             new("spawn-animals", "生成动物", "是否生成动物。关闭后动物仍会存在但不会自然生成。\n26.2+ 已移至 gamerule doMobSpawning。", "bool", "true", "gameplay", "", "26.2"),
             new("spawn-monsters", "生成怪物", "是否生成怪物。关闭后怪物仍会存在但不会自然生成。\n26.2+ 已移至 gamerule doMobSpawning。", "bool", "true", "gameplay", "", "26.2"),
             new("spawn-npcs", "生成 NPC", "是否生成村民等 NPC。\n26.2+ 已移至 gamerule doMobSpawning。", "bool", "true", "gameplay", "", "26.2"),
@@ -829,14 +916,16 @@ namespace RtPanel.Services
             new("enforce-secure-profile", "强制安全档案", "为 true 时仅允许具有有效 Mojang 签名档案的玩家加入(1.19 聊天签名特性)。", "bool", "true", "players", "1.19"),
             new("online-mode", "正版验证", "为 true 时进行 Mojang 账号正版验证；关闭可允许离线模式/盗版进入，但失去皮肤和签名聊天。", "bool", "true", "players", ""),
             new("prevent-proxy-connections", "禁止代理连接", "为 true 时服务器会拒绝从 VPN/代理来的连接(基于 IP 地理位置校验)。", "bool", "false", "players", "1.14.4"),
-            new("op-permission-level", "OP 权限等级", "新 OP 的默认权限等级。范围 0-4；4 为最高。", "int", "4", "players", ""),
-            new("function-permission-level", "函数权限等级", "执行数据包中函数时的默认权限等级。范围 0-4。", "int", "2", "players", "1.13"),
+            new("op-permission-level", "OP 权限等级", "新 OP 的默认权限等级。范围 0-4；4 为最高。", "int", "4", "players", "", "", new[] { "0", "1", "2", "3", "4" }),
+            new("function-permission-level", "函数权限等级", "执行数据包中函数时的默认权限等级。范围 0-4。", "int", "2", "players", "1.13", "", new[] { "0", "1", "2", "3", "4" }),
             new("player-idle-timeout", "挂机踢出", "玩家无操作超过该分钟数后自动踢出。0 表示禁用。", "int", "0", "players", ""),
             new("require-resource-pack", "强制资源包", "为 true 时玩家必须接受服务器资源包才能加入。", "bool", "false", "players", "1.18"),
             new("resource-pack", "资源包 URL", "服务器资源包的下载 URL(直链 zip)。", "longstring", "", "players", ""),
             new("resource-pack-sha1", "资源包校验值", "资源包 SHA-1 哈希(40 位十六进制)，用于校验完整性。", "string", "", "players", "1.10"),
             new("resource-pack-prompt", "资源包提示", "玩家接受资源包前显示的提示文本(可空)。", "longstring", "", "players", "1.17"),
-            new("max-chained-neighbor-updates", "最大连锁更新", "限制单次方块状态变更引发的连锁更新深度，防止无限循环。\n-1 表示无限制。", "int", "10000", "players", "1.19.3"),
+            new("max-chained-neighbor-updates", "最大连锁更新", "限制单次方块状态变更引发的连锁更新深度，防止无限循环。\n-1 表示无限制；默认 1000000。", "int", "1000000", "players", "1.19.3"),
+            new("chat-spam-threshold-seconds", "聊天刷屏阈值(秒)", "同一玩家两次聊天之间的最小间隔(秒)。\n低于该间隔的消息会被服务器丢弃，用于抑制刷屏；0 表示不限制。", "int", "10", "players", "26.1"),
+            new("command-spam-threshold-seconds", "命令刷屏阈值(秒)", "同一玩家两次命令之间的最小间隔(秒)。\n低于该间隔的命令会被服务器丢弃，用于抑制命令刷屏；0 表示不限制。", "int", "10", "players", "26.1"),
 
             // === 网络与协议 ===
             new("network-compression-threshold", "网络压缩阈值", "数据包字节数超过该阈值时启用压缩。\n-1 表示禁用压缩；0 表示全部压缩。", "int", "256", "network", ""),
@@ -860,7 +949,7 @@ namespace RtPanel.Services
             new("snooper-enabled", "Snooper 统计", "为 true 时服务器向 Mojang 匿名发送统计数据(已弃用)。", "bool", "true", "deprecated", "1.3", "1.14.4"),
             new("max-tick-time", "最大 tick 时间", "单 tick 超过该毫秒数(且服务器卡顿时)会触发看门狗警告与崩溃报告。\n-1 表示禁用。", "int", "60000", "performance", ""),
             new("rate-limit", "速率限制", "单个玩家每秒可发送的数据包数量上限。0 表示无限制。", "int", "0", "network", "1.14.4"),
-            new("region-file-compression", "区块文件压缩", "区域文件(.mca)的压缩算法。\ndeflate=GZip；zlib=原始 zlib；none=不压缩。", "string", "deflate", "performance", "1.20.5"),
+            new("region-file-compression", "区块文件压缩", "区域文件(.mca)的压缩算法。\ndeflate=GZip；lz4=高压缩比快速算法；none=不压缩。", "string", "deflate", "performance", "1.20.5", "", new[] { "deflate", "lz4", "none" }),
             new("pause-when-empty-seconds", "无玩家暂停", "服务器无玩家时多少秒后暂停 tick 以节省资源。\n-1 表示禁用，0 表示立即暂停。", "int", "60", "performance", "1.21.2"),
             new("text-filtering-config", "文本过滤配置", "聊天文本过滤的配置 JSON(企业版特性)。", "longstring", "", "players", "1.17"),
             new("text-filtering-version", "文本过滤版本", "文本过滤协议版本。", "int", "0", "players", "1.17"),
@@ -922,9 +1011,13 @@ namespace RtPanel.Services
             return true; // equal
         }
 
-        /// <summary>返回指定版本下可见的 server.properties 字段 schema 列表。</summary>
+        /// <summary>返回指定版本下可见的 server.properties 字段 schema 列表。version = "all" 时返回全部字段(不再按版本筛选)。</summary>
         public List<PropertiesFieldSchema> GetVisiblePropertiesFields(string version)
         {
+            // 界面不再提供版本选择: 使用全部字段, 保证不同版本的键(含已移除项)都能识别并给出说明
+            if (string.Equals(version, "all", StringComparison.OrdinalIgnoreCase))
+                return new List<PropertiesFieldSchema>(_serverPropertiesFields);
+
             var result = new List<PropertiesFieldSchema>();
             foreach (var f in _serverPropertiesFields)
             {
@@ -971,6 +1064,8 @@ namespace RtPanel.Services
 
                 var key = trimmed.Substring(0, eqIdx).Trim();
                 var value = eqIdx + 1 < trimmed.Length ? trimmed.Substring(eqIdx + 1).Trim() : "";
+                // 文件中非 ASCII 以 \uXXXX 存储(Java Properties 按 ISO-8859-1 读取), 界面显示为原文
+                value = UnescapeProperties(value);
                 existingKeys.Add(key);
 
                 var comment = string.Join("\n", pendingComment);
@@ -996,6 +1091,7 @@ namespace RtPanel.Services
                         Value = value,
                         ValueType = schema.Type,
                         IsUnknown = false,
+                        Options = schema.Options,
                     };
                     result.Add(node);
                 }
@@ -1032,6 +1128,12 @@ namespace RtPanel.Services
             // 为 schema 中存在但文件中缺失的字段补一个默认节点(便于在界面中新增)
             foreach (var schema in visibleFields)
             {
+                // 界面不再按版本筛选时: 已移除的历史字段若文件中没有, 不补默认项(避免整屏无效配置)
+                if (string.Equals(version, "all", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(schema.RemovedVer)
+                    && !existingKeys.Contains(schema.Key))
+                    continue;
+
                 if (!existingKeys.Contains(schema.Key))
                 {
                     var desc = schema.Description ?? "";
@@ -1049,6 +1151,7 @@ namespace RtPanel.Services
                         Value = schema.Default,
                         ValueType = schema.Type,
                         IsUnknown = false,
+                        Options = schema.Options,
                         // 用 Children 列表为空标记"缺失"便于前端区分
                     });
                 }
@@ -1109,7 +1212,47 @@ namespace RtPanel.Services
             {
                 return value?.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) == true ? "true" : "false";
             }
-            return value ?? "";
+            // 非 ASCII 必须转义: MC 用 Properties.load(InputStream) 按 ISO-8859-1 解码, 直接写中文会乱码
+            return EscapePropertiesNonAscii(value ?? "");
+        }
+
+        /// <summary>把文件中的 \uXXXX 转义还原为字符(仅处理 4 位十六进制, 其它转义保持原样)。</summary>
+        private static string UnescapeProperties(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.IndexOf("\\u", StringComparison.Ordinal) < 0)
+                return value;
+
+            var sb = new StringBuilder(value.Length);
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (value[i] == '\\' && i + 5 < value.Length && value[i + 1] == 'u'
+                    && int.TryParse(value.Substring(i + 2, 4), System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture, out int code))
+                {
+                    sb.Append((char)code);
+                    i += 5;
+                }
+                else
+                {
+                    sb.Append(value[i]);
+                }
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>把非 ASCII 字符转义为 \uXXXX。</summary>
+        private static string EscapePropertiesNonAscii(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value ?? "";
+            var sb = new StringBuilder(value.Length + 16);
+            foreach (char c in value)
+            {
+                if (c > 0x7E)
+                    sb.Append("\\u").Append(((int)c).ToString("x4"));
+                else
+                    sb.Append(c);
+            }
+            return sb.ToString();
         }
 
         private static string GuessPropertiesType(string value)
@@ -1158,6 +1301,38 @@ namespace RtPanel.Services
                 return "bool";
             if (int.TryParse(v, out _)) return "int";
             return v.Length > 80 ? "longstring" : "string";
+        }
+
+        /// <summary>是否为 YAML 块标量指示符: |、>、(可带 -/+ 与缩进数字, 可带行尾注释)。</summary>
+        private static bool IsBlockScalarIndicator(string valuePart)
+        {
+            if (string.IsNullOrEmpty(valuePart)) return false;
+            if (valuePart[0] != '|' && valuePart[0] != '>') return false;
+
+            string body = valuePart.Substring(1);
+            int hash = body.IndexOf('#');
+            if (hash >= 0) body = body.Substring(0, hash);
+            body = body.Trim();
+            if (body.Length == 0) return true;
+            return body.All(c => c == '-' || c == '+' || char.IsDigit(c));
+        }
+
+        /// <summary>折叠块标量(>): 相邻普通行以空格连接, 空行转换为换行。</summary>
+        private static string FoldBlockScalar(List<string> lines)
+        {
+            var sb = new StringBuilder();
+            foreach (var line in lines)
+            {
+                if (line.Length == 0)
+                {
+                    sb.Append('\n');
+                    continue;
+                }
+                if (sb.Length > 0 && sb[^1] != '\n')
+                    sb.Append(' ');
+                sb.Append(line);
+            }
+            return sb.ToString();
         }
 
         /// <summary>YAML 双引号字符串反转义；裸值原样返回。</summary>
@@ -1234,6 +1409,8 @@ namespace RtPanel.Services
         // 动态字典父路径(直接子键为动态名)
         public HashSet<string> DictParents { get; } = new();
         public Dictionary<string, string> ValueTypes { get; } = new(StringComparer.Ordinal);
+        // 键路径 -> 可选值(界面渲染为带下拉建议的输入框)
+        public Dictionary<string, string[]> Options { get; } = new(StringComparer.Ordinal);
         // 键路径 -> 中文说明(界面编辑时显示)
         public Dictionary<string, string> Comments { get; } = new(StringComparer.Ordinal);
 
@@ -1291,6 +1468,12 @@ namespace RtPanel.Services
         public int ListStartLine { get; set; } = -1;
         public int ListEndLine { get; set; } = -1;
         public bool IsUnknown { get; set; }
+        /// <summary>值是否为 YAML 块标量(多行)，保存时需整块替换而非只替换首行。</summary>
+        public bool IsBlockScalar { get; set; }
+        /// <summary>块标量内容的最后一行行号(仅 IsBlockScalar 时有效)。</summary>
+        public int BlockEndLine { get; set; } = -1;
+        /// <summary>可选值(界面下拉/自动补全)，null 表示自由输入。</summary>
+        public string[]? Options { get; set; }
 
         [JsonIgnore]
         public string Indent { get; set; } = "";
@@ -1325,9 +1508,12 @@ namespace RtPanel.Services
         public string Category { get; }
         public string SinceVer { get; }
         public string RemovedVer { get; }
+        /// <summary>可选值(界面以下拉/自动补全方式填充)，null 表示自由输入。</summary>
+        public string[]? Options { get; }
 
         public PropertiesFieldSchema(string key, string displayName, string description,
-            string type, string defaultValue, string category, string sinceVer, string removedVer = "")
+            string type, string defaultValue, string category, string sinceVer, string removedVer = "",
+            string[]? options = null)
         {
             Key = key;
             DisplayName = displayName;
@@ -1337,6 +1523,7 @@ namespace RtPanel.Services
             Category = category;
             SinceVer = sinceVer;
             RemovedVer = removedVer;
+            Options = options;
         }
     }
 

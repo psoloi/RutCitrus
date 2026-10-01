@@ -1,0 +1,952 @@
+@page
+@model EventsModel
+@{
+    ViewData["Title"] = "事件详细";
+}
+
+<div class="evt-page">
+
+    <!-- ===== 工具条 ===== -->
+    <div class="evt-bar">
+        <div class="evt-bar-left">
+            <span class="evt-bar-title">事件详细</span>
+            <span class="evt-bar-count" id="evtCount">@(Model.Connected ? "加载中…" : "未连接")</span>
+        </div>
+        <div class="evt-bar-actions">
+            <select class="form-select form-select-sm" id="evtWindow" title="时间范围" aria-label="时间范围">
+                <option value="15">15 分钟</option>
+                <option value="30">30 分钟</option>
+                <option value="60" selected>1 小时</option>
+                <option value="120">2 小时</option>
+                <option value="180">3 小时</option>
+                <option value="360">6 小时</option>
+                <option value="720">12 小时</option>
+                <option value="1440">24 小时</option>
+                <option value="2880">48 小时</option>
+            </select>
+            <select class="form-select form-select-sm" id="evtGroup" title="分组方式" aria-label="分组方式">
+                <option value="component" selected>按部件分组</option>
+                <option value="time">按时间排序</option>
+            </select>
+            <select class="form-select form-select-sm" id="evtCat" title="类别筛选" aria-label="类别筛选">
+                <option value="">全部类别</option>
+                <option value="lifecycle">实例生命周期</option>
+                <option value="permission">玩家权限</option>
+                <option value="file">文件操作</option>
+                <option value="system">扩展与配置</option>
+            </select>
+            <input type="search" class="form-control form-control-sm evt-search" id="evtSearch"
+                   placeholder="搜索标题 / 详情 / 部件" aria-label="搜索事件" />
+            <label class="evt-live" id="evtLive" data-on="true" title="每 10 秒自动刷新">
+                <input type="checkbox" class="form-check-input mt-0" id="evtLiveToggle" checked />
+                <span class="evt-live-dot" aria-hidden="true"></span><span>自动刷新</span>
+            </label>
+            <button type="button" class="btn btn-sm btn-outline-info" onclick="EventDetail.refresh()">刷新</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="evtResetRange" hidden onclick="EventDetail.resetRange()">清除框选</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" onclick="EventDetail.clearAll()">清空</button>
+            <a class="btn btn-sm btn-outline-secondary" href="/">返回</a>
+        </div>
+    </div>
+
+    @* 首屏提示: 未连接时立即显示原因, 避免先闪一下"暂无事件"; JS 刷新后会接管此区域 *@
+    <div class="evt-banner" id="evtBanner" data-kind="warn" @(Model.Connected ? "hidden" : "")>
+        @(Model.Connected ? "" : "未连接到 RtCli, 无法获取事件记录。请确认 RtCli 已启动并已完成配置。")
+    </div>
+
+    <!-- ===== 时间概览(操作日志时间图) ===== -->
+    <section class="evt-timeline">
+        <div class="evt-timeline-head">
+            <span class="evt-timeline-title">时间概览</span>
+            <div class="evt-timeline-meta">
+                <span class="evt-timeline-hint">滚轮缩放 · 拖拽框选 · 右键拖动平移 · 右键/双击/Esc 清除 · 点击色条定位</span>
+                <span class="evt-timeline-range" id="evtRange"></span>
+            </div>
+        </div>
+        <div class="evt-plot" id="evtPlot">
+            <div class="evt-labels" id="evtLaneLabels" aria-hidden="true"></div>
+            <div class="evt-track" id="evtTrack" tabindex="0"
+                 role="application" aria-label="事件时间概览: 每个部件的操作时间条">
+                <div class="evt-boundaries" id="evtBoundaries" aria-hidden="true"></div>
+                <div class="evt-lanes" id="evtSpanLanes" data-timeline-domain></div>
+                <div class="evt-selection" id="evtSelection" hidden aria-hidden="true"></div>
+                <div class="evt-selection-edges" id="evtSelectionEdges" hidden aria-hidden="true"></div>
+                <div class="evt-hover-line" id="evtHoverLine" hidden aria-hidden="true"></div>
+                <span class="evt-empty" id="evtPlotEmpty">暂无事件</span>
+            </div>
+        </div>
+        <div class="evt-axis" id="evtAxis" aria-hidden="true"></div>
+    </section>
+
+    <!-- ===== 操作记录表 ===== -->
+    <div class="evt-groups" id="evtGroups"></div>
+    <div class="evt-banner" id="evtTableEmpty" hidden></div>
+
+</div>
+
+@section Scripts {
+<script>
+    // ============================================================
+    //  事件详细页面: 操作日志时间图
+    //  时间概览(多轨时间条: 缩放/框选/悬停) + 按部件分组的操作记录表
+    // ============================================================
+    window.EventDetail = (function () {
+        'use strict';
+
+        // ---- 事件类别 → 时间图轨道 ----
+        const CAT_OF_TYPE = {
+            started: 'lifecycle', stopped: 'lifecycle', crashed: 'lifecycle',
+            auto_restarted: 'lifecycle', stop_unresponsive: 'lifecycle',
+            op: 'permission', deop: 'permission', ban: 'permission',
+            unban: 'permission', ip_ban: 'permission', ip_unban: 'permission',
+            file_upload: 'file', file_delete: 'file',
+            file_rename: 'file', file_write: 'file',
+            backup_create: 'file', backup_restore: 'file', backup_delete: 'file',
+            plugin_load: 'system', plugin_unload: 'system',
+            jar_upload: 'system', jar_delete: 'system', jar_toggle: 'system',
+            config_reload: 'system', panel_command: 'system',
+            ai_task_start: 'ai', ai_task_done: 'ai', ai_task_fail: 'ai',
+            ai_tool_call: 'ai', ai_runner: 'ai', ai_activity: 'ai'
+        };
+        const LANES = [
+            { key: 'lifecycle', label: '实例', full: '实例生命周期' },
+            { key: 'permission', label: '权限', full: '玩家权限' },
+            { key: 'file', label: '文件', full: '文件操作' },
+            { key: 'system', label: '系统', full: '扩展与配置' },
+            { key: 'ai', label: 'AI', full: 'AI 自动化' }
+        ];
+        const LANE_OF = { lifecycle: 0, permission: 1, file: 2, system: 3, ai: 4 };
+
+        // 异常/危险事件 → 时间条标红
+        const ALERT_TYPES = new Set(['crashed', 'ban', 'ip_ban', 'file_delete', 'stop_unresponsive',
+            'backup_restore', 'backup_delete', 'jar_delete']);
+        // 事件左侧颜色条: 按类别着色, 危险操作统一红色, 待处理状态黄色
+        const CAT_COLOR = {
+            lifecycle: '#4ade80', permission: '#22d3ee', file: '#a78bfa',
+            system: '#2dd4bf', ai: '#f472b6'
+        };
+        function barColor(ev) {
+            if (ev.type === 'stop_unresponsive') return '#eab308';
+            if (ALERT_TYPES.has(ev.type)) return '#ef4444';
+            return CAT_COLOR[ev.cat] || '#64748b';
+        }
+        // "运行中"的生命周期事件: 若为某实例最后一条, 视为状态仍在持续
+        const ACTIVE_TYPES = new Set(['started', 'auto_restarted']);
+
+        const LANE_TOP = 7;          // 与 CSS .evt-lanes 的 top 一致
+        const LANE_STEP = 14;        // 与 CSS 中 --evt-span-lane * 14px 一致
+        const MIN_DRAG_PX = 3;
+        const MIN_ZOOM_MS = 20000;
+        const TIP_DELAY_MS = 500;
+        const REFRESH_MS = 10000;
+        const FETCH_LIMIT = 500;
+
+        const S = {
+            events: [],       // 已拉取的全部事件(归一化, 未按窗口过滤)
+            spans: [],        // 当前窗口内的时间条
+            fullStart: 0,     // 完整时间域(当前时间窗口)
+            fullEnd: 0,
+            viewport: null,   // 缩放视口 {start,end}
+            range: null,      // 已提交的框选 {start,end}
+            draft: null,      // 拖拽中的临时框选
+            selectedId: null,
+            open: new Set(),
+            drag: null,
+            pan: null,
+            tipEl: null,
+            tipTimer: null,
+            timer: null,
+            error: ''
+        };
+
+        // ---------- 工具函数 ----------
+        const $ = (id) => document.getElementById(id);
+        const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+        const clamp01 = (v) => clamp(v, 0, 1);
+
+        function esc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+        function typeMeta(type) {
+            if (window.EventBoard && typeof EventBoard.typeMeta === 'function') return EventBoard.typeMeta(type);
+            return { icon: '<svg class="event-icon-svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="8.01"/></svg>', cls: '' };
+        }
+        function catOf(type) { return CAT_OF_TYPE[type] || 'system'; }
+        function laneOf(type) { return LANE_OF[catOf(type)] || 0; }
+        function catFull(key) {
+            const hit = LANES.find((l) => l.key === key);
+            return hit ? hit.full : key;
+        }
+        // 全局事件(RtCli 侧 BoardEventRecorder.GlobalInstanceId)不属于任何实例,
+        // 单独成组显示为「全局」, 不再混进当前实例的时间线。
+        const GLOBAL_INSTANCE_ID = '*';
+        function isGlobal(ev) { return ev && ev.instanceId === GLOBAL_INSTANCE_ID; }
+        function instanceOf(ev) { return ev.instanceId || '(未指定实例)'; }
+
+        function pad2(n) { return n < 10 ? '0' + n : String(n); }
+        function fmtClock(ts) {
+            const d = new Date(ts);
+            return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+        }
+        function fmtDateTime(ts) {
+            const d = new Date(ts);
+            return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + fmtClock(ts);
+        }
+        function fmtDuration(ms) {
+            if (ms == null || !isFinite(ms)) return '—';
+            if (ms < 1000) return Math.max(0, Math.round(ms)) + ' 毫秒';
+            const total = Math.round(ms / 1000);
+            if (total < 60) return total + ' 秒';
+            const m = Math.floor(total / 60), s = total % 60;
+            if (m < 60) return m + ' 分 ' + s + ' 秒';
+            const h = Math.floor(m / 60), rm = m % 60;
+            if (h < 24) return h + ' 时 ' + rm + ' 分';
+            return Math.floor(h / 24) + ' 天 ' + (h % 24) + ' 时';
+        }
+        function fmtAgo(ts) {
+            const diff = Date.now() - ts;
+            if (diff < 5000) return '刚刚';
+            return fmtDuration(diff) + '前';
+        }
+
+        // 兼容 .NET "o" 格式的 7 位小数秒, 以及无时区的本地时间字符串
+        function parseTime(s) {
+            if (!s) return NaN;
+            let v = String(s).trim().replace(/(\.\d{3})\d+/, '$1');
+            let t = Date.parse(v);
+            if (isNaN(t)) {
+                const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/.exec(v);
+                if (m) t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+            }
+            return t;
+        }
+
+        function windowMinutes() {
+            const sel = $('evtWindow');
+            const m = parseInt(sel ? sel.value : '60', 10);
+            return isNaN(m) || m <= 0 ? 60 : m;
+        }
+
+        // ---------- 数据 ----------
+        function normalize(ev) {
+            const t = parseTime(ev.recordedAt);
+            return {
+                id: ev.id,
+                type: ev.eventType || '',
+                instanceId: ev.instanceId || '',
+                instanceName: ev.instanceName || '',
+                title: ev.title || ev.eventType || '(无标题)',
+                detail: ev.detail || '',
+                t: isNaN(t) ? null : t,
+                cat: catOf(ev.eventType)
+            };
+        }
+
+        async function fetchEvents() {
+            const r = await fetch('/api/events/list?limit=' + FETCH_LIMIT);
+            if (r.status === 401 || r.redirected) { window.location.href = '/Login'; return null; }
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const data = await r.json();
+            if (!data.success) throw new Error(data.message || '请求失败');
+            // 服务端按时间正序返回, 反转成最新在前
+            return (data.events || []).slice().reverse().map(normalize).filter((e) => e.t !== null);
+        }
+
+        // 时间条: 生命周期事件按"到同一实例下一条生命周期事件"推导持续时长;
+        // 其余事件为瞬时记录 → 等宽方块(不虚构耗时, 与 DSH 时间图一致)
+        function buildSpans(events, now) {
+            const asc = events.slice().sort((a, b) => a.t - b.t);
+            // 仅生命周期事件参与"状态持续时长"推导: 下一条生命周期事件即本次状态的结束时刻。
+            // 若混入权限/文件等事件, 状态时长会被无关操作截断。
+            const lifeByInst = new Map();
+            asc.forEach((e) => {
+                if (catOf(e.type) !== 'lifecycle') return;
+                const k = instanceOf(e);
+                if (!lifeByInst.has(k)) lifeByInst.set(k, []);
+                lifeByInst.get(k).push(e);
+            });
+            return asc.map((e) => {
+                let end = e.t;
+                let ongoing = false;
+                if (catOf(e.type) === 'lifecycle') {
+                    const list = lifeByInst.get(instanceOf(e)) || [];
+                    const next = list[list.indexOf(e) + 1];
+                    if (next) end = next.t;
+                    else if (ACTIVE_TYPES.has(e.type)) { end = now; ongoing = true; }
+                }
+                if (!(end > e.t)) { end = e.t; ongoing = false; }
+                return {
+                    index: e.id,
+                    ev: e,
+                    start: e.t,
+                    end: end,
+                    ongoing: ongoing,
+                    equal: !(end > e.t),
+                    lane: laneOf(e.type),
+                    cat: e.cat
+                };
+            });
+        }
+
+        // ---------- 时间域 ----------
+        function domain() {
+            const fullStart = S.fullStart;
+            const fullEnd = S.fullEnd;
+            const fullDuration = Math.max(1, fullEnd - fullStart);
+            if (!S.viewport) return { fullStart, fullEnd, fullDuration, dStart: fullStart, dDuration: fullDuration };
+            const dDuration = Math.min(fullDuration, Math.max(1, S.viewport.end - S.viewport.start));
+            const dStart = clamp(S.viewport.start, fullStart, Math.max(fullStart, fullEnd - dDuration));
+            return { fullStart, fullEnd, fullDuration, dStart, dDuration };
+        }
+
+        function fractionAt(event) {
+            const rect = $('evtTrack').getBoundingClientRect();
+            return clamp01((event.clientX - rect.left) / Math.max(1, rect.width));
+        }
+        function spanIdAt(target) {
+            const el = target instanceof Element ? target.closest('.evt-span') : null;
+            if (!el) return null;
+            const n = Number(el.dataset.id);
+            return isFinite(n) ? n : null;
+        }
+        function orderedRange(a, b) { return a <= b ? { start: a, end: b } : { start: b, end: a }; }
+        // 指针捕获在部分环境(无活动指针/被浏览器拒绝)会抛异常, 失败时降级为不捕获
+        function capture(el, pointerId) {
+            try { if (el.setPointerCapture) el.setPointerCapture(pointerId); } catch (e) { /* 忽略 */ }
+        }
+        function centeredRange(center, width, lo, hi) {
+            const w = Math.min(hi - lo, Math.max(0, width));
+            const start = clamp(center - w / 2, lo, Math.max(lo, hi - w));
+            return { start: start, end: start + w };
+        }
+
+        // ---------- 渲染: 时间概览 ----------
+        function renderLaneLabels() {
+            $('evtLaneLabels').innerHTML = LANES.map((l) =>
+                '<span style="top:' + (LANE_TOP + LANE_OF[l.key] * LANE_STEP) + 'px" title="' + esc(l.full) + '">' + esc(l.label) + '</span>'
+            ).join('');
+        }
+
+        function renderTimeline() {
+            const { fullStart, fullDuration, dStart, dDuration } = domain();
+
+            const projected = {
+                '--evt-domain-left': (-(dStart - fullStart) / dDuration * 100) + '%',
+                '--evt-domain-width': (fullDuration / dDuration * 100) + '%'
+            };
+            const lanes = $('evtSpanLanes');
+            const boundaries = $('evtBoundaries');
+            for (const key in projected) {
+                lanes.style.setProperty(key, projected[key]);
+                boundaries.style.setProperty(key, projected[key]);
+            }
+
+            // 日期分隔线(仅当时间窗口跨天时才有意义)
+            const sep = [];
+            if (dDuration >= 43200000) {
+                const first = new Date(dStart);
+                const day = new Date(first.getFullYear(), first.getMonth(), first.getDate() + 1).getTime();
+                for (let t = day; t <= dStart + dDuration; t += 86400000) {
+                    if (t > fullStart) {
+                        sep.push('<span class="evt-boundary" style="--evt-sep-left:' +
+                            ((t - fullStart) / fullDuration * 100) + '%"></span>');
+                    }
+                }
+            }
+            boundaries.innerHTML = sep.join('');
+
+            const visible = S.spans.filter((sp) =>
+                sp.index === S.selectedId || (sp.end >= dStart && sp.start <= dStart + dDuration));
+
+            $('evtSpanLanes').innerHTML = visible.map((sp) => {
+                const leftPct = (sp.start - fullStart) / fullDuration * 100;
+                const widthPct = (sp.end - sp.start) / fullDuration * 100;
+                const gap = 'min(' + (widthPct * 0.08) + '%, 1px)';
+                const inRange = !S.range || (sp.start <= S.range.end && sp.end >= S.range.start);
+                return '<span class="evt-span" aria-hidden="true" data-id="' + sp.index + '" data-cat="' + sp.cat + '"' +
+                    (sp.equal ? ' data-equal-duration="true"' : '') +
+                    (ALERT_TYPES.has(sp.ev.type) ? ' data-alert="true"' : '') +
+                    (sp.index === S.selectedId ? ' data-current="true"' : '') +
+                    ' data-selected="' + (inRange ? 'true' : 'false') + '"' +
+                    ' style="--evt-span-left:' + leftPct + '%;--evt-span-width:' + widthPct + '%;--evt-span-gap:' + gap + ';--evt-span-lane:' + sp.lane + '"></span>';
+            }).join('');
+
+            $('evtPlotEmpty').hidden = S.spans.length > 0;
+            renderAxis();
+        }
+
+        function renderAxis() {
+            const { dStart, dDuration } = domain();
+            const n = 5;
+            let html = '';
+            for (let i = 0; i < n; i++) {
+                const frac = i / (n - 1);
+                const transform = i === 0 ? 'translateX(0)' : (i === n - 1 ? 'translateX(-100%)' : 'none');
+                html += '<span style="left:' + (frac * 100) + '%;transform:' + transform + '">' +
+                    esc(fmtClock(dStart + frac * dDuration)) + '</span>';
+            }
+            $('evtAxis').innerHTML = html;
+        }
+
+        // ---------- 渲染: 记录表 ----------
+        function visibleSpans() {
+            const q = ($('evtSearch').value || '').trim().toLowerCase();
+            const cat = $('evtCat').value;
+            return S.spans.filter((sp) => {
+                const ev = sp.ev;
+                if (cat && ev.cat !== cat) return false;
+                if (S.range && !(sp.start <= S.range.end && sp.end >= S.range.start)) return false;
+                if (q) {
+                    const hay = (ev.title + ' ' + ev.detail + ' ' + ev.instanceId + ' ' + ev.instanceName + ' ' + ev.type).toLowerCase();
+                    if (hay.indexOf(q) === -1) return false;
+                }
+                return true;
+            });
+        }
+
+        function groupSpans(spans) {
+            const desc = spans.slice().sort((a, b) => b.start - a.start);
+            if ($('evtGroup').value === 'time') {
+                return [{ name: '全部部件', id: '', spans: desc }];
+            }
+            const map = new Map();
+            desc.forEach((sp) => {
+                const k = instanceOf(sp.ev);
+                if (!map.has(k)) {
+                    map.set(k, {
+                        name: sp.ev.instanceName || k,
+                        id: sp.ev.instanceId && sp.ev.instanceId !== GLOBAL_INSTANCE_ID ? sp.ev.instanceId : '',
+                        spans: []
+                    });
+                }
+                map.get(k).spans.push(sp);
+            });
+            return [...map.values()];
+        }
+
+        function rowHtml(sp) {
+            const ev = sp.ev;
+            const meta = typeMeta(ev.type);
+            const open = S.open.has(ev.id);
+            const durText = sp.equal ? '—' : (fmtDuration(sp.end - sp.start) + (sp.ongoing ? ' · 进行中' : ''));
+            const pct = ev.type === 'file_upload' ? /\((\d+)%\)/.exec(ev.title || '') : null;
+            const progress = pct
+                ? '<div class="evt-progress"><div class="evt-progress-fill" style="width:' +
+                  Math.min(100, parseInt(pct[1], 10)) + '%"></div></div>'
+                : '';
+            const forceBtn = ev.type === 'stop_unresponsive'
+                ? '<div class="evt-row-actions"><button type="button" class="btn btn-sm btn-danger" onclick="EventDetail.forceStop(\'' +
+                  esc(ev.instanceId) + '\', this)">强制关闭</button></div>'
+                : '';
+
+            return '' +
+                '<article class="evt-row ' + meta.cls + '" data-id="' + ev.id + '" data-open="' + open + '"' +
+                ' style="border-left-color:' + barColor(ev) + '"' +
+                (S.selectedId === ev.id ? ' data-current="true"' : '') + '>' +
+                    '<div class="evt-row-head" role="button" tabindex="0" aria-expanded="' + open + '"' +
+                        ' onclick="EventDetail.toggleRow(' + ev.id + ')"' +
+                        ' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();EventDetail.toggleRow(' + ev.id + ');}">' +
+                        '<span class="event-icon" aria-hidden="true">' + meta.icon + '</span>' +
+                        '<div class="evt-row-main">' +
+                            '<div class="evt-row-title-line">' +
+                                '<span class="evt-row-title">' + esc(ev.title) + '</span>' +
+                                (ev.instanceName ? '<span class="event-instance">' + esc(ev.instanceName) + '</span>' : '') +
+                            '</div>' +
+                            '<div class="evt-row-sub">#' + ev.id + ' · ' + esc(ev.type) + ' · ' + esc(catFull(ev.cat)) + '</div>' +
+                            progress +
+                        '</div>' +
+                        '<span class="evt-row-time" title="' + esc(fmtDateTime(sp.start)) + '">' + esc(fmtClock(sp.start)) + '</span>' +
+                        '<span class="evt-row-dur" data-ongoing="' + sp.ongoing + '" title="' +
+                            (sp.equal ? '瞬时记录, 无持续时长' : '状态持续时长') + '">' + esc(durText) + '</span>' +
+                        '<span class="evt-chevron" aria-hidden="true">▸</span>' +
+                    '</div>' +
+                    '<div class="evt-row-detail"' + (open ? '' : ' hidden') + '>' +
+                        '<dl class="evt-fields">' +
+                            '<dt>事件编号</dt><dd class="mono">#' + ev.id + '</dd>' +
+                            '<dt>事件类型</dt><dd class="mono">' + esc(ev.type) + ' (' + esc(catFull(ev.cat)) + ')</dd>' +
+                            '<dt>所属部件</dt><dd>' + esc(ev.instanceName || '—') +
+                                (ev.instanceId && !isGlobal(ev) ? ' <span class="mono">' + esc(ev.instanceId) + '</span>' : '') +
+                                (isGlobal(ev) ? ' <span class="text-muted">(不属于任何实例)</span>' : '') + '</dd>' +
+                            '<dt>记录时间</dt><dd class="mono">' + esc(fmtDateTime(sp.start)) + '</dd>' +
+                            '<dt>相对时间</dt><dd>' + esc(fmtAgo(sp.start)) + '</dd>' +
+                            '<dt>持续时长</dt><dd>' + (sp.equal ? '— (瞬时事件)' :
+                                esc(fmtDuration(sp.end - sp.start)) + (sp.ongoing ? ' (进行中)' : '')) + '</dd>' +
+                            '<dt>结束时刻</dt><dd class="mono">' + (sp.equal ? '—' : esc(fmtDateTime(sp.end))) + '</dd>' +
+                            '<dt>详细信息</dt><dd>' + esc(ev.detail || '无详细信息') + '</dd>' +
+                        '</dl>' +
+                        forceBtn +
+                    '</div>' +
+                '</article>';
+        }
+
+        function renderTable() {
+            const spans = visibleSpans();
+            const groups = groupSpans(spans);
+            const host = $('evtGroups');
+
+            if (!groups.length) {
+                host.innerHTML = '';
+                const empty = $('evtTableEmpty');
+                empty.hidden = false;
+                empty.textContent = S.error ? S.error
+                    : (S.spans.length ? '当前筛选条件下没有匹配的事件' : '暂无事件');
+                return;
+            }
+            $('evtTableEmpty').hidden = true;
+
+            host.innerHTML = groups.map((g) => {
+                const head = '' +
+                    '<div class="evt-group-head">' +
+                        '<span class="evt-group-name">' + esc(g.name) + '</span>' +
+                        (g.id ? '<span class="evt-group-id">' + esc(g.id) + '</span>' : '') +
+                        '<span class="evt-group-stats">' + g.spans.length + ' 条 · 最近 ' +
+                            esc(fmtClock(g.spans[0].start)) + '</span>' +
+                    '</div>';
+                return '<section class="evt-group">' + head + g.spans.map(rowHtml).join('') + '</section>';
+            }).join('');
+        }
+
+        // ---------- 渲染: 工具条 / 框选 ----------
+        function updateBar() {
+            const total = S.spans.length;
+            const visible = visibleSpans();
+            const shown = visible.length;
+            const parts = [];
+            if (S.error) parts.push('未连接');
+            parts.push(shown === total ? ('共 ' + total + ' 条事件') : ('显示 ' + shown + ' / ' + total + ' 条事件'));
+            // 部件数按当前筛选结果统计, 与列表内容保持一致
+            const comps = new Set(visible.map((sp) => instanceOf(sp.ev)));
+            if (comps.size) parts.push(comps.size + ' 个部件');
+            const evt = $('evtCount');
+            evt.textContent = parts.join(' · ');
+            evt.classList.toggle('text-warning', !!S.error);
+
+            const { dStart, dDuration } = domain();
+            $('evtRange').textContent = fmtDateTime(dStart) + ' → ' + fmtDateTime(dStart + dDuration) +
+                (S.viewport ? ' (已缩放)' : '');
+
+            $('evtResetRange').hidden = !S.range;
+
+            const banner = $('evtBanner');
+            if (S.error) {
+                banner.hidden = false;
+                banner.dataset.kind = 'warn';
+                banner.textContent = S.error;
+            } else {
+                banner.hidden = true;
+            }
+        }
+
+        function paintSelection() {
+            const box = $('evtSelection');
+            const edges = $('evtSelectionEdges');
+            const r = S.draft || S.range;
+            if (!r) {
+                box.hidden = true;
+                edges.hidden = true;
+                return;
+            }
+            const { dStart, dDuration } = domain();
+            const a = clamp01((r.start - dStart) / dDuration);
+            const b = clamp01((r.end - dStart) / dDuration);
+            const left = Math.min(a, b) * 100;
+            const width = Math.abs(b - a) * 100;
+            box.hidden = false;
+            edges.hidden = false;
+            for (const el of [box, edges]) {
+                el.style.setProperty('--evt-sel-left', left + '%');
+                el.style.setProperty('--evt-sel-width', width + '%');
+            }
+            box.dataset.dragging = S.draft ? 'true' : 'false';
+        }
+
+        function renderAll() {
+            const now = Date.now();
+            S.fullEnd = now;
+            S.fullStart = now - windowMinutes() * 60000;
+
+            const inWindow = S.events.filter((e) => e.t >= S.fullStart);
+            S.spans = buildSpans(inWindow, now);
+
+            if (S.viewport && (S.viewport.end < S.fullStart || S.viewport.start > S.fullEnd)) S.viewport = null;
+            if (S.range && (S.range.end < S.fullStart || S.range.start > S.fullEnd)) S.range = null;
+            if (S.selectedId !== null && !S.spans.some((sp) => sp.index === S.selectedId)) S.selectedId = null;
+
+            renderTimeline();
+            renderTable();
+            updateBar();
+            paintSelection();
+        }
+
+        // ---------- 提示气泡 ----------
+        function cancelTip() {
+            if (S.tipTimer) { clearTimeout(S.tipTimer); S.tipTimer = null; }
+        }
+        function hideTip() {
+            cancelTip();
+            if (S.tipEl) { S.tipEl.remove(); S.tipEl = null; }
+        }
+        function showTipFor(sp, spanEl) {
+            hideTip();
+            const lines = [
+                (LANES.find((l) => l.key === sp.cat) || { full: sp.cat }).full + ' · ' + sp.ev.title,
+                sp.ev.instanceName ? (sp.ev.instanceName + ' (' + sp.ev.instanceId + ')') : (sp.ev.instanceId || '(未指定实例)'),
+                sp.equal ? fmtDateTime(sp.start) : (fmtClock(sp.start) + ' → ' + fmtClock(sp.end)),
+                sp.equal ? '瞬时记录' : ('持续 ' + fmtDuration(sp.end - sp.start) + (sp.ongoing ? ' · 进行中' : ''))
+            ];
+            const tip = document.createElement('div');
+            tip.className = 'evt-tip';
+            tip.textContent = lines.join('\n');
+            document.body.appendChild(tip);
+            const r = spanEl.getBoundingClientRect();
+            const w = tip.offsetWidth;
+            const left = clamp(r.left, 6, Math.max(6, window.innerWidth - w - 6));
+            let top = r.bottom + 8;
+            if (top + tip.offsetHeight > window.innerHeight - 6) top = Math.max(6, r.top - tip.offsetHeight - 8);
+            tip.style.left = left + 'px';
+            tip.style.top = top + 'px';
+            S.tipEl = tip;
+        }
+        function scheduleTip(spanEl, clientX) {
+            cancelTip();
+            const id = Number(spanEl.dataset.id);
+            const sp = S.spans.find((s) => s.index === id);
+            if (!sp) return;
+            if (S.tipEl) { showTipFor(sp, spanEl); return; }
+            S.tipTimer = setTimeout(() => { S.tipTimer = null; showTipFor(sp, spanEl); }, TIP_DELAY_MS);
+        }
+
+        // ---------- 悬停 ----------
+        function clearHover() {
+            document.querySelectorAll('.evt-span[data-hovered="true"]').forEach((el) => el.removeAttribute('data-hovered'));
+            $('evtHoverLine').hidden = true;
+            hideTip();
+        }
+
+        function updateHover(event) {
+            const track = $('evtTrack');
+            const rect = track.getBoundingClientRect();
+            const frac = clamp01((event.clientX - rect.left) / Math.max(1, rect.width));
+            const spanEl = event.target instanceof Element ? event.target.closest('.evt-span') : null;
+
+            document.querySelectorAll('.evt-span[data-hovered="true"]').forEach((el) => {
+                if (el !== spanEl) el.removeAttribute('data-hovered');
+            });
+            if (spanEl) spanEl.setAttribute('data-hovered', 'true');
+
+            const line = $('evtHoverLine');
+            if (spanEl || S.drag) {
+                line.hidden = true;
+            } else {
+                line.hidden = false;
+                line.style.setProperty('--evt-hover-left', (frac * 100) + '%');
+            }
+
+            if (spanEl) scheduleTip(spanEl, event.clientX);
+            else hideTip();
+        }
+
+        // ---------- 缩放 / 平移 / 框选 ----------
+        function zoomAt(clientX, deltaY) {
+            const rect = $('evtTrack').getBoundingClientRect();
+            const anchor = clamp01((clientX - rect.left) / Math.max(1, rect.width));
+            const { fullStart, fullEnd, fullDuration, dStart, dDuration } = domain();
+            const minDuration = Math.min(MIN_ZOOM_MS, fullDuration);
+            const nextDuration = clamp(dDuration * Math.exp(deltaY * 0.0015), minDuration, fullDuration);
+            if (nextDuration >= fullDuration * 0.999) {
+                S.viewport = null;
+            } else {
+                const anchorTime = dStart + anchor * dDuration;
+                const start = clamp(anchorTime - anchor * nextDuration, fullStart, Math.max(fullStart, fullEnd - nextDuration));
+                S.viewport = { start: start, end: start + nextDuration };
+            }
+            renderTimeline();
+            renderTable();
+            updateBar();
+            paintSelection();
+        }
+
+        function onPointerDown(event) {
+            hideTip();
+            if (event.button === 2) {
+                const { dStart } = domain();
+                S.pan = { pointerId: event.pointerId, anchorX: event.clientX, anchorStart: dStart, moved: false, pannable: !!S.viewport };
+                event.currentTarget.dataset.panning = 'true';
+                capture(event.currentTarget, event.pointerId);
+                return;
+            }
+            if (event.button !== 0) return;
+
+            const { dStart, dDuration } = domain();
+            const frac = fractionAt(event);
+            const anchorTime = dStart + frac * dDuration;
+            S.drag = { pointerId: event.pointerId, anchorTime: anchorTime, anchorX: event.clientX, id: spanIdAt(event.target) };
+            capture(event.currentTarget, event.pointerId);
+            S.draft = { start: anchorTime, end: anchorTime };
+            paintSelection();
+        }
+
+        function onPointerMove(event) {
+            const track = $('evtTrack');
+
+            if (S.pan && S.pan.pointerId === event.pointerId) {
+                if (Math.abs(event.clientX - S.pan.anchorX) >= MIN_DRAG_PX) S.pan.moved = true;
+                if (S.pan.pannable) {
+                    const rect = track.getBoundingClientRect();
+                    const { fullStart, fullEnd, fullDuration, dDuration } = domain();
+                    const delta = (event.clientX - S.pan.anchorX) / Math.max(1, rect.width);
+                    const start = clamp(S.pan.anchorStart - delta * dDuration, fullStart, Math.max(fullStart, fullEnd - dDuration));
+                    S.viewport = { start: start, end: start + dDuration };
+                    renderTimeline();
+                    renderTable();
+                    updateBar();
+                    paintSelection();
+                }
+                return;
+            }
+
+            if (S.drag && S.drag.pointerId === event.pointerId) {
+                const frac = fractionAt(event);
+                const { dStart, dDuration } = domain();
+                S.draft = orderedRange(S.drag.anchorTime, dStart + frac * dDuration);
+                paintSelection();
+                updateHover(event);
+                return;
+            }
+
+            updateHover(event);
+        }
+
+        function onPointerEnd(event) {
+            const track = $('evtTrack');
+
+            if (S.pan && S.pan.pointerId === event.pointerId) {
+                const moved = S.pan.moved || Math.abs(event.clientX - S.pan.anchorX) >= MIN_DRAG_PX;
+                const pannable = S.pan.pannable;
+                S.pan = null;
+                track.dataset.panning = 'false';
+                if (!moved) {
+                    // 右键单击 → 清除框选
+                    if (S.range) { S.range = null; renderTimeline(); renderTable(); updateBar(); paintSelection(); }
+                } else if (!pannable) {
+                    // 未缩放时右键拖动无意义, 忽略
+                }
+                return;
+            }
+
+            if (!S.drag || S.drag.pointerId !== event.pointerId) return;
+            const drag = S.drag;
+            S.drag = null;
+            S.draft = null;
+
+            const frac = fractionAt(event);
+            const { fullStart, fullEnd, fullDuration, dStart, dDuration } = domain();
+            const pointTime = dStart + frac * dDuration;
+            const click = Math.abs(event.clientX - drag.anchorX) < MIN_DRAG_PX;
+
+            const clicked = click && drag.id !== null ? S.spans.find((sp) => sp.index === drag.id) : null;
+            if (clicked) {
+                S.range = null;
+                selectRecord(clicked.index, true);
+                return;
+            }
+
+            let sel = orderedRange(drag.anchorTime, pointTime);
+            const minimum = Math.min(dDuration, fullDuration / Math.max(1, S.spans.length));
+            if (sel.end - sel.start < minimum) {
+                sel = centeredRange(click ? sel.start : (sel.start + sel.end) / 2, minimum, fullStart, fullEnd);
+            }
+            S.range = sel;
+
+            if (click) {
+                // 单击空白处: 聚焦距离最近的时间条
+                const point = sel.start;
+                let best = null, bestDist = Infinity;
+                S.spans.forEach((sp) => {
+                    const dist = point < sp.start ? sp.start - point : (point > sp.end ? point - sp.end : 0);
+                    if (dist < bestDist) { bestDist = dist; best = sp; }
+                });
+                if (best) S.selectedId = best.index;
+            }
+
+            renderTimeline();
+            renderTable();
+            updateBar();
+            paintSelection();
+            if (click && S.selectedId !== null) focusRow(S.selectedId);
+        }
+
+        function onPointerCancel() {
+            S.drag = null;
+            S.pan = null;
+            S.draft = null;
+            $('evtTrack').dataset.panning = 'false';
+            clearHover();
+            paintSelection();
+        }
+
+        // ---------- 选择 / 定位 ----------
+        function selectRecord(id, toggleOpen) {
+            S.selectedId = id;
+            if (toggleOpen) {
+                if (S.open.has(id)) S.open.delete(id); else S.open.add(id);
+            }
+            renderTimeline();
+            renderTable();
+            updateBar();
+            paintSelection();
+            focusRow(id);
+        }
+
+        function focusRow(id) {
+            const el = document.querySelector('.evt-row[data-id="' + id + '"]');
+            if (!el) return;
+            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            const head = el.querySelector('.evt-row-head');
+            if (head) head.focus({ preventScroll: true });
+        }
+
+        // 选中项若不在当前视口内, 平移视口使其可见(与 DSH 时间图一致)
+        function ensureSpanVisible(id) {
+            if (!S.viewport) return;
+            const sp = S.spans.find((s) => s.index === id);
+            if (!sp) return;
+            const { fullStart, fullEnd, dStart, dDuration } = domain();
+            if (sp.end > dStart && sp.start < dStart + dDuration) return;
+            const desired = sp.end <= dStart ? sp.start : sp.end - dDuration;
+            const start = clamp(desired, fullStart, Math.max(fullStart, fullEnd - dDuration));
+            if (start === dStart) return;
+            S.viewport = { start: start, end: start + dDuration };
+            renderTimeline();
+            paintSelection();
+        }
+
+        // ---------- 对外操作 ----------
+        async function refresh() {
+            try {
+                const events = await fetchEvents();
+                if (events === null) return;
+                S.events = events;
+                S.error = '';
+            } catch (err) {
+                S.error = '无法获取事件: ' + (err && err.message ? err.message : err);
+            }
+            renderAll();
+        }
+
+        function toggleRow(id) {
+            S.selectedId = id;
+            if (S.open.has(id)) S.open.delete(id); else S.open.add(id);
+            renderTimeline();
+            renderTable();
+            updateBar();
+            paintSelection();
+            ensureSpanVisible(id);
+        }
+
+        function resetRange() {
+            S.range = null;
+            renderTimeline();
+            renderTable();
+            updateBar();
+            paintSelection();
+        }
+
+        async function clearAll() {
+            if (!window.RtPanel || !RtPanel.showConfirm) return;
+            if (!await RtPanel.showConfirm('清空事件板', '确定清空全部事件记录吗？此操作不可撤销。')) return;
+            try {
+                const r = await fetch('/api/events/clear', { method: 'POST' });
+                if (r.ok) {
+                    S.events = [];
+                    S.range = null;
+                    S.viewport = null;
+                    S.selectedId = null;
+                    S.open.clear();
+                    renderAll();
+                    if (window.RtPanel && RtPanel.showToast) RtPanel.showToast('事件板已清空', 'success');
+                }
+            } catch {
+                if (window.RtPanel && RtPanel.showToast) RtPanel.showToast('清空失败', 'error');
+            }
+        }
+
+        async function forceStop(instanceId, btn) {
+            if (!window.RtPanel || !RtPanel.showConfirm) return;
+            if (!await RtPanel.showConfirm('强制关闭实例',
+                '确定强制关闭实例 ' + instanceId + ' 吗？\n服务端未响应停止指令, 强制结束进程可能丢失未保存的世界数据!')) return;
+            btn.disabled = true;
+            btn.textContent = '关闭中...';
+            try {
+                const r = await fetch('/api/instances/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'force_stop', ids: [instanceId] })
+                });
+                const d = await r.json();
+                if (window.RtPanel && RtPanel.showToast) {
+                    RtPanel.showToast(d.success ? '强制关闭指令已发送' : (d.message || '强制关闭失败'), d.success ? 'success' : 'error');
+                }
+            } catch {
+                if (window.RtPanel && RtPanel.showToast) RtPanel.showToast('强制关闭失败', 'error');
+            }
+            refresh();
+        }
+
+        // ---------- 初始化 ----------
+        function setAutoRefresh(on) {
+            $('evtLive').dataset.on = on ? 'true' : 'false';
+            $('evtLiveToggle').checked = on;
+            if (S.timer) { clearInterval(S.timer); S.timer = null; }
+            if (on) S.timer = setInterval(refresh, REFRESH_MS);
+        }
+
+        function init() {
+            // 时间范围沿用设置页保存的值
+            try {
+                const saved = parseInt(localStorage.getItem('eventWindowMinutes') || '60', 10);
+                if (!isNaN(saved) && $('evtWindow').querySelector('option[value="' + saved + '"]')) {
+                    $('evtWindow').value = String(saved);
+                }
+            } catch (e) { /* 忽略 */ }
+
+            $('evtPlot').style.setProperty('--evt-lanes', LANES.length);
+            renderLaneLabels();
+
+            $('evtWindow').addEventListener('change', renderAll);
+            $('evtGroup').addEventListener('change', renderTable);
+            $('evtCat').addEventListener('change', () => { renderTimeline(); renderTable(); updateBar(); });
+            $('evtSearch').addEventListener('input', () => { renderTable(); updateBar(); });
+            $('evtLiveToggle').addEventListener('change', (e) => setAutoRefresh(e.target.checked));
+
+            const track = $('evtTrack');
+            track.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.deltaY); }, { passive: false });
+            track.addEventListener('pointerdown', onPointerDown);
+            track.addEventListener('pointermove', onPointerMove);
+            track.addEventListener('pointerup', onPointerEnd);
+            track.addEventListener('pointercancel', onPointerCancel);
+            track.addEventListener('pointerleave', () => { if (!S.drag && !S.pan) { clearHover(); } });
+            track.addEventListener('dblclick', (e) => { e.preventDefault(); resetRange(); });
+            track.addEventListener('contextmenu', (e) => e.preventDefault());
+            track.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && S.range) { e.preventDefault(); resetRange(); }
+            });
+
+            setAutoRefresh(true);
+            refresh();
+        }
+
+        return {
+            init: init,
+            refresh: refresh,
+            toggleRow: toggleRow,
+            resetRange: resetRange,
+            clearAll: clearAll,
+            forceStop: forceStop
+        };
+    })();
+
+    EventDetail.init();
+</script>
+}

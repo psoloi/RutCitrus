@@ -11,9 +11,9 @@
     <ApplicationIcon>rc.ico</ApplicationIcon>
     
     <!-- 版本号定义 - 程序版本号规则：主版本号.日期yyyymmdd.次版本号.编译号 -->
-    <VersionPrefix>1.20260926.2.6</VersionPrefix>
-	<AssemblyVersion>1.2026.09.26</AssemblyVersion>
-    <FileVersion>1.2026.09.26</FileVersion>
+    <VersionPrefix>1.20261030.6.6</VersionPrefix>
+	<AssemblyVersion>1.2026.10.30</AssemblyVersion>
+    <FileVersion>1.2026.10.30</FileVersion>
     <InformationalVersion>$(VersionPrefix)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     
@@ -27,8 +27,15 @@
     <Content Include="rc.ico" />
   </ItemGroup>
 
+  <!-- 单元测试需要访问 internal 的纯逻辑类(MCConsole/ErrorBlockParser/ConsoleGate/CommandRegistry 等) -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="RtCli.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <EmbeddedResource Include="Content\**\*" Exclude="Content\Data\**;Content\Logs\**;Content\Extension\**;Content\Scripts\**;Content\Server\**;Content\backup\**" />
+    <!-- 内置语言默认文案(原先内联在 I18n.cs 的 1077 条 JProperty 链) -->
+    <EmbeddedResource Include="Modules\Unit\i18n.default.json" />
   </ItemGroup>
 
   <ItemGroup>
@@ -47,16 +54,16 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Google.Protobuf" Version="3.35.1" />
-    <PackageReference Include="Hangfire.Core" Version="1.8.24" />
+    <PackageReference Include="Hangfire.Core" Version="1.8.25" />
     <PackageReference Include="Hangfire.InMemory" Version="1.0.0" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.8.3" />
-    <PackageReference Include="MySqlConnector" Version="2.6.1" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0" />
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="Polly" Version="8.7.0" />
+    <PackageReference Include="Polly" Version="8.8.0" />
     <PackageReference Include="Serilog" Version="4.4.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="Spectre.Console" Version="0.57.2" />
-    <PackageReference Include="System.Management" Version="10.0.10" />
+    <PackageReference Include="System.Management" Version="10.0.12" />
     <PackageReference Include="System.Private.Uri" Version="4.3.2" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>

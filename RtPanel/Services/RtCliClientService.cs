@@ -19,6 +19,9 @@ namespace RtPanel.Services
         private volatile bool _connecting = false;
         // 本次连接中 TLS 回调捕获的证书指纹(用于 TOFU 首次记录)
         private string? _pendingCertFingerprint;
+        // 首次连接时待用户确认的证书指纹(未确认不放行, 防止首连被中间人劫持)
+        private string? _pendingNewFingerprint;
+        private bool _certUntrusted;
         // 证书指纹与记录不一致时置位(用于在连接失败时给出明确原因)
         private bool _certMismatch;
 
@@ -32,16 +35,24 @@ namespace RtPanel.Services
         public string? LastError { get; private set; }
         /// <summary>上次连接失败是否因证书指纹不匹配(TOFU 校验拒绝)</summary>
         public bool CertMismatch => _certMismatch;
+        /// <summary>首次连接且证书未被信任(需用户确认指纹后重试)</summary>
+        public bool CertUntrusted => _certUntrusted;
+        /// <summary>待用户确认的首次连接证书指纹(SHA256)</summary>
+        public string? PendingFingerprint => _pendingNewFingerprint;
 
         public event Action<string>? OnLogReceived;
         public event Action? OnConnected;
         public event Action? OnDisconnected;
 
-        // 日志环形缓冲：保留最近 500 条日志供面板轮询
+        // 日志环形缓冲：保留最近 500 条日志供面板轮询(Queue 出队 O(1), 避免 List.RemoveAt(0) 整体搬移)
+        // 每条记录归属实例(空 = 全局消息, 所有实例控制台都显示)
         private const int LogBufferSize = 500;
         private readonly object _logBufferLock = new();
-        private readonly List<string> _logBuffer = new();
+        private readonly Queue<(int Seq, string InstanceId, string Line)> _logBuffer = new();
         private int _logSequence = 0;
+
+        // 断线自动重连(指数退避): 网络抖动/服务重启后面板日志流可自动恢复
+        private CancellationTokenSource? _reconnectCts;
 
         /// <summary>
         /// 构建携带认证密钥的 gRPC 请求头。
@@ -52,7 +63,7 @@ namespace RtPanel.Services
             return new Metadata { { "authorization", AuthKey } };
         }
 
-        public async Task<bool> ConnectAsync(string host, int port, string authKey)
+        public async Task<bool> ConnectAsync(string host, int port, string authKey, bool trustNewCertificate = false)
         {
             lock (_connectLock)
             {
@@ -72,6 +83,8 @@ namespace RtPanel.Services
                 Port = port;
                 AuthKey = authKey;
                 _certMismatch = false;
+                _certUntrusted = false;
+                _pendingNewFingerprint = null;
                 _pendingCertFingerprint = null;
 
                 var address = $"https://{host}:{port}";
@@ -90,9 +103,17 @@ namespace RtPanel.Services
                         var known = KnownHostsStore.Get(hostKey);
                         if (known == null)
                         {
-                            // 首次连接: 放行并暂存指纹，待认证通过后持久化
-                            _pendingCertFingerprint = fingerprint;
-                            return true;
+                            // 首次连接: 必须由用户在登录页显式确认指纹(trustNewCertificate)后才放行,
+                            // 否则直接拒绝, 避免首连被中间人接管(TOFU 首连确认)
+                            if (trustNewCertificate)
+                            {
+                                _pendingCertFingerprint = fingerprint;
+                                return true;
+                            }
+
+                            _pendingNewFingerprint = fingerprint;
+                            _certUntrusted = true;
+                            return false;
                         }
                         return string.Equals(known, fingerprint, StringComparison.OrdinalIgnoreCase);
                     }
@@ -135,9 +156,11 @@ namespace RtPanel.Services
                 var hostKey = $"{host}:{port}";
                 if (!_certMismatch && KnownHostsStore.Get(hostKey) != null && LooksLikeCertRejection(ex))
                     _certMismatch = true;
-                LastError = _certMismatch
-                    ? "服务器证书指纹与首次连接时不一致(可能是 RtCli 重新生成了证书)。若确认安全, 可点击\"重新信任服务器证书\"重连"
-                    : ex.GetBaseException().Message;
+                LastError = _certUntrusted
+                    ? $"首次连接该服务器, 请确认其证书指纹后重试: {_pendingNewFingerprint}"
+                    : _certMismatch
+                        ? "服务器证书指纹与首次连接时不一致(可能是 RtCli 重新生成了证书)。若确认安全, 可点击\"重新信任服务器证书\"重连"
+                        : ex.GetBaseException().Message;
                 IsConnected = false;
                 CleanupConnection();
                 DisposeChannel();
@@ -172,6 +195,7 @@ namespace RtPanel.Services
 
         public async Task DisconnectAsync()
         {
+            StopAutoReconnect();
             _manuallyDisconnected = true;
             IsConnected = false;
             AuthKey = null;
@@ -180,6 +204,57 @@ namespace RtPanel.Services
             CleanupConnection();
             OnDisconnected?.Invoke();
             DisposeChannel();
+        }
+
+        /// <summary>启动断线自动重连(指数退避 2s→30s), 仅用于非主动断开场景</summary>
+        private void StartAutoReconnect()
+        {
+            if (_manuallyDisconnected || _reconnectCts != null) return;
+
+            var host = Host;
+            var port = Port;
+            var key = AuthKey;
+            if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(key) || port <= 0) return;
+
+            var cts = new CancellationTokenSource();
+            _reconnectCts = cts;
+            var token = cts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                int delayMs = 2000;
+                try
+                {
+                    while (!token.IsCancellationRequested && !_manuallyDisconnected)
+                    {
+                        try { await Task.Delay(delayMs, token); }
+                        catch (OperationCanceledException) { break; }
+
+                        if (_manuallyDisconnected || token.IsCancellationRequested) break;
+
+                        bool ok = false;
+                        try { ok = await ConnectAsync(host, port, key); }
+                        catch { }
+                        if (ok) break;
+
+                        delayMs = Math.Min(delayMs * 2, 30000);
+                    }
+                }
+                finally
+                {
+                    if (ReferenceEquals(_reconnectCts, cts))
+                        _reconnectCts = null;
+                    cts.Dispose();
+                }
+            });
+        }
+
+        private void StopAutoReconnect()
+        {
+            var cts = _reconnectCts;
+            _reconnectCts = null;
+            if (cts == null) return;
+            try { cts.Cancel(); } catch { }
         }
 
         private void DisposeChannel()
@@ -207,6 +282,10 @@ namespace RtPanel.Services
             }
             DisposeChannel();
             OnDisconnected?.Invoke();
+
+            // 非主动断开(网络抖动/服务重启)时后台指数退避重连
+            if (!_manuallyDisconnected)
+                StartAutoReconnect();
         }
 
         private void CleanupConnection()
@@ -318,12 +397,13 @@ namespace RtPanel.Services
             catch { MarkDisconnected(); return null; }
         }
 
-        public async Task<ExecuteCommandResponse?> ExecuteCommandAsync(string command)
+        public async Task<ExecuteCommandResponse?> ExecuteCommandAsync(string command, string? instanceId = null)
         {
             if (_client == null || !IsConnected) return null;
             try
             {
-                return await _client.ExecuteCommandAsync(new ExecuteCommandRequest { Command = command },
+                return await _client.ExecuteCommandAsync(
+                    new ExecuteCommandRequest { Command = command, InstanceId = instanceId ?? "" },
                     headers: GetAuthHeaders(),
                     deadline: DateTime.UtcNow.AddSeconds(30));
             }
@@ -663,10 +743,218 @@ namespace RtPanel.Services
             catch { MarkDisconnected(); return null; }
         }
 
+        public async Task<BaseAnalyzeResponse?> BaseAnalyzeInstanceErrorsAsync(string id, string range)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.BaseAnalyzeInstanceErrorsAsync(new AiAnalyzeRequest { Id = id ?? "", Range = range ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(60)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
         public async Task<PlayerEventListResponse?> GetPlayerEventsAsync(string id, int limit = 0)
         {
             if (_client == null || !IsConnected) return null;
             try { return await _client.GetPlayerEventsAsync(new PlayerEventRequest { Id = id ?? "", Limit = limit }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== AI 技能管理 =====
+        public async Task<AiSkillListResponse?> GetAiSkillsAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetAiSkillsAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> SaveAiSkillAsync(string originalName, string name, string description, string behavior)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.SaveAiSkillAsync(new SaveAiSkillRequest
+                {
+                    OriginalName = originalName ?? "",
+                    Name = name ?? "",
+                    Description = description ?? "",
+                    Behavior = behavior ?? ""
+                }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> DeleteAiSkillAsync(string name)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.DeleteAiSkillAsync(new DeleteAiSkillRequest { Name = name ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<AiSkillListResponse?> ImportAiSkillsAsync(string content, bool overwrite)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.ImportAiSkillsAsync(new ImportAiSkillsRequest { Content = content ?? "", Overwrite = overwrite },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== AI 记忆管理 =====
+        public async Task<AiMemoryListResponse?> GetAiMemoriesAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetAiMemoriesAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> SaveAiMemorySettingsAsync(AiMemorySettings settings)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.SaveAiMemorySettingsAsync(new AiMemorySettingsRequest { Settings = settings },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> ClearAiMemoriesAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.ClearAiMemoriesAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== AI 自动化观测 =====
+        public async Task<AiAutomationStatusResponse?> GetAiAutomationStatusAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetAiAutomationStatusAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<AiToolAuditResponse?> GetAiToolAuditAsync(int limit)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.GetAiToolAuditAsync(new AiToolAuditRequest { Limit = limit },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<AiResponseListResponse?> GetAiResponsesAsync(int limit)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.GetAiResponsesAsync(new AiResponseListRequest { Limit = limit },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(20));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> DeleteAiResponseAsync(string timestamp, string taskKey)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.DeleteAiResponseAsync(
+                    new DeleteAiResponseRequest { Timestamp = timestamp ?? "", TaskKey = taskKey ?? "" },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== AI 自动化规则 =====
+        public async Task<AiRuleListResponse?> GetAiRulesAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetAiRulesAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> SaveAiRulesAsync(IEnumerable<string> rules)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new AiRuleListRequest();
+                req.Rules.AddRange(rules ?? Enumerable.Empty<string>());
+                return await _client.SaveAiRulesAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== AI 工作流(任务列表 + 运行参数) =====
+        public async Task<AiWorkflowResponse?> GetAiWorkflowAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetAiWorkflowAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(20)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> SaveAiTaskAsync(AiTaskConfig task, string originalKey)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new AiTaskRequest { Task = task, OriginalKey = originalKey ?? "" };
+                return await _client.SaveAiTaskAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(20));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> DeleteAiTaskAsync(string key)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.DeleteAiTaskAsync(new AiTaskKeyRequest { Key = key ?? "" },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(20));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> SaveAiRuntimeAsync(AiRuntimeConfig runtime)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.SaveAiRuntimeAsync(new AiRuntimeRequest { Runtime = runtime },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(20));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== 调度器任务(蓝图编辑器) =====
+        public async Task<SchedulerTaskListResponse?> GetSchedulerTasksAsync()
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetSchedulerTasksAsync(new Empty(), headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> SaveSchedulerTaskAsync(SchedulerTaskInfo task)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.SaveSchedulerTaskAsync(new SchedulerTaskRequest { Task = task },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(20));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> DeleteSchedulerTaskAsync(string key)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.DeleteSchedulerTaskAsync(new SchedulerTaskKeyRequest { Key = key },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(15));
+            }
             catch { MarkDisconnected(); return null; }
         }
 
@@ -693,6 +981,29 @@ namespace RtPanel.Services
             catch { MarkDisconnected(); return null; }
         }
 
+        /// <summary>
+        /// 向事件板上报/刷新一条事件(如文件上传进度)。
+        /// eventKey 非空且已存在时更新同一条(不产生新事件); 失败返回 false。
+        /// 属尽力而为的旁路上报, 失败不标记断连, 避免影响主流程。
+        /// </summary>
+        public async Task<bool> ReportBoardEventAsync(string eventKey, string eventType, string instanceId, string title, string detail)
+        {
+            if (_client == null || !IsConnected) return false;
+            try
+            {
+                var r = await _client.ReportBoardEventAsync(new ReportBoardEventRequest
+                {
+                    EventKey = eventKey ?? "",
+                    EventType = eventType ?? "",
+                    InstanceId = instanceId ?? "",
+                    Title = title ?? "",
+                    Detail = detail ?? ""
+                }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(5));
+                return r?.Success == true;
+            }
+            catch { return false; }
+        }
+
         public async Task<JarFileListResponse?> ListPluginsAsync(string id)
         {
             if (_client == null || !IsConnected) return null;
@@ -711,6 +1022,19 @@ namespace RtPanel.Services
         {
             if (_client == null || !IsConnected) return null;
             try { return await _client.ToggleJarFileAsync(new ManageJarFileRequest { Id = id ?? "", FileName = fileName, Type = type }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(10)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        /// <summary>插件更新(Modrinth): apply=false 只检查, apply=true 下载并替换。</summary>
+        public async Task<UpdatePluginResponse?> UpdatePluginAsync(string id, string fileName, bool apply)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                return await _client.UpdatePluginAsync(
+                    new UpdatePluginRequest { Id = id ?? "", FileName = fileName ?? "", Apply = apply },
+                    headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(90));
+            }
             catch { MarkDisconnected(); return null; }
         }
 
@@ -800,6 +1124,48 @@ namespace RtPanel.Services
             catch { MarkDisconnected(); return null; }
         }
 
+        // ===== 全服配置 (RM 管理协议 serversettings) =====
+
+        public async Task<ServerSettingsResponse?> GetServerSettingsAsync(string id)
+        {
+            if (_client == null || !IsConnected) return null;
+            try { return await _client.GetServerSettingsAsync(new InstanceDetailRequest { Id = id ?? "" }, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30)); }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        public async Task<SimpleResponse?> SetServerSettingsAsync(string id, List<ServerSettingValue> values)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new SetServerSettingsRequest { InstanceId = id ?? "" };
+                if (values != null) req.Values.AddRange(values);
+                return await _client.SetServerSettingsAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(30));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
+        // ===== RM 管理协议通用操作(游戏规则/名单/服务器控制/能力发现) =====
+
+        public async Task<ManageServerResponse?> ManageServerAsync(string id, string category, string action, string target, string value, bool flag)
+        {
+            if (_client == null || !IsConnected) return null;
+            try
+            {
+                var req = new ManageServerRequest
+                {
+                    InstanceId = id ?? "",
+                    Category = category ?? "",
+                    Action = action ?? "",
+                    Target = target ?? "",
+                    Value = value ?? "",
+                    Flag = flag
+                };
+                return await _client.ManageServerAsync(req, headers: GetAuthHeaders(), deadline: DateTime.UtcNow.AddSeconds(60));
+            }
+            catch { MarkDisconnected(); return null; }
+        }
+
         // ===== 面板向导 =====
 
         public async Task<ServerTypeListResponse?> GetServerTypesAsync()
@@ -852,7 +1218,7 @@ namespace RtPanel.Services
                             _ => "调试"
                         };
                         var line = $"[{log.Timestamp}] |{levelStr}| ({log.Source}) {log.Message}";
-                        BufferLog(line);
+                        BufferLog(line, log.InstanceId);
                         OnLogReceived?.Invoke(line);
                     }
                 }
@@ -867,37 +1233,39 @@ namespace RtPanel.Services
             });
         }
 
-        private void BufferLog(string line)
+        private void BufferLog(string line, string instanceId)
         {
             lock (_logBufferLock)
             {
                 _logSequence++;
-                _logBuffer.Add($"#{_logSequence} {line}");
-                if (_logBuffer.Count > LogBufferSize)
-                    _logBuffer.RemoveAt(0);
+                _logBuffer.Enqueue((_logSequence, instanceId ?? "", line));
+                while (_logBuffer.Count > LogBufferSize)
+                    _logBuffer.Dequeue();
             }
         }
 
         /// <summary>
         /// 获取自指定序号之后的日志。返回 (日志行列表, 最新序号)。
+        /// instanceId 为空时返回全部; 非空时只返回该实例日志 + 全局消息。
+        /// maxLines &gt; 0 时只返回末尾 maxLines 行(首屏/切换实例时避免全量重放)。
         /// </summary>
-        public (List<string> lines, int latestSeq) GetRecentLogs(int afterSeq = 0)
+        public (List<string> lines, int latestSeq) GetRecentLogs(int afterSeq = 0, string? instanceId = null,
+            int maxLines = 0)
         {
             lock (_logBufferLock)
             {
                 var lines = new List<string>();
-                foreach (var entry in _logBuffer)
+                foreach (var (seq, instId, line) in _logBuffer)
                 {
-                    // 解析序号
-                    var spaceIdx = entry.IndexOf(' ');
-                    if (spaceIdx > 1 && entry[0] == '#')
-                    {
-                        if (int.TryParse(entry[1..spaceIdx], out var seq) && seq > afterSeq)
-                        {
-                            lines.Add(entry[(spaceIdx + 1)..]);
-                        }
-                    }
+                    if (seq <= afterSeq) continue;
+                    if (!string.IsNullOrEmpty(instanceId) &&
+                        !string.IsNullOrEmpty(instId) &&
+                        !string.Equals(instId, instanceId, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    lines.Add(line);
                 }
+                if (maxLines > 0 && lines.Count > maxLines)
+                    lines.RemoveRange(0, lines.Count - maxLines);
                 return (lines, _logSequence);
             }
         }

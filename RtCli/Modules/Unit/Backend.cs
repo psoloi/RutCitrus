@@ -16,29 +16,58 @@ namespace RtCli.Modules.Unit
     /// <summary>
     /// 面板后端适配层：为 gRPC 面板提供命令分发、配置读写、日志广播与命令列表能力。
     /// </summary>
-    public static class Backend
+    public static partial class Backend
     {
+        /// <summary>
+        /// 面板命令锁。锁范围(#6)已收窄为"只保护会修改共享状态的命令":
+        ///   - 只读命令(rt status/.fx list/.ai list 等, 见 CommandRegistry 的 needsLock=false)完全不进锁;
+        ///   - 命令回显日志、事件板记录、面板广播都已在锁外(DispatchCommand 中);
+        ///   - 处理器自身的表格渲染仍随状态变更一起在锁内执行 —— 要彻底移出需让处理器返回
+        ///     "渲染描述"而非直接 AnsiConsole.Write, 属表示层改写, 未在本轮做。
+        /// </summary>
         private static readonly object _cmdLock = new();
         private static bool _initialized = false;
 
-        // 面板可用命令列表（用于前端自动补全）
+        // 面板可用命令列表（用于前端自动补全，同时作为命令描述映射来源）
         private static readonly (string Command, string Description)[] _knownCommands =
         {
             ("rt", "显示 RtCli 版本信息"),
             ("rt help", "查看命令列表"),
             ("rt status", "查看运行状态"),
             ("rt clients", "查看已连接面板"),
+            ("rt clients kick", "断开指定面板客户端"),
             ("rt extensions", "查看已加载扩展"),
             ("rt extensions load", "加载扩展"),
             ("rt extensions unload", "卸载扩展"),
             ("rt reload", "重新加载程序"),
+            ("rt start", "启动命令行交互"),
+            ("rt stop", "停止（关闭服务端并退出）"),
+            ("rt end", "结束程序"),
+            ("rt about", "关于 RtCli"),
+            (".cfg", "配置管理"),
             (".cfg reload", "热重载配置文件"),
             (".cfg show", "查看当前配置"),
+            (".cfg clear", "清空配置"),
+            (".lang", "切换语言"),
+            (".lang zh_CN", "切换到简体中文"),
+            (".lang en_US", "切换到 English"),
+            (".status", "查看当前状态"),
+            (".guide", "新手引导"),
+            (".server", "服务端管理"),
             (".server list", "查看服务端列表"),
             (".server change", "切换当前服务端"),
             (".server add", "添加服务端"),
             (".server del", "删除服务端"),
+            (".server get", "获取服务端信息"),
+            (".server connect", "连接服务端(Rcon)"),
+            (".server rcon connect", "远程连接RCON服务端(host/port/密码)"),
+            (".server rcon disconnect", "断开远程RCON连接"),
+            (".server rcon status", "查看远程RCON连接状态"),
             (".server status", "查看MC服务端状态"),
+            (".server start", "启动MC服务端"),
+            (".server stop", "停止MC服务端"),
+            (".server restart", "重启MC服务端"),
+            (".server detach", "断开MC服务端连接(Rcon)"),
             (".group", "群组服务器管理"),
             (".group add", "创建群组"),
             (".group del", "删除群组"),
@@ -46,9 +75,6 @@ namespace RtCli.Modules.Unit
             (".group set", "设置服务器到群组"),
             (".group unset", "解除服务器群组设置"),
             (".group build", "自动构建群组向导"),
-            (".server start", "启动MC服务端"),
-            (".server stop", "停止MC服务端"),
-            (".server detach", "断开MC服务端连接(Rcon)"),
             (".ai", "AI自动化管理"),
             (".ai start", "启动AI自动化管理"),
             (".ai stop", "停止AI自动化管理"),
@@ -63,13 +89,22 @@ namespace RtCli.Modules.Unit
             (".auto on", "启用指定计划任务"),
             (".auto off", "禁用指定计划任务"),
             (".fx", "错误分析/诊断/过滤工具"),
+            (".fx add", "添加/标记错误分析"),
             (".fx get", "获取并分析MC服务端错误日志"),
             (".fx list", "列出错误分析结果"),
             (".fx del", "删除所有错误分析结果"),
+            (".fx clientguide", "客户端指引"),
+            (".fx base", "基础诊断"),
+            (".fx ai", "AI 错误分析"),
+            (".fx filter", "过滤/管理插件与模组"),
             (".fx filter config", "备份/对照/还原配置文件"),
             (".fx filter plugin", "列出/启用/禁用插件"),
             (".fx filter mod", "列出/启用/禁用模组"),
             (".help", "查看功能命令帮助"),
+            ("ct", "客户端工具"),
+            ("ct list", "列出客户端"),
+            ("ct unpack", "解包"),
+            ("/", "发送原版 MC 命令(以 / 开头)"),
         };
 
         /// <summary>
@@ -81,16 +116,10 @@ namespace RtCli.Modules.Unit
             _initialized = true;
 
             // 将日志广播挂载到 Output，面板通过 StreamLogs 即可实时收到日志
-            Output.OnLogBroadcast = (timestamp, level, source, message) =>
+            // 投递仅入队(非阻塞)，日志线程不再等待任何网络写入
+            Output.OnLogBroadcast = (timestamp, level, source, message, instanceId) =>
             {
-                try
-                {
-                    Connector.BroadcastLogAsync(timestamp, level, source, message).GetAwaiter().GetResult();
-                }
-                catch
-                {
-                    // 广播失败不影响主流程
-                }
+                Connector.BroadcastLog(timestamp, level, source, message, instanceId);
             };
 
             // 启动玩家事件记录器(订阅 EventBus, 持久化到 panel_data.json)
@@ -109,526 +138,76 @@ namespace RtCli.Modules.Unit
         ///   - 表格命令 → AnsiConsole.Write(table) 控制台渲染 + BroadcastToPanel 纯文本广播
         ///   - 非标记的方括号一律用 [[ ]] 转义，用户内容用 Markup.Escape()
         /// </summary>
-        public static (bool Success, string Result) DispatchCommand(string command)
+        public static (bool Success, string Result) DispatchCommand(string command, string? instanceId = null)
         {
             if (string.IsNullOrWhiteSpace(command))
                 return (false, "命令不能为空");
 
-            lock (_cmdLock)
+            // 面板指定实例时, 本次命令产生的日志/事件/命令路由都归属该实例
+            using var instanceScope = Function.InstanceContext.Push(
+                string.IsNullOrWhiteSpace(instanceId) ? Function.InstanceContext.Current : instanceId);
+
+            var cmd = command.Trim();
+
+            (bool Success, string Result, string? PanelText) result;
+            try
             {
-                try
+                // [[面板]] — Spectre 中 [[ ]] 表示字面量方括号
+                Output.Log($"[[面板]] 执行命令: {Markup.Escape(command)}", 1, "Backend");
+
+                // 记录到事件板(标题为指令原文)
+                BoardEventRecorder.RecordPanelCommand(command);
+
+                EnsurePanelCommandsRegistered();
+
+                if (CommandRegistry.TryResolvePanelCommand(cmd, out var handler, out string arg, out bool needsLock))
                 {
-                    // [[面板]] — Spectre 中 [[ ]] 表示字面量方括号
-                    Output.Log($"[[面板]] 执行命令: {Markup.Escape(command)}", 1, "Backend");
-
-                    var cmd = command.Trim();
-
-                    // rt 系列命令
-                    if (cmd == "rt")
+                    // 锁只保护共享状态变更: 只读命令(rt status / .fx list 等)与长耗时命令不再排他,
+                    // 会修改配置/调度器/AI运行器状态的命令才进命令锁; 面板广播统一在锁外完成。
+                    if (needsLock)
                     {
-                        Output.Log($"RtCli版本：[cyan]{Markup.Escape(Program.RtCliVersion)}[/] {Program.RtCliInformation}", 1, "Backend");
-                        return (true, $"RtCli {Program.RtCliVersion}");
-                    }
-
-                    if (cmd == "rt help" || cmd == ".help")
-                    {
-                        var table = new Table().Border(TableBorder.Rounded).Title("[cyan]RtCli 命令列表[/]");
-                        table.AddColumn("命令").AddColumn("说明");
-                        table.AddRow("[grey]rt status[/]", "查看运行状态");
-                        table.AddRow("[grey]rt clients[/]", "查看已连接面板");
-                        table.AddRow("[grey]rt extensions[/]", "查看已加载扩展");
-                        table.AddRow("[grey]rt reload[/]", "重新加载程序");
-                        table.AddRow("[grey].cfg reload[/]", "热重载配置文件");
-                        table.AddRow("[grey].cfg show[/]", "查看当前配置");
-                        table.AddRow("[grey].server list[/]", "查看服务端列表");
-                        table.AddRow("[grey].server change X[/]", "切换当前服务端");
-                        table.AddRow("[grey].server status[/]", "查看MC服务端状态");
-                        table.AddRow("[grey].group[/]", "群组服务器管理");
-                        table.AddRow("[grey].auto[/]", "查看计划任务");
-                        table.AddRow("[grey]/<命令>[/]", "发送命令到MC服务端");
-                        AnsiConsole.Write(table);
-
-                        BroadcastToPanel(
-                            "=== RtCli 命令列表 ===\n" +
-                            "rt status        - 查看运行状态\n" +
-                            "rt clients       - 查看已连接面板\n" +
-                            "rt extensions    - 查看已加载扩展\n" +
-                            "rt reload        - 重新加载程序\n" +
-                            ".cfg reload      - 热重载配置文件\n" +
-                            ".cfg show        - 查看当前配置\n" +
-                            ".server list     - 查看服务端列表\n" +
-                            ".server change X - 切换当前服务端\n" +
-                            ".server status   - 查看MC服务端状态\n" +
-                            ".group            - 群组服务器管理(add/del/list/set/unset/build)\n" +
-                            ".auto            - 查看计划任务\n" +
-                            "/<命令>          - 发送命令到MC服务端");
-                        return (true, "命令列表已输出");
-                    }
-
-                    if (cmd == "rt status")
-                    {
-                        var table = new Table().Border(TableBorder.Rounded).Title("[cyan]RtCli 状态[/]");
-                        table.AddColumn("项目").AddColumn("状态");
-                        table.AddRow("管理端口", Connector.IsRunning ? "[green]运行中[/]" : "[red]未运行[/]");
-                        table.AddRow("已连接面板", Connector.ConnectedClientCount.ToString());
-                        table.AddRow("当前服务端", $"[cyan]{Markup.Escape(Config.App.CurrentServer)}[/] ({Markup.Escape(Config.CurrentServer.ServerName)})");
-                        table.AddRow("MC模式", $"[cyan]{Markup.Escape(Analyzer.CurrentMode)}[/]");
-                        if (Analyzer.NeedsRunServer)
-                            table.AddRow("MC服务端", Analyzer.IsRunModeActive ? "[green]运行中[/]" : "[red]未运行[/]");
-                        else
-                            table.AddRow("MC连接", Analyzer.IsAttached ? "[green]已连接[/]" : "[red]未连接[/]");
-                        table.AddRow("自动提示", Intelligence.IsTipsRunning ? "[green]运行中[/]" : "[grey]未运行[/]");
-                        AnsiConsole.Write(table);
-
-                        BroadcastToPanel(
-                            $"管理端口: {(Connector.IsRunning ? "运行中" : "未运行")} | " +
-                            $"已连接面板: {Connector.ConnectedClientCount} | " +
-                            $"当前服务端: {Config.App.CurrentServer} ({Config.CurrentServer.ServerName}) | " +
-                            $"MC模式: {Analyzer.CurrentMode} | " +
-                            $"MC服务端: {(Analyzer.NeedsRunServer ? (Analyzer.IsRunModeActive ? "运行中" : "未运行") : (Analyzer.IsAttached ? "已连接" : "未连接"))} | " +
-                            $"自动提示: {(Intelligence.IsTipsRunning ? "运行中" : "未运行")}");
-                        return (true, "状态已输出");
-                    }
-
-                    if (cmd == "rt clients")
-                    {
-                        if (Connector.ConnectedClientCount > 0)
+                        lock (_cmdLock)
                         {
-                            var table = new Table().Border(TableBorder.Rounded);
-                            table.AddColumn("序号").AddColumn("ID").AddColumn("IP").AddColumn("连接时间");
-                            int idx = 1;
-                            foreach (var kvp in Connector.ConnectedClients)
-                            {
-                                table.AddRow($"[cyan]{idx}[/]", Markup.Escape(kvp.Key), Markup.Escape(kvp.Value.IP), kvp.Value.ConnectTime.ToString("HH:mm:ss"));
-                                idx++;
-                            }
-                            AnsiConsole.Write(table);
-
-                            var sb = new StringBuilder();
-                            sb.Append("已连接面板: ");
-                            idx = 1;
-                            foreach (var kvp in Connector.ConnectedClients)
-                            {
-                                if (idx > 1) sb.Append(", ");
-                                sb.Append($"{kvp.Key}({kvp.Value.IP})");
-                                idx++;
-                            }
-                            BroadcastToPanel(sb.ToString());
-                        }
-                        else
-                        {
-                            Output.Log("当前没有已连接的管理面板", 1, "Backend");
-                        }
-                        return (true, "面板列表已输出");
-                    }
-
-                    if (cmd == "rt extensions")
-                    {
-                        var json = RtExtensionManager.GetExtensionsJson();
-                        var extensions = Newtonsoft.Json.JsonConvert.DeserializeObject<List<ExtensionData>>(json);
-                        if (extensions != null && extensions.Count > 0)
-                        {
-                            var table = new Table().Border(TableBorder.Rounded);
-                            table.AddColumn("Key").AddColumn("名称").AddColumn("版本").AddColumn("描述").AddColumn("加载时间");
-                            foreach (var ext in extensions)
-                            {
-                                table.AddRow(
-                                    Markup.Escape(ext.Key ?? ""),
-                                    Markup.Escape(ext.Name ?? ""),
-                                    Markup.Escape(ext.Version ?? ""),
-                                    Markup.Escape(ext.Description ?? ""),
-                                    Markup.Escape(ext.LoadTime ?? ""));
-                            }
-                            AnsiConsole.Write(table);
-
-                            var sb = new StringBuilder();
-                            sb.AppendLine("已加载扩展:");
-                            foreach (var ext in extensions)
-                            {
-                                sb.AppendLine($"  {ext.Key} - {ext.Name} v{ext.Version}");
-                            }
-                            BroadcastToPanel(sb.ToString());
-                        }
-                        else
-                        {
-                            Output.Log("没有已加载的扩展", 1, "Backend");
-                        }
-                        return (true, "扩展列表已输出");
-                    }
-
-                    if (cmd == "rt reload")
-                    {
-                        Output.Log("[yellow]重新加载中...[/]", 1, "Backend");
-                        Reload.Restart();
-                        return (true, "正在重新加载...");
-                    }
-
-                    // .cfg 系列命令
-                    if (cmd == ".cfg reload")
-                    {
-                        Config.ReloadAll();
-                        return (true, "配置文件已热重载");
-                    }
-
-                    if (cmd == ".cfg show")
-                    {
-                        var content = GetConfigContent();
-                        if (content.Success)
-                        {
-                            // 配置文件内容可能包含 [ ] 等 YAML 语法，必须转义
-                            Output.Log(Markup.Escape(content.Content), 1, "Backend");
-                            return (true, "配置内容已输出到日志");
-                        }
-                        return (false, content.Message);
-                    }
-
-                    // .server 系列命令
-                    if (cmd == ".server list")
-                    {
-                        var table = new Table().Border(TableBorder.Rounded);
-                        table.AddColumn("标识").AddColumn("名称").AddColumn("模式");
-                        foreach (var kvp in Config.App.ServerList)
-                        {
-                            var marker = kvp.Key == Config.App.CurrentServer ? "[green] *[/]" : "";
-                            table.AddRow(Markup.Escape(kvp.Key) + marker, Markup.Escape(kvp.Value.ServerName), Markup.Escape(kvp.Value.AnalyzerMode));
-                        }
-                        AnsiConsole.Write(table);
-
-                        var sb = new StringBuilder();
-                        foreach (var kvp in Config.App.ServerList)
-                        {
-                            var marker = kvp.Key == Config.App.CurrentServer ? " *" : "";
-                            sb.AppendLine($"  {kvp.Key}{marker} - {kvp.Value.ServerName} ({kvp.Value.AnalyzerMode})");
-                        }
-                        BroadcastToPanel(sb.ToString());
-                        return (true, "服务端列表已输出");
-                    }
-
-                    if (cmd.StartsWith(".server change "))
-                    {
-                        var identifier = cmd[".server change ".Length..].Trim();
-                        if (Config.SwitchServer(identifier))
-                        {
-                            Config.SaveCurrentConfig();
-                            Output.Log($"已切换到服务端: [cyan]{Markup.Escape(identifier)}[/]", 1, "Backend");
-                            return (true, $"已切换到服务端: {identifier}");
-                        }
-                        return (false, $"服务端标识不存在: {identifier}");
-                    }
-
-                    if (cmd == ".server status")
-                    {
-                        if (Analyzer.NeedsRunServer)
-                        {
-                            var running = Analyzer.IsRunModeActive;
-                            Output.Log(running ? "服务端[green]运行中[/]。" : "服务端[red]未运行[/]。", 1, "Backend");
-                            return (true, running ? "服务端运行中。" : "服务端未运行。");
-                        }
-                        else
-                        {
-                            var attached = Analyzer.IsAttached;
-                            Output.Log(attached ? "[green]已连接[/]到 Minecraft 服务端。" : "[red]未连接[/]到 Minecraft 服务端。", 1, "Backend");
-                            return (true, attached ? "已连接到 Minecraft 服务端。" : "未连接到 Minecraft 服务端。");
+                            result = handler!(arg);
                         }
                     }
-
-                    // .server start/stop/detach - MC服务端生命周期
-                    if (cmd == ".server start")
+                    else
                     {
-                        if (Analyzer.NeedsRunServer)
-                        {
-                            Analyzer.StartServer();
-                            return (true, "MC服务端启动命令已发送");
-                        }
-                        return (false, "Rcon模式下不支持 .server start，请使用 .server get + .server connect 连接");
+                        result = handler!(arg);
                     }
-
-                    if (cmd == ".server stop")
-                    {
-                        if (Analyzer.NeedsRunServer)
-                        {
-                            Analyzer.StopServer();
-                            return (true, "MC服务端停止命令已发送");
-                        }
-                        return (false, "Rcon模式下不支持 .server stop");
-                    }
-
-                    if (cmd == ".server detach")
-                    {
-                        if (!Analyzer.NeedsRunServer)
-                        {
-                            Analyzer.Detach();
-                            return (true, "已断开与MC服务端的连接");
-                        }
-                        return (false, "当前模式下不支持 .server detach，请使用 .server stop 停止服务端");
-                    }
-
-                    // .ai 系列命令 - AI自动化管理
-                    if (cmd == ".ai")
-                    {
-                        const string msg = ".ai 命令: start/stop/list/reload/run <任务名>/clear [任务名|all]";
-                        Output.Log(msg, 1, "Backend");
-                        return (true, msg);
-                    }
-
-                    if (cmd == ".ai start")
-                    {
-                        Intelligence.AiAutoRunner.Start();
-                        bool running = Intelligence.AiAutoRunner.IsRunning;
-                        return (running, running ? "AI自动化管理已启动" : "AI自动化管理启动失败，请查看日志");
-                    }
-
-                    if (cmd == ".ai stop")
-                    {
-                        Intelligence.AiAutoRunner.Stop();
-                        return (true, "AI自动化管理已停止");
-                    }
-
-                    if (cmd == ".ai list")
-                    {
-                        Intelligence.AiAutoRunner.ListTasks();
-                        var sb = new StringBuilder();
-                        sb.AppendLine($"AI自动化管理: {(Intelligence.AiAutoRunner.IsRunning ? "运行中" : "已停止")}");
-                        var aiConfig = ContentManager.Ai?.ServerAutoAi;
-                        if (aiConfig?.Tasks != null && aiConfig.Tasks.Count > 0)
-                        {
-                            foreach (var kv in aiConfig.Tasks)
-                            {
-                                string st = kv.Value.Enabled ? "启用" : "禁用";
-                                int cnt = Intelligence.AiAutoRunner.RunCount.TryGetValue(kv.Key, out var c) ? c : 0;
-                                string last = Intelligence.AiAutoRunner.LastRunTime.TryGetValue(kv.Key, out var t) ? t.ToString("MM-dd HH:mm") : "-";
-                                sb.AppendLine($"  {kv.Key} - {kv.Value.Name} [{st}] 触发:{kv.Value.Trigger} 间隔:{kv.Value.Interval} 已执行:{cnt} 最后:{last}");
-                            }
-                        }
-                        else
-                        {
-                            sb.AppendLine("未配置任何AI任务");
-                        }
-                        BroadcastToPanel(sb.ToString());
-                        return (true, "AI任务列表已输出");
-                    }
-
-                    if (cmd == ".ai reload")
-                    {
-                        Intelligence.AiAutoRunner.Reload();
-                        return (true, "AI自动化管理已重载");
-                    }
-
-                    if (cmd.StartsWith(".ai run "))
-                    {
-                        var taskName = cmd[".ai run ".Length..].Trim();
-                        if (string.IsNullOrWhiteSpace(taskName))
-                            return (false, "用法: .ai run <任务名>");
-                        bool ok = Intelligence.AiAutoRunner.TriggerTaskAsync(taskName).GetAwaiter().GetResult();
-                        return (ok, ok ? $"已手动触发任务: {taskName}" : $"触发任务失败: {taskName}（任务不存在或已禁用）");
-                    }
-
-                    if (cmd == ".ai run")
-                    {
-                        return (true, "用法: .ai run <任务名>");
-                    }
-
-                    if (cmd.StartsWith(".ai clear "))
-                    {
-                        var taskName = cmd[".ai clear ".Length..].Trim();
-                        if (string.IsNullOrWhiteSpace(taskName) || taskName.Equals("all", StringComparison.OrdinalIgnoreCase))
-                            Intelligence.AiAutoRunner.ClearAllContextCache();
-                        else
-                            Intelligence.AiAutoRunner.ClearContextCache(taskName);
-                        return (true, $"已清除任务上下文缓存: {taskName}");
-                    }
-
-                    if (cmd == ".ai clear")
-                    {
-                        Intelligence.AiAutoRunner.ClearAllContextCache();
-                        return (true, "已清除所有AI任务上下文缓存");
-                    }
-
-                    // .auto 系列命令 - 计划任务调度器
-                    if (cmd == ".auto")
-                    {
-                        const string msg = ".auto 命令: on/off <任务名>/list/start/stop";
-                        Output.Log(msg, 1, "Backend");
-                        return (true, msg);
-                    }
-
-                    if (cmd == ".auto start")
-                    {
-                        Scheduler.Start();
-                        return (Scheduler.IsRunning, Scheduler.IsRunning ? "调度器已启动" : "调度器启动失败");
-                    }
-
-                    if (cmd == ".auto stop")
-                    {
-                        Scheduler.Stop();
-                        return (true, "调度器已停止");
-                    }
-
-                    if (cmd == ".auto list")
-                    {
-                        Scheduler.ListTasks();
-                        var sb = new StringBuilder();
-                        sb.AppendLine($"调度器: {(Scheduler.IsRunning ? "运行中" : "已停止")}");
-                        if (Scheduler.Settings.Tasks.Count > 0)
-                        {
-                            foreach (var kvp in Scheduler.Settings.Tasks)
-                            {
-                                string status = kvp.Value.Enabled ? "启用" : "禁用";
-                                if (kvp.Value.ServerKeys.Count > 0 && !kvp.Value.ServerKeys.Contains(Config.App.CurrentServer))
-                                    status = "不适用";
-                                if (!string.IsNullOrEmpty(kvp.Value.Rules.ExpireAt) &&
-                                    DateTime.TryParse(kvp.Value.Rules.ExpireAt, out var exp) && DateTime.Now > exp)
-                                    status = "已过期";
-                                string queue = kvp.Value.Rules.Queue ?? "Fast";
-                                sb.AppendLine($"  {kvp.Key} [{status}] 触发:{kvp.Value.Trigger} 执行:{kvp.Value.Execute} 队列:{queue}");
-                            }
-                        }
-                        else
-                        {
-                            sb.AppendLine("未配置任何计划任务");
-                        }
-                        BroadcastToPanel(sb.ToString());
-                        return (true, "计划任务列表已输出");
-                    }
-
-                    if (cmd.StartsWith(".auto on "))
-                    {
-                        var taskName = cmd[".auto on ".Length..].Trim();
-                        Scheduler.SetTaskEnabled(taskName, true);
-                        return (true, $"已启用任务: {taskName}");
-                    }
-
-                    if (cmd == ".auto on")
-                    {
-                        return (true, "用法: .auto on <任务名>");
-                    }
-
-                    if (cmd.StartsWith(".auto off "))
-                    {
-                        var taskName = cmd[".auto off ".Length..].Trim();
-                        Scheduler.SetTaskEnabled(taskName, false);
-                        return (true, $"已禁用任务: {taskName}");
-                    }
-
-                    if (cmd == ".auto off")
-                    {
-                        return (true, "用法: .auto off <任务名>");
-                    }
-
-                    // .fx 系列命令 - 错误分析/客户端诊断/过滤工具
-                    if (cmd == ".fx")
-                    {
-                        const string msg = ".fx 命令: add/list/del/filter config/filter plugin/clientguide/base/ai";
-                        Output.Log(msg, 1, "Backend");
-                        return (true, msg);
-                    }
-
-                    if (cmd == ".fx add")
-                    {
-                        const string msg = "用法: .fx add <日志文件路径> (添加外部日志并自动识别错误)";
-                        Output.Log(msg, 1, "Backend");
-                        return (true, msg);
-                    }
-
-                    if (cmd.StartsWith(".fx add "))
-                    {
-                        var path = cmd[".fx add ".Length..].Trim().Trim('"');
-                        var (ok, message) = Analyzer.AddExternalLog(path);
-                        return (ok, message);
-                    }
-
-                    // 兼容旧命令: .fx get 已改为 .fx add(服务器日志自动识别,无需手动获取)
-                    if (cmd == ".fx get" || cmd.StartsWith(".fx get "))
-                    {
-                        const string msg = ".fx get 已移除: 服务器日志已自动识别保存, 使用 .fx list 查看结果, 外部日志请用 .fx add <路径>";
-                        Output.Log(msg, 1, "Backend");
-                        return (true, msg);
-                    }
-
-                    if (cmd == ".fx list")
-                    {
-                        Analyzer.ListErrors(null);
-                        var errors = ContentManager.LoadErrorLog();
-                        var sb = new StringBuilder();
-                        sb.AppendLine($"共 {errors.Count} 条错误分析结果");
-                        foreach (var kv in errors.OrderBy(kv => kv.Key))
-                        {
-                            string summary = (kv.Value.Content.Split('\n').FirstOrDefault() ?? "");
-                            if (summary.Length > 80) summary = summary.Substring(0, 77) + "...";
-                            sb.AppendLine($"  [{kv.Key}] ({kv.Value.SourceDisplay}) {summary}");
-                        }
-                        BroadcastToPanel(sb.ToString());
-                        return (true, "错误分析结果列表已输出");
-                    }
-
-                    if (cmd.StartsWith(".fx list "))
-                    {
-                        var arg = cmd[".fx list ".Length..].Trim();
-                        if (int.TryParse(arg, out int idx))
-                        {
-                            Analyzer.ListErrors(idx);
-                            return (true, $"已查看第 {idx} 条分析结果");
-                        }
-                        return (false, $"无效的参数: {arg}，用法: .fx list <n>");
-                    }
-
-                    if (cmd == ".fx del")
-                    {
-                        Analyzer.DeleteErrors();
-                        return (true, "已删除所有错误分析结果");
-                    }
-
-                    if (cmd == ".fx filter")
-                    {
-                        Analyzer.FilterInfo();
-                        return (true, "过滤工具说明已输出");
-                    }
-
-                    if (cmd == ".fx filter config")
-                    {
-                        Analyzer.FilterConfig(null);
-                        return (true, "配置文件备份/对照已执行，详情见日志");
-                    }
-
-                    if (cmd == ".fx filter plugin")
-                    {
-                        Analyzer.FilterPlugin(null);
-                        return (true, "插件列表已输出，详情见日志");
-                    }
-
-                    if (cmd == ".fx filter mod")
-                    {
-                        Analyzer.FilterMod(null);
-                        return (true, "模组列表已输出，详情见日志");
-                    }
-
+                }
+                else if (cmd.StartsWith("/"))
+                {
                     // MC 命令转发
-                    if (cmd.StartsWith("/"))
-                    {
-                        var mcCommand = cmd[1..];
-                        if (!string.IsNullOrWhiteSpace(mcCommand))
-                        {
-                            Analyzer.SendCommand(mcCommand);
-                            return (true, $"已发送到MC服务端: /{mcCommand}");
-                        }
+                    var mcCommand = cmd[1..];
+                    if (string.IsNullOrWhiteSpace(mcCommand))
                         return (false, "MC命令不能为空");
-                    }
 
+                    Analyzer.SendCommand(mcCommand, instanceId);
+                    result = (true, $"已发送到MC服务端: /{mcCommand}", null);
+                }
+                else if (CommandRegistry.TryExecuteWithArgs(cmd))
+                {
                     // 扩展注册的命令(支持参数前缀匹配)
-                    if (CommandRegistry.TryExecuteWithArgs(cmd))
-                    {
-                        return (true, $"扩展命令已执行: {cmd}");
-                    }
-
+                    result = (true, $"扩展命令已执行: {cmd}", null);
+                }
+                else
+                {
                     Output.Log($"未知命令: [yellow]{Markup.Escape(cmd)}[/]，输入 rt help 查看命令列表", 2, "Backend");
                     return (false, $"未知命令: {cmd}");
                 }
-                catch (Exception ex)
-                {
-                    Output.Log($"命令执行异常: [red]{Markup.Escape(ex.Message)}[/]", 3, "Backend");
-                    return (false, $"命令执行异常: {ex.Message}");
-                }
             }
+            catch (Exception ex)
+            {
+                Output.Log($"命令执行异常: [red]{Markup.Escape(ex.Message)}[/]", 3, "Backend");
+                return (false, $"命令执行异常: {ex.Message}");
+            }
+
+            // 锁外广播: 不再让所有面板命令因广播而串行
+            if (result.PanelText != null)
+                BroadcastToPanel(result.PanelText);
+
+            return (result.Success, result.Result);
         }
 
         /// <summary>
@@ -660,20 +239,17 @@ namespace RtCli.Modules.Unit
 
         private static (bool Success, string Result) SendMcCommandSingle(string serverKey, string mcCommand)
         {
-            // 当前服务端：使用已有的Analyzer连接(stdin / RCON / Management)
-            if (string.IsNullOrEmpty(serverKey) || serverKey == Config.App.CurrentServer)
+            // 目标实例已由 RtCli 托管(子进程 stdin / 常驻 RCON / 远程 RCON)：按其模式直接路由
+            var target = string.IsNullOrEmpty(serverKey) ? Config.App.CurrentServer : serverKey;
+            if (Analyzer.IsRunning(target))
             {
-                if (Analyzer.IsAttached || Analyzer.IsRunModeActive)
-                {
-                    Analyzer.SendCommand(mcCommand);
-                    return (true, $"已通过当前连接发送: /{mcCommand}");
-                }
-                return (false, "当前服务端未连接，请先在RtCli中连接服务端");
+                Analyzer.SendCommand(mcCommand, target);
+                return (true, $"已通过 {(Analyzer.UsesRconCommandsOf(target) ? "RCON" : "stdin")} 发送到 [{target}]: /{mcCommand}");
             }
 
-            // 其他服务端：通过临时RCON连接发送
-            if (!Config.App.ServerList.TryGetValue(serverKey, out var server))
-                return (false, $"未找到服务端标识: {serverKey}");
+            // 未托管：通过临时RCON连接发送
+            if (!Config.App.ServerList.TryGetValue(target, out var server))
+                return (false, $"未找到服务端标识: {target}");
 
             try
             {
@@ -700,7 +276,7 @@ namespace RtCli.Modules.Unit
             try
             {
                 var timestamp = DateTime.Now.ToString("HH:mm:ss");
-                Connector.BroadcastLogAsync(timestamp, level, "Backend", message).GetAwaiter().GetResult();
+                Connector.BroadcastLog(timestamp, level, "Backend", message, Function.InstanceContext.Current);
             }
             catch
             {
@@ -799,14 +375,563 @@ namespace RtCli.Modules.Unit
             }
         }
 
+        // ===== AI 技能管理(读写 ai_settings.yml 的 ServerAutoAi.skills) =====
+
+        /// <summary>
+        /// 获取 AI 技能列表。
+        /// </summary>
+        public static List<AiSkill> GetAiSkills()
+        {
+            ContentManager.Initialize();
+            return (ContentManager.Ai.ServerAutoAi.Skills ?? new List<AiSkill>()).ToList();
+        }
+
+        /// <summary>
+        /// 新增或编辑一个 AI 技能并写回 ai_settings.yml。
+        /// originalName 为空表示新增; 非空表示编辑(用于在改名时定位原技能)。
+        /// </summary>
+        public static (bool Success, string Message) SaveAiSkill(string originalName, string name, string description, string behavior)
+        {
+            ContentManager.Initialize();
+            name = (name ?? "").Trim();
+            if (string.IsNullOrEmpty(name))
+                return (false, "技能名称不能为空");
+
+            var skills = ContentManager.Ai.ServerAutoAi.Skills;
+            if (skills == null)
+                skills = ContentManager.Ai.ServerAutoAi.Skills = new List<AiSkill>();
+
+            AiSkill? target = null;
+            if (!string.IsNullOrWhiteSpace(originalName))
+                target = skills.FirstOrDefault(s => string.Equals(s.Name, originalName.Trim(), StringComparison.Ordinal));
+
+            if (skills.Any(s => !ReferenceEquals(s, target) && string.Equals(s.Name, name, StringComparison.Ordinal)))
+                return (false, $"已存在同名技能: {name}");
+
+            if (target == null)
+            {
+                target = new AiSkill();
+                skills.Add(target);
+            }
+            target.Name = name;
+            target.Description = description ?? "";
+            target.Behavior = behavior ?? "";
+
+            return PersistAiSettings();
+        }
+
+        /// <summary>
+        /// 删除指定 AI 技能。
+        /// </summary>
+        public static (bool Success, string Message) DeleteAiSkill(string name)
+        {
+            ContentManager.Initialize();
+            name = (name ?? "").Trim();
+            if (string.IsNullOrEmpty(name))
+                return (false, "技能名称不能为空");
+
+            var skills = ContentManager.Ai.ServerAutoAi.Skills;
+            if (skills == null || skills.RemoveAll(s => string.Equals(s.Name, name, StringComparison.Ordinal)) == 0)
+                return (false, $"技能不存在: {name}");
+
+            return PersistAiSettings();
+        }
+
+        /// <summary>
+        /// 导入技能(JSON/YAML 文本)。overwrite=true 时同名覆盖, 否则跳过同名。
+        /// </summary>
+        public static (bool Success, string Message, List<AiSkill> Skills) ImportAiSkills(string content, bool overwrite)
+        {
+            ContentManager.Initialize();
+            var (ok, message, parsed) = ParseSkillsContent(content);
+            if (!ok)
+                return (false, message, GetAiSkills());
+
+            var skills = ContentManager.Ai.ServerAutoAi.Skills;
+            if (skills == null)
+                skills = ContentManager.Ai.ServerAutoAi.Skills = new List<AiSkill>();
+
+            int added = 0, updated = 0, skipped = 0;
+            foreach (var skill in parsed)
+            {
+                var existing = skills.FirstOrDefault(s => string.Equals(s.Name, skill.Name, StringComparison.Ordinal));
+                if (existing == null)
+                {
+                    skills.Add(skill);
+                    added++;
+                }
+                else if (overwrite)
+                {
+                    existing.Description = skill.Description;
+                    existing.Behavior = skill.Behavior;
+                    updated++;
+                }
+                else
+                {
+                    skipped++;
+                }
+            }
+
+            if (added == 0 && updated == 0)
+                return (true, $"未导入任何技能(跳过同名 {skipped} 个)", GetAiSkills());
+
+            var result = PersistAiSettings();
+            if (!result.Success)
+                return (false, result.Message, GetAiSkills());
+            return (true, $"导入完成: 新增 {added} 个, 覆盖 {updated} 个, 跳过 {skipped} 个", GetAiSkills());
+        }
+
+        // ===== AI 工作流(读写 ai_settings.yml 中 ServerAutoAi 的任务列表与运行参数) =====
+
+        /// <summary>合法触发条件示例(供编辑器下拉; 引擎支持 and/or 组合、{rt.变量}、event: 事件)</summary>
+        public static readonly string[] AiTriggerTemplates =
+        {
+            "always", "server_running", "server_stopped", "crash_detected",
+            "{rt.tps} < 18", "{rt.cpu} > 85", "{rt.memory} > 80", "{rt.players} == 0", "{rt.idle_minutes} > 360",
+            "event: PlayerJoinEvent", "event: PlayerLeaveEvent", "event: ServerStartEvent", "event: ServerCrashEvent",
+            "event: PlayerJoinEvent and {rt.player_name} == \"Steve\"",
+            "{rt.tps} < 18 or {rt.cpu} > 85"
+        };
+
+        /// <summary>
+        /// 校验 AI 任务触发条件是否合法(与 IntelligenceAiRunner.EvaluateTriggerExpression 的语法一致):
+        /// 条件 (and|or 条件)*; 单个条件为关键字 / event:&lt;事件名&gt; / {rt.变量}|裸变量名 运算符 值。
+        /// </summary>
+        private static bool IsValidAiTrigger(string trigger)
+        {
+            var raw = (trigger ?? "").Trim();
+            if (raw.Length == 0) return false;
+
+            var leaves = new List<string>();
+            foreach (var orPart in Regex.Split(raw, @"\s+or\s+", RegexOptions.IgnoreCase))
+                foreach (var andPart in Regex.Split(orPart, @"\s+and\s+", RegexOptions.IgnoreCase))
+                {
+                    var leaf = andPart.Trim();
+                    if (leaf.Length > 0) leaves.Add(leaf);
+                }
+            if (leaves.Count == 0) return false;
+
+            bool hasCrash = false;
+            foreach (var leaf in leaves)
+            {
+                if (!IsValidAiTriggerLeaf(leaf, out bool isCrash)) return false;
+                hasCrash |= isCrash;
+            }
+            // crash_detected 依赖 Analyzer 事件推送, 组合其它条件后事件推送不会求值整个表达式, 故禁止组合
+            if (hasCrash && leaves.Count > 1) return false;
+            return true;
+        }
+
+        private static bool IsValidAiTriggerLeaf(string leaf, out bool isCrash)
+        {
+            isCrash = false;
+            var lower = leaf.ToLowerInvariant();
+
+            if (lower is "always" or "true" or "1" or "server_running" or "server_stopped") return true;
+            if (lower == "crash_detected") { isCrash = true; return true; }
+
+            // 事件条件: event: <事件名>
+            if (lower.StartsWith("event:"))
+            {
+                var name = leaf.Substring(6).Trim().Trim('"', '\'');
+                return EventNames.IsValidEventName(name);
+            }
+
+            // 比较表达式: {rt.变量} 或 裸变量名 运算符 值
+            var m = Regex.Match(leaf,
+                @"^(?:\{rt\.(?<v1>[A-Za-z_]\w*)\}|(?<v2>[A-Za-z_]\w*))\s*(?<op>==|!=|>=|<=|>|<|=|contains|startsWith|endsWith)\s*.+$",
+                RegexOptions.IgnoreCase);
+            if (!m.Success) return false;
+
+            // {rt.变量} 中的变量名可为运行时变量或事件参数, 不做白名单; 裸变量名仅限已知运行时变量
+            if (m.Groups["v1"].Success) return true;
+            return IsKnownTriggerVariable(m.Groups["v2"].Value);
+        }
+
+        private static bool IsKnownTriggerVariable(string name)
+        {
+            switch (name.ToLowerInvariant())
+            {
+                case "tps":
+                case "cpu":
+                case "memory":
+                case "players":
+                case "player_count":
+                case "idle_minutes":
+                case "uptime_minutes":
+                case "server_running":
+                case "server_key":
+                case "server_name":
+                case "mode":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// 读取 AI 工作流配置: 运行参数 + 任务列表。密钥只回传掩码, 不回传明文。
+        /// </summary>
+        public static (bool Success, string Message, AiRuntimeView Runtime, List<KeyValuePair<string, AiTask>> Tasks,
+            List<string> AvailableTools, string FilePath, bool RunnerRunning, List<string> AvailableEvents) GetAiWorkflow()
+        {
+            try
+            {
+                ContentManager.Initialize();
+                var auto = ContentManager.Ai.ServerAutoAi ?? new AiServerAuto();
+
+                var runtime = new AiRuntimeView
+                {
+                    Prompt = auto.Prompt ?? "",
+                    MaxTokens = auto.MaxTokens,
+                    ApiEndpoint = auto.ApiEndpoint ?? "",
+                    ApiKey = auto.ApiKey ?? "",
+                    Model = auto.Model ?? "",
+                    Temperature = auto.Temperature,
+                    RequestTimeoutSeconds = auto.RequestTimeoutSeconds,
+                    RetryOnError = auto.RetryOnError,
+                    RetryCount = auto.RetryCount,
+                    SaveResponse = auto.SaveResponse,
+                    ContextCacheSize = auto.ContextCacheSize,
+                    MaxToolRounds = auto.MaxToolRounds
+                };
+
+                var tasks = (auto.Tasks ?? new Dictionary<string, AiTask>())
+                    .Select(kv => new KeyValuePair<string, AiTask>(kv.Key, kv.Value))
+                    .ToList();
+
+                var tools = Intelligence.AiTools.BuiltInTools.ToList();
+
+                // 合法事件清单: 内置事件 + CustomPlayerEvent 通配名 + player_event.customs 自定义事件
+                var events = new List<string>(EventNames.BuiltInEvents) { EventNames.CustomPlayerEventName };
+                var customs = Config.App?.PlayerEvent?.Customs;
+                if (customs != null) events.AddRange(customs.Keys);
+
+                return (true, "OK", runtime, tasks, tools,
+                    Path.Combine(Config.DataPath, "ai_settings.yml"),
+                    Intelligence.AiAutoRunner.IsRunning,
+                    events);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"读取失败: {ex.Message}", new AiRuntimeView(), new List<KeyValuePair<string, AiTask>>(),
+                    new List<string>(), "", false, new List<string>());
+            }
+        }
+
+        /// <summary>生成密钥掩码串(仅保留首尾各 4 位)</summary>
+        public static string MaskApiKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return "";
+            return key.Length <= 8 ? "****" : key.Substring(0, 4) + "****" + key.Substring(key.Length - 4);
+        }
+
+        /// <summary>
+        /// 新增或编辑一个 AI 自动化任务并写回 ai_settings.yml。
+        /// originalKey 非空且与 key 不同时视为改名, 会移除旧键。
+        /// </summary>
+        public static (bool Success, string Message) SaveAiTask(string originalKey, string key, AiTask task)
+        {
+            if (task == null)
+                return (false, "任务配置不能为空");
+
+            ContentManager.Initialize();
+
+            key = (key ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(key))
+                return (false, "任务标识不能为空");
+            if (!Regex.IsMatch(key, @"^[a-z0-9_]+$"))
+                return (false, "任务标识只能包含小写字母、数字与下划线");
+
+            if (!IsValidAiTrigger(task.Trigger))
+                return (false, $"触发条件无效: {task.Trigger}；合法值: {string.Join(" / ", AiTriggerTemplates)}");
+
+            var interval = (task.Interval ?? "").Trim();
+            if (interval.Length == 0)
+                return (false, "Cron 表达式不能为空");
+            if (interval.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 6)
+                return (false, $"Cron 表达式必须为 6 段(秒 分 时 日 月 周): {interval}");
+
+            var tasks = ContentManager.Ai.ServerAutoAi.Tasks;
+            if (tasks == null)
+                tasks = ContentManager.Ai.ServerAutoAi.Tasks = new Dictionary<string, AiTask>();
+
+            var normalizedOriginal = (originalKey ?? "").Trim().ToLowerInvariant();
+            if (normalizedOriginal.Length > 0 && normalizedOriginal != key)
+                tasks.Remove(normalizedOriginal);
+
+            tasks[key] = task;
+            return PersistAiSettings();
+        }
+
+        /// <summary>
+        /// 删除指定 AI 自动化任务。
+        /// </summary>
+        public static (bool Success, string Message) DeleteAiTask(string key)
+        {
+            ContentManager.Initialize();
+
+            key = (key ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(key))
+                return (false, "任务标识不能为空");
+
+            var tasks = ContentManager.Ai.ServerAutoAi.Tasks;
+            if (tasks == null || !tasks.Remove(key))
+                return (false, $"任务不存在: {key}");
+
+            return PersistAiSettings();
+        }
+
+        /// <summary>
+        /// 保存 AI 工作流运行参数(AI 模型/接口/超时/重试等)。
+        /// ApiKey 为空或为掩码串时保持原值, 避免回显掩码覆盖真实密钥。
+        /// </summary>
+        public static (bool Success, string Message) SaveAiRuntime(AiRuntimeView runtime)
+        {
+            if (runtime == null)
+                return (false, "运行参数不能为空");
+
+            ContentManager.Initialize();
+            var auto = ContentManager.Ai.ServerAutoAi ?? (ContentManager.Ai.ServerAutoAi = new AiServerAuto());
+
+            auto.Prompt = runtime.Prompt ?? "";
+            auto.MaxTokens = runtime.MaxTokens;
+            auto.ApiEndpoint = runtime.ApiEndpoint ?? "";
+
+            var newKey = (runtime.ApiKey ?? "").Trim();
+            if (newKey.Length > 0 && !newKey.Contains("****"))
+                auto.ApiKey = newKey;
+
+            auto.Model = runtime.Model ?? "";
+            auto.Temperature = runtime.Temperature;
+            auto.RequestTimeoutSeconds = runtime.RequestTimeoutSeconds;
+            auto.RetryOnError = runtime.RetryOnError;
+            auto.RetryCount = runtime.RetryCount;
+            auto.SaveResponse = runtime.SaveResponse;
+            auto.ContextCacheSize = runtime.ContextCacheSize;
+            auto.MaxToolRounds = runtime.MaxToolRounds;
+
+            return PersistAiSettings();
+        }
+
+        // ===== AI 记忆管理(读取 memory.json 条目, 读写记忆设置) =====
+
+        /// <summary>
+        /// 读取 memory.json 中的全部记忆(时间/主题/内容)。
+        /// </summary>
+        public static List<RtCli.Modules.Function.AiMemoryManager.MemoryEntry> GetAiMemories()
+        {
+            return RtCli.Modules.Function.AiMemoryManager.Load();
+        }
+
+        /// <summary>
+        /// 获取 AI 记忆设置。
+        /// </summary>
+        public static AiMemorySetting GetAiMemorySettings()
+        {
+            ContentManager.Initialize();
+            return ContentManager.Ai.ServerAutoAi.Memory ?? new AiMemorySetting();
+        }
+
+        /// <summary>
+        /// 保存 AI 记忆设置到 ai_settings.yml 并热重载。
+        /// </summary>
+        public static (bool Success, string Message) SaveAiMemorySettings(AiMemorySetting settings)
+        {
+            if (settings == null)
+                return (false, "记忆设置不能为空");
+
+            ContentManager.Initialize();
+            ContentManager.Ai.ServerAutoAi.Memory = settings;
+            return PersistAiSettings();
+        }
+
+        /// <summary>
+        /// 清空 memory.json 中的所有记忆。
+        /// </summary>
+        public static (bool Success, string Message) ClearAiMemories()
+        {
+            try
+            {
+                RtCli.Modules.Function.AiMemoryManager.Save(new List<RtCli.Modules.Function.AiMemoryManager.MemoryEntry>());
+                return (true, "已清空记忆");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"清空失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 将内存中的 AI 配置写回 ai_settings.yml 并热重载。
+        /// </summary>
+        private static (bool Success, string Message) PersistAiSettings()
+        {
+            try
+            {
+                if (!ContentManager.SaveAiSettings())
+                    return (false, "写入 ai_settings.yml 失败");
+                Config.ReloadAll();
+                return (true, "已写入 ai_settings.yml");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"保存失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 解析技能导入内容: 支持 JSON(数组 / 含 skills 的对象 / 单对象)与 YAML(列表 / 含 skills 的对象)。
+        /// </summary>
+        private static (bool Success, string Message, List<AiSkill> Skills) ParseSkillsContent(string content)
+        {
+            var result = new List<AiSkill>();
+            if (string.IsNullOrWhiteSpace(content))
+                return (false, "导入内容为空", result);
+
+            // 1) JSON
+            try
+            {
+                CollectSkillsFromJson(JToken.Parse(content), result);
+                if (result.Count > 0)
+                    return (true, "", result);
+            }
+            catch { }
+
+            // 2) YAML
+            try
+            {
+                var deserializer = new YamlDotNet.Serialization.DeserializerBuilder()
+                    .WithNamingConvention(YamlDotNet.Serialization.NamingConventions.UnderscoredNamingConvention.Instance)
+                    .IgnoreUnmatchedProperties()
+                    .Build();
+
+                var list = deserializer.Deserialize<List<AiSkill>>(content);
+                if (list != null)
+                {
+                    foreach (var s in list)
+                    {
+                        if (s != null && !string.IsNullOrWhiteSpace(s.Name))
+                            result.Add(new AiSkill { Name = s.Name.Trim(), Description = s.Description ?? "", Behavior = s.Behavior ?? "" });
+                    }
+                }
+                if (result.Count > 0)
+                    return (true, "", result);
+
+                var wrapper = deserializer.Deserialize<AiSkillImportWrapper>(content);
+                if (wrapper?.Skills != null)
+                {
+                    foreach (var s in wrapper.Skills)
+                    {
+                        if (s != null && !string.IsNullOrWhiteSpace(s.Name))
+                            result.Add(new AiSkill { Name = s.Name.Trim(), Description = s.Description ?? "", Behavior = s.Behavior ?? "" });
+                    }
+                }
+                if (result.Count > 0)
+                    return (true, "", result);
+            }
+            catch { }
+
+            return (false, "无法解析技能内容(支持 JSON 或 YAML 的技能数组/对象)", result);
+        }
+
+        private static void CollectSkillsFromJson(JToken token, List<AiSkill> result)
+        {
+            if (token is JArray arr)
+            {
+                foreach (var item in arr)
+                    AddSkillFromJson(item, result);
+                return;
+            }
+            if (token is JObject obj)
+            {
+                var skillsToken = obj["skills"] ?? obj["Skills"];
+                if (skillsToken is JArray skillsArr)
+                {
+                    foreach (var item in skillsArr)
+                        AddSkillFromJson(item, result);
+                    return;
+                }
+                AddSkillFromJson(obj, result);
+            }
+        }
+
+        private static void AddSkillFromJson(JToken token, List<AiSkill> result)
+        {
+            if (token is not JObject obj) return;
+            var name = (obj["name"] ?? obj["Name"])?.ToString()?.Trim() ?? "";
+            if (string.IsNullOrEmpty(name)) return;
+            result.Add(new AiSkill
+            {
+                Name = name,
+                Description = (obj["description"] ?? obj["Description"])?.ToString() ?? "",
+                Behavior = (obj["behavior"] ?? obj["Behavior"] ?? obj["behaviour"] ?? obj["Behaviour"])?.ToString() ?? ""
+            });
+        }
+
+        // 系统状态缓存(单飞采集): 面板轮询间隔通常 1-2 秒, 而单次采集可能耗时数秒
+        private static readonly SemaphoreSlim _systemStatsGate = new(1, 1);
+        private static readonly object _systemStatsCacheLock = new();
+        private static readonly TimeSpan SystemStatsCacheTtl = TimeSpan.FromSeconds(3);
+        private static (bool Success, string Message, double CpuUsage, double MemUsedMb, double MemTotalMb,
+                       List<(string Key, string Name, bool Running, double Tps, string TpsStatus, int Pid, double McMemMb,
+                             double Tps1m, double Tps5m, double Tps15m, double McCpuUsage, int PlayerCount, int PlayerMax)> Servers)?
+            _systemStatsCache;
+        private static DateTime _systemStatsCacheAt = DateTime.MinValue;
+
         /// <summary>
         /// 采集系统状态：主机 CPU/内存 + 各 MC 服务端 TPS、玩家数、进程 CPU/内存。
         /// TPS 与玩家数通过向 MC 服务端发送 tps/list 命令获取(带 10 秒缓存节流)。
+        /// 结果做短期缓存并单飞采集: 面板/桥接高频轮询时不会重复执行 WMI 与最长 6 秒的 TPS/玩家查询。
         /// </summary>
         public static (bool Success, string Message, double CpuUsage, double MemUsedMb, double MemTotalMb,
                        List<(string Key, string Name, bool Running, double Tps, string TpsStatus, int Pid, double McMemMb,
                              double Tps1m, double Tps5m, double Tps15m, double McCpuUsage, int PlayerCount, int PlayerMax)> Servers)
             GetSystemStats()
+        {
+            if (TryGetCachedSystemStats(out var cached)) return cached;
+
+            // 单飞: 并发轮询只触发一次采集, 其余请求等待复用结果, 避免线程池被阻塞式采集占满
+            _systemStatsGate.Wait();
+            try
+            {
+                if (TryGetCachedSystemStats(out cached)) return cached;
+
+                var result = CollectSystemStats();
+                lock (_systemStatsCacheLock)
+                {
+                    _systemStatsCache = result;
+                    _systemStatsCacheAt = DateTime.UtcNow;
+                }
+                return result;
+            }
+            finally
+            {
+                _systemStatsGate.Release();
+            }
+        }
+
+        private static bool TryGetCachedSystemStats(out (bool Success, string Message, double CpuUsage, double MemUsedMb, double MemTotalMb,
+                       List<(string Key, string Name, bool Running, double Tps, string TpsStatus, int Pid, double McMemMb,
+                             double Tps1m, double Tps5m, double Tps15m, double McCpuUsage, int PlayerCount, int PlayerMax)> Servers) result)
+        {
+            lock (_systemStatsCacheLock)
+            {
+                if (_systemStatsCache.HasValue &&
+                    DateTime.UtcNow - _systemStatsCacheAt < SystemStatsCacheTtl)
+                {
+                    result = _systemStatsCache.Value;
+                    return true;
+                }
+            }
+            result = default;
+            return false;
+        }
+
+        private static (bool Success, string Message, double CpuUsage, double MemUsedMb, double MemTotalMb,
+                       List<(string Key, string Name, bool Running, double Tps, string TpsStatus, int Pid, double McMemMb,
+                             double Tps1m, double Tps5m, double Tps15m, double McCpuUsage, int PlayerCount, int PlayerMax)> Servers)
+            CollectSystemStats()
         {
             try
             {
@@ -814,15 +939,16 @@ namespace RtCli.Modules.Unit
                 var (usedMb, totalMb) = Intelligence.AiTools.GetMemoryUsage();
 
                 var servers = new List<(string, string, bool, double, string, int, double, double, double, double, double, int, int)>();
-                var currentKey = Config.App.CurrentServer;
+                var serverGate = new object();
+                var keys = Config.App.ServerList.Keys.ToList();
 
-                foreach (var kvp in Config.App.ServerList)
+                // 多实例并发采集: 每个实例独立查询 TPS/玩家数, 并行执行避免串行累加超时(单实例最长约6秒)
+                Parallel.ForEach(keys, new ParallelOptions { MaxDegreeOfParallelism = 4 }, key =>
                 {
-                    var key = kvp.Key;
-                    var entry = kvp.Value;
+                    var entry = Config.App.ServerList[key];
                     var name = string.IsNullOrEmpty(entry.ServerName) ? key : entry.ServerName;
-                    bool isCurrent = key == currentKey;
-                    bool running = isCurrent && (Analyzer.IsRunModeActive || Analyzer.IsAttached);
+                    // 运行状态按实例自身运行时分判断, 而不是按"当前选中"的实例
+                    bool running = Analyzer.IsRunning(key);
                     double tps = -1;
                     string tpsStatus = "未运行";
                     int pid = 0;
@@ -835,10 +961,10 @@ namespace RtCli.Modules.Unit
                     {
                         tpsStatus = "运行中";
 
-                        // TPS：发送 tps 命令解析(带缓存节流)
+                        // TPS：发送 tps 命令解析(带缓存节流, 按实例独立)
                         try
                         {
-                            var (t1, t5, t15) = Analyzer.QueryTps(3000);
+                            var (t1, t5, t15) = Analyzer.QueryTps(3000, key);
                             tps1m = t1; tps5m = t5; tps15m = t15;
                             tps = t1; // 兼容字段
                             if (t1 >= 0)
@@ -848,10 +974,10 @@ namespace RtCli.Modules.Unit
                         }
                         catch { }
 
-                        // 玩家数：发送 list 命令解析(带缓存节流)
+                        // 玩家数：RM 优先管理协议 server/status, 其余走 list 命令(带缓存节流)
                         try
                         {
-                            var (count, max) = Analyzer.QueryPlayerCount(3000);
+                            var (count, max) = Analyzer.QueryPlayerCount(3000, key);
                             playerCount = count;
                             playerMax = max;
                         }
@@ -860,20 +986,26 @@ namespace RtCli.Modules.Unit
                         // MC 进程 CPU 与内存
                         try
                         {
-                            var proc = Analyzer.GetServerProcess();
+                            var proc = Analyzer.GetServerProcess(key);
                             if (proc != null && !proc.HasExited)
                             {
                                 pid = proc.Id;
                                 mcMemMb = proc.WorkingSet64 / (1024.0 * 1024.0);
                             }
-                            mcCpu = Analyzer.GetMcCpuUsage();
+                            mcCpu = Analyzer.GetMcCpuUsage(key);
                         }
                         catch { }
                     }
 
-                    servers.Add((key, name, running, tps, tpsStatus, pid, mcMemMb,
-                                 tps1m, tps5m, tps15m, mcCpu, playerCount, playerMax));
-                }
+                    lock (serverGate)
+                    {
+                        servers.Add((key, name, running, tps, tpsStatus, pid, mcMemMb,
+                                     tps1m, tps5m, tps15m, mcCpu, playerCount, playerMax));
+                    }
+                });
+
+                // 并行采集后恢复 server_list 原始顺序
+                servers = servers.OrderBy(s => keys.IndexOf(s.Item1)).ToList();
 
                 return (true, "OK", cpu, usedMb, totalMb, servers);
             }
@@ -1115,9 +1247,24 @@ namespace RtCli.Modules.Unit
                     return (false, $"文件不存在: {fileName}", "", category);
 
                 // 大日志文件仅在服务端截取尾部 N 行，避免整个文件经 gRPC 传输
-                var content = tailLines > 0
-                    ? ReadTailLines(fullPath, tailLines)
-                    : File.ReadAllText(fullPath);
+                string content;
+                if (tailLines > 0)
+                {
+                    content = ReadTailLines(fullPath, tailLines);
+                }
+                else
+                {
+                    // 全量读取必须有上限: 数 GB 的日志会直接 OOM, 也超过 gRPC 单条消息上限
+                    long size = new FileInfo(fullPath).Length;
+                    if (size > MaxDirectReadBytes)
+                    {
+                        return (false,
+                            $"文件过大({size / 1024 / 1024}MB), 上限 {MaxDirectReadBytes / 1024 / 1024}MB; " +
+                            "请使用 tail_lines 读取尾部或分块下载",
+                            "", category);
+                    }
+                    content = File.ReadAllText(fullPath);
+                }
                 return (true, "OK", content, category);
             }
             catch (Exception ex)
@@ -1189,6 +1336,31 @@ namespace RtCli.Modules.Unit
                 if (!IsWithinRoot(workPath, fullPath))
                     return (false, "非法路径");
 
+                // 去除 BOM 并按原文件换行风格回写(避免 CRLF 文件被改成 LF)
+                string newline = DetectNewlineStyle(fullPath);
+                content = NormalizeTextContent(content, newline);
+
+                if (category == "properties")
+                {
+                    // Java 的 Properties.load(InputStream) 按 ISO-8859-1 解码, 中文必须转义成 \uXXXX,
+                    // 否则 MC 读取后 motd 等字段乱码; 同时做一次可解析性校验。
+                    content = EscapePropertiesNonAscii(content);
+                    var propError = ValidatePropertiesContent(content);
+                    if (propError != null)
+                        return (false, $"{fileName} 格式校验失败, 未保存: {propError}");
+                }
+                else if (category == "json")
+                {
+                    try
+                    {
+                        JToken.Parse(content);
+                    }
+                    catch (Exception ex)
+                    {
+                        return (false, $"{fileName} 不是合法 JSON, 未保存: {ex.Message}");
+                    }
+                }
+
                 // 备份
                 if (File.Exists(fullPath))
                 {
@@ -1196,6 +1368,7 @@ namespace RtCli.Modules.Unit
                     File.Copy(fullPath, backupPath, true);
                 }
 
+                // AtomicFile 默认使用 UTF-8 无 BOM(Gson/Properties 对 BOM 敏感)
                 AtomicFile.WriteAllText(fullPath, content);
                 Output.Log($"MC 配置文件 [{Markup.Escape(fileName)}] 已由面板保存", 1, "Backend");
                 return (true, $"{fileName} 已保存(部分配置需服务端重启生效)");
@@ -1207,20 +1380,91 @@ namespace RtCli.Modules.Unit
             }
         }
 
+        /// <summary>检测文件原有换行风格: 存在 CRLF 则按 CRLF 回写, 否则用 LF。</summary>
+        private static string DetectNewlineStyle(string fullPath)
+        {
+            try
+            {
+                if (!File.Exists(fullPath)) return "\n";
+                using var fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                var buffer = new byte[8192];
+                int read = fs.Read(buffer, 0, buffer.Length);
+                for (int i = 0; i < read - 1; i++)
+                {
+                    if (buffer[i] == 13 && buffer[i + 1] == 10) return "\r\n";
+                }
+            }
+            catch { }
+            return "\n";
+        }
+
+        /// <summary>去掉文件头 BOM, 并把换行统一为指定风格。</summary>
+        private static string NormalizeTextContent(string content, string newline)
+        {
+            content = content.TrimStart('\uFEFF');
+            var unified = content.Replace("\r\n", "\n").Replace('\r', '\n');
+            return newline == "\r\n" ? unified.Replace("\n", "\r\n") : unified;
+        }
+
+        /// <summary>按 Java Properties(ISO-8859-1) 读取规则转义非 ASCII 字符为 \uXXXX。</summary>
+        private static string EscapePropertiesNonAscii(string content)
+        {
+            var sb = new StringBuilder(content.Length + 16);
+            foreach (char c in content)
+            {
+                if (c > 0x7E)
+                    sb.Append("\\u").Append(((int)c).ToString("x4"));
+                else
+                    sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>校验 properties 文本可解析: 非注释/非空行必须有合法键名。返回 null 表示通过。</summary>
+        private static string? ValidatePropertiesContent(string content)
+        {
+            var lines = content.Replace("\r\n", "\n").Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var t = lines[i].Trim();
+                if (t.Length == 0 || t.StartsWith("#") || t.StartsWith("!")) continue;
+
+                int sep = t.IndexOf('=');
+                if (sep < 0) sep = t.IndexOf(':');
+                if (sep < 0) sep = t.IndexOfAny(new[] { ' ', '\t' });
+                if (sep <= 0)
+                    return $"第 {i + 1} 行缺少键名或分隔符: {lines[i]}";
+            }
+            return null;
+        }
+
         /// <summary>
         /// 获取面板可用命令列表（含描述），用于前端自动补全。
         /// </summary>
         public static (string Command, string Description)[] GetAvailableCommands()
         {
-            var list = new List<(string, string)>(_knownCommands);
+            // 命令全集 = 权威命令表(BaseCommands) ∪ 已注册命令 ∪ 面板已知命令
+            var all = new List<string>();
+            all.AddRange(Program.BaseCommandNames);
+            all.AddRange(CommandRegistry.GetAutoCompleteCommands());
+            foreach (var (cmd, _) in _knownCommands)
+                all.Add(cmd);
 
-            // 合并扩展注册的命令
-            foreach (var cmd in CommandRegistry.GetAutoCompleteCommands())
+            // 描述映射（大小写不敏感，来源为 _knownCommands，查不到给空串）
+            var descMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (cmd, desc) in _knownCommands)
             {
-                list.Add((cmd, "扩展命令"));
+                if (string.IsNullOrWhiteSpace(cmd)) continue;
+                descMap[cmd.Trim()] = desc ?? "";
             }
 
-            return list.ToArray();
+            return all
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
+                .Select(c => (Command: c, Description: descMap.TryGetValue(c, out var d) ? d : ""))
+                .ToArray();
         }
 
         // ===== 实例管理 API =====
@@ -1254,7 +1498,7 @@ namespace RtCli.Modules.Unit
                         Name = entry.ServerName,
                         GroupId = inst.GroupId,
                         GroupName = groupName,
-                        IsRunning = inst.Id == Config.App.CurrentServer && (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached),
+                        IsRunning = Function.Analyzer.IsRunning(inst.Id),
                         Hidden = Config.App.HideConsoleServers.Contains(inst.Id),
                         AutoRestart = entry.AutoRestart,
                         WorkPath = entry.WorkPath,
@@ -1289,7 +1533,6 @@ namespace RtCli.Modules.Unit
                 return (false, "未选择任何实例");
 
             var results = new List<string>();
-            var originalServer = Config.App.CurrentServer;
 
             foreach (var id in ids)
             {
@@ -1301,18 +1544,18 @@ namespace RtCli.Modules.Unit
 
                 try
                 {
-                    Config.SwitchServer(id);
-
+                    // 直接按实例 ID 操作, 不切换 CurrentServer, 多实例并发时不会互相覆盖
                     switch (action?.ToLowerInvariant())
                     {
                         case "start":
-                            if (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached)
+                            if (Function.Analyzer.IsRunning(id))
                             {
                                 results.Add($"[{id}] 已在运行中, 跳过");
                             }
                             else
                             {
-                                Function.Analyzer.StartServer();
+                                Function.Analyzer.Initialize(id);
+                                Function.Analyzer.StartServer(id);
                                 // 更新最后启动时间
                                 var inst = ServerDataManager.Data.Instances.FirstOrDefault(i => i.Id == id);
                                 if (inst != null)
@@ -1325,10 +1568,10 @@ namespace RtCli.Modules.Unit
                             break;
 
                         case "stop":
-                            if (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached)
+                            if (Function.Analyzer.IsRunning(id))
                             {
                                 // 面板路径: 立即返回, 后台看门狗监测无响应(不自动强杀)
-                                var stopRes = Function.Analyzer.StopServer(killOnTimeout: false, asyncReturn: true);
+                                var stopRes = Function.Analyzer.StopServer(killOnTimeout: false, asyncReturn: true, instanceId: id);
                                 results.Add(stopRes == Function.Analyzer.StopResult.NotRunning
                                     ? $"[{id}] 未运行, 跳过"
                                     : $"[{id}] 停止指令已发送, 若服务端无响应可在事件板强制关闭(可能丢失数据)");
@@ -1340,9 +1583,9 @@ namespace RtCli.Modules.Unit
                             break;
 
                         case "force_stop":
-                            if (Function.Analyzer.HasManagedProcess)
+                            if (Function.Analyzer.HasManagedProcessOf(id))
                             {
-                                Function.Analyzer.ForceKillServer();
+                                Function.Analyzer.ForceKillServer(id);
                                 results.Add($"[{id}] 已强制关闭");
                             }
                             else
@@ -1352,13 +1595,14 @@ namespace RtCli.Modules.Unit
                             break;
 
                         case "restart":
-                            if (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached)
+                            if (Function.Analyzer.IsRunning(id))
                             {
                                 // 重启前必须确保进程结束: 保留超时强杀兜底
-                                Function.Analyzer.StopServer(killOnTimeout: true);
+                                Function.Analyzer.StopServer(killOnTimeout: true, instanceId: id);
                                 System.Threading.Thread.Sleep(2000);
                             }
-                            Function.Analyzer.StartServer();
+                            Function.Analyzer.Initialize(id);
+                            Function.Analyzer.StartServer(id);
                             results.Add($"[{id}] 重启指令已发送");
                             break;
 
@@ -1372,9 +1616,6 @@ namespace RtCli.Modules.Unit
                     results.Add($"[{id}] 操作失败: {ex.Message}");
                 }
             }
-
-            // 恢复原 current_server 选择
-            Config.SwitchServer(originalServer);
 
             return (true, string.Join("\n", results));
         }
@@ -1415,7 +1656,7 @@ namespace RtCli.Modules.Unit
                     Name = entry.ServerName,
                     GroupId = inst?.GroupId ?? "",
                     GroupName = groupName,
-                    IsRunning = id == Config.App.CurrentServer && (Function.Analyzer.IsRunModeActive || Function.Analyzer.IsAttached),
+                    IsRunning = Function.Analyzer.IsRunning(id),
                     Hidden = Config.App.HideConsoleServers.Contains(id),
                     AutoRestart = entry.AutoRestart,
                     WorkPath = entry.WorkPath,
@@ -1453,7 +1694,7 @@ namespace RtCli.Modules.Unit
         }
 
         /// <summary>从插件 jar 内解析出的元数据(名称/版本/介绍)</summary>
-        private class PluginJarMeta
+        internal class PluginJarMeta
         {
             public string Name = "";
             public string Version = "";
@@ -1478,11 +1719,19 @@ namespace RtCli.Modules.Unit
                     var meta = ParseYamlMeta(text);
                     if (meta != null) return meta;
                 }
-                foreach (var candidate in new[] { "velocity-plugin.json", "sponge_plugins.json" })
+                foreach (var candidate in new[] { "velocity-plugin.json", "sponge_plugins.json", "fabric.mod.json", "mcmod.info" })
                 {
                     var text = ReadZipRootEntryText(zip, candidate);
                     if (text == null) continue;
                     var meta = ParseJsonMeta(text);
+                    if (meta != null) return meta;
+                }
+                // Forge / NeoForge 的元数据在 META-INF 下且为 TOML
+                foreach (var candidate in new[] { "META-INF/mods.toml", "META-INF/neoforge.mods.toml" })
+                {
+                    var text = ReadZipEntryText(zip, candidate);
+                    if (text == null) continue;
+                    var meta = ParseTomlMeta(text);
                     if (meta != null) return meta;
                 }
                 return null;
@@ -1508,6 +1757,59 @@ namespace RtCli.Modules.Unit
                 return sr.ReadToEnd();
             }
             return null;
+        }
+
+        /// <summary>读取 zip 内指定相对路径的文本条目(忽略大小写与分隔符, 限制 1MB)</summary>
+        private static string? ReadZipEntryText(ZipArchive zip, string relativePath)
+        {
+            string want = relativePath.Replace('\\', '/');
+            foreach (var e in zip.Entries)
+            {
+                var n = e.FullName.Replace('\\', '/').TrimStart('/');
+                if (n.StartsWith("./")) n = n[2..];
+                if (!string.Equals(n, want, StringComparison.OrdinalIgnoreCase)) continue;
+                if (e.Length > 1024 * 1024) return null;
+                using var sr = new StreamReader(e.Open(), Encoding.UTF8);
+                return sr.ReadToEnd();
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 从 Forge/NeoForge 的 META-INF/mods.toml 解析 modId/version/displayName/description。
+        /// 只做键值行匹配: mods.toml 是 TOML, 但所需字段都在 [[mods]] 段内且为简单字符串键。
+        /// </summary>
+        internal static PluginJarMeta? ParseTomlMeta(string text)
+        {
+            try
+            {
+                string? Pick(string key)
+                {
+                    var m = Regex.Match(text,
+                        @"^\s*" + Regex.Escape(key) + @"\s*=\s*(?:""([^""]*)""|'([^']*)')",
+                        RegexOptions.Multiline | RegexOptions.IgnoreCase);
+                    if (!m.Success) return null;
+                    string v = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
+                    // 版本为占位符时会带 $ 记号, 视为无版本信息
+                    if (string.IsNullOrWhiteSpace(v) || v.Contains('$')) return null;
+                    return v.Trim();
+                }
+
+                string? modId = Pick("modId");
+                string? name = Pick("displayName") ?? modId;
+                if (string.IsNullOrWhiteSpace(name)) return null;
+
+                return new PluginJarMeta
+                {
+                    Name = name!,
+                    Version = Pick("version") ?? "",
+                    Description = Pick("description") ?? ""
+                };
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         /// <summary>从 plugin.yml/bungee.yml 等 YAML 元数据中解析 name/version/description</summary>
@@ -1546,7 +1848,7 @@ namespace RtCli.Modules.Unit
         }
 
         /// <summary>从 velocity-plugin.json/sponge_plugins.json 等 JSON 元数据中解析 name/version/description</summary>
-        private static PluginJarMeta? ParseJsonMeta(string json)
+        internal static PluginJarMeta? ParseJsonMeta(string json)
         {
             try
             {
@@ -1571,7 +1873,7 @@ namespace RtCli.Modules.Unit
                     }
                     return null;
                 }
-                var name = GetStr("name", "id");
+                var name = GetStr("name", "id", "modid");
                 if (string.IsNullOrWhiteSpace(name)) return null;
                 return new PluginJarMeta
                 {
@@ -1649,7 +1951,8 @@ namespace RtCli.Modules.Unit
             {
                 var workPath = ResolveWorkPath(serverKey);
                 if (workPath == null) return (false, "服务端工作目录未配置或不存在", new List<JarFileItem>());
-                return (true, "OK", ListJarFiles(serverKey, "mods", ".disabled"));
+                // 模组同样解析元数据(fabric.mod.json / mcmod.info / META-INF/mods.toml), 便于面板显示名称与版本
+                return (true, "OK", ListJarFiles(serverKey, "mods", ".disabled", readPluginMeta: true));
             }
             catch (Exception ex)
             {
@@ -1675,11 +1978,14 @@ namespace RtCli.Modules.Unit
                     return (false, "非法路径");
 
                 string newPath;
+                string kind = subDir == "mods" ? I18n.Get("board_event_kind_mod") : I18n.Get("board_event_kind_plugin");
                 if (fileName.EndsWith(disabledExt, StringComparison.OrdinalIgnoreCase))
                 {
                     // 启用: 去掉禁用后缀
                     newPath = resolvedPath.Substring(0, resolvedPath.Length - disabledExt.Length);
                     File.Move(resolvedPath, newPath);
+                    BoardEventRecorder.Record("jar_toggle", serverKey,
+                        I18n.Get("board_event_jar_toggle", kind), $"已启用: {Path.GetFileName(newPath)}");
                     return (true, $"已启用: {Path.GetFileName(newPath)}");
                 }
                 else if (fileName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase))
@@ -1687,6 +1993,8 @@ namespace RtCli.Modules.Unit
                     // 禁用: 添加禁用后缀
                     newPath = resolvedPath + disabledExt;
                     File.Move(resolvedPath, newPath);
+                    BoardEventRecorder.Record("jar_toggle", serverKey,
+                        I18n.Get("board_event_jar_toggle", kind), $"已禁用: {Path.GetFileName(newPath)}");
                     return (true, $"已禁用: {Path.GetFileName(newPath)}");
                 }
                 return (false, "不支持的文件类型");
@@ -1719,6 +2027,9 @@ namespace RtCli.Modules.Unit
                 if (!resolvedPath.StartsWith(Path.GetFullPath(dir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     return (false, "非法路径");
                 File.Delete(resolvedPath);
+                string kind = subDir == "mods" ? I18n.Get("board_event_kind_mod") : I18n.Get("board_event_kind_plugin");
+                BoardEventRecorder.Record("jar_delete", serverKey,
+                    I18n.Get("board_event_jar_delete", kind), fileName);
                 return (true, $"已删除: {fileName}");
             }
             catch (Exception ex)
@@ -1748,6 +2059,9 @@ namespace RtCli.Modules.Unit
                 var safeName = Path.GetFileName(fileName);
                 var fullPath = Path.Combine(dir, safeName);
                 File.WriteAllBytes(fullPath, content);
+                string kind = subDir == "mods" ? I18n.Get("board_event_kind_mod") : I18n.Get("board_event_kind_plugin");
+                BoardEventRecorder.Record("jar_upload", serverKey,
+                    I18n.Get("board_event_jar_upload", kind), safeName);
                 return (true, $"已上传: {safeName}");
             }
             catch (Exception ex)
@@ -1905,12 +2219,16 @@ namespace RtCli.Modules.Unit
                         return (false, "目录非空, 请确认递归删除");
                     Directory.Delete(p, recursive);
                     Output.Log($"实例目录 [{Markup.Escape(relPath ?? "")}] 已由面板删除", 1, "Backend");
+                    BoardEventRecorder.Record("file_delete", serverKey,
+                        I18n.Get("board_event_file_delete_dir"), relPath ?? "");
                     return (true, $"已删除目录: {relPath}");
                 }
                 if (File.Exists(p))
                 {
                     File.Delete(p);
                     Output.Log($"实例文件 [{Markup.Escape(relPath ?? "")}] 已由面板删除", 1, "Backend");
+                    BoardEventRecorder.Record("file_delete", serverKey,
+                        I18n.Get("board_event_file_delete_file"), relPath ?? "");
                     return (true, $"已删除: {relPath}");
                 }
                 return (false, $"不存在: {relPath}");
@@ -2286,6 +2604,8 @@ namespace RtCli.Modules.Unit
                 if (isDir) Directory.Move(oldPath, newPath);
                 else File.Move(oldPath, newPath);
                 Output.Log($"实例条目 [{Markup.Escape(oldRel ?? "")}] 已由面板重命名/移动为 [{Markup.Escape(newRel ?? "")}]", 1, "Backend");
+                BoardEventRecorder.Record("file_rename", serverKey,
+                    I18n.Get("board_event_file_rename"), $"{oldRel} → {newRel}");
                 return (true, "OK");
             }
             catch (Exception ex)
@@ -2296,6 +2616,8 @@ namespace RtCli.Modules.Unit
 
         /// <summary>可编辑文本文件大小上限(2MB)。</summary>
         private const int MaxEditableFileBytes = 2 * 1024 * 1024;
+        /// <summary>GetServerFile 全量读取上限(超过需走 tail_lines)</summary>
+        private const long MaxDirectReadBytes = 8 * 1024 * 1024;
 
         /// <summary>读取工作目录内文本文件内容(供面板编辑)。拒绝目录与二进制内容(检测 0x00 字节)。</summary>
         public static (bool Success, string Message, string Content, long SizeBytes)
@@ -2338,6 +2660,8 @@ namespace RtCli.Modules.Unit
                 if (File.Exists(p)) File.Copy(p, p + ".bak", true);
                 AtomicFile.WriteAllText(p, content);
                 Output.Log($"实例文件 [{Markup.Escape(relPath ?? "")}] 已由面板编辑保存", 1, "Backend");
+                BoardEventRecorder.Record("file_write", serverKey,
+                    I18n.Get("board_event_file_write"), relPath ?? "");
                 return (true, $"{Path.GetFileName(relPath)} 已保存(部分配置需服务端重启生效)");
             }
             catch (Exception ex)
@@ -2348,9 +2672,23 @@ namespace RtCli.Modules.Unit
 
         // ===== 玩家管理 API =====
 
+        /// <summary>指定实例是否可走服务端管理协议(RM 模式且该实例的管理协议已连接)</summary>
+        private static Function.MCManagementConnection? GetManagement(string serverKey)
+        {
+            if (!Function.Analyzer.UsesManagementProtocolOf(serverKey)) return null;
+            var mgmt = Function.Analyzer.GetManagementConnection(serverKey);
+            return mgmt != null && mgmt.IsConnected ? mgmt : null;
+        }
+
+        private static bool CanUseManagement(string serverKey) => GetManagement(serverKey) != null;
+
         /// <summary>封禁玩家</summary>
         public static (bool Success, string Message) BanPlayer(string serverKey, string playerName, string reason)
         {
+            var mgmt = GetManagement(serverKey);
+            if (mgmt != null)
+                return mgmt.BanPlayer(playerName, reason);
+
             var cmd = string.IsNullOrWhiteSpace(reason)
                 ? $"ban {playerName}"
                 : $"ban {playerName} {reason}";
@@ -2361,13 +2699,34 @@ namespace RtCli.Modules.Unit
         /// <summary>解封玩家</summary>
         public static (bool Success, string Message) PardonPlayer(string serverKey, string playerName)
         {
+            var mgmt = GetManagement(serverKey);
+            if (mgmt != null)
+                return mgmt.UnbanPlayer(playerName);
+
             var (ok, msg) = SendMcCommand(serverKey, $"pardon {playerName}");
             return (ok, msg);
+        }
+
+        /// <summary>添加/移除 OP</summary>
+        public static (bool Success, string Message) OpPlayer(string serverKey, string playerName, bool op)
+        {
+            if (string.IsNullOrWhiteSpace(playerName))
+                return (false, "玩家名不能为空");
+
+            var mgmt = GetManagement(serverKey);
+            if (mgmt != null)
+                return mgmt.OpPlayer(playerName, op);
+
+            return SendMcCommand(serverKey, op ? $"op {playerName}" : $"deop {playerName}");
         }
 
         /// <summary>封禁IP</summary>
         public static (bool Success, string Message) BanIp(string serverKey, string ipOrPlayer, string reason)
         {
+            var mgmt = GetManagement(serverKey);
+            if (mgmt != null)
+                return mgmt.BanIp(ipOrPlayer, reason);
+
             var cmd = string.IsNullOrWhiteSpace(reason)
                 ? $"ban-ip {ipOrPlayer}"
                 : $"ban-ip {ipOrPlayer} {reason}";
@@ -2378,6 +2737,10 @@ namespace RtCli.Modules.Unit
         /// <summary>解封IP</summary>
         public static (bool Success, string Message) PardonIp(string serverKey, string ip)
         {
+            var mgmt = GetManagement(serverKey);
+            if (mgmt != null)
+                return mgmt.UnbanIp(ip);
+
             var (ok, msg) = SendMcCommand(serverKey, $"pardon-ip {ip}");
             return (ok, msg);
         }
@@ -2385,6 +2748,10 @@ namespace RtCli.Modules.Unit
         /// <summary>踢出玩家</summary>
         public static (bool Success, string Message) KickPlayer(string serverKey, string playerName, string reason)
         {
+            var mgmt = GetManagement(serverKey);
+            if (mgmt != null)
+                return mgmt.KickPlayer(playerName, reason);
+
             var cmd = string.IsNullOrWhiteSpace(reason)
                 ? $"kick {playerName}"
                 : $"kick {playerName} {reason}";
@@ -2400,6 +2767,187 @@ namespace RtCli.Modules.Unit
             // 去掉可能的 / 前缀
             command = command.TrimStart('/');
             return SendMcCommand(serverKey, command);
+        }
+
+        // ===== 全服配置 API (RM 管理协议 serversettings) =====
+
+        /// <summary>读取全服配置(RM 模式管理协议)</summary>
+        public static (bool Success, string Message, List<Function.ServerSettingValueResult> Settings)
+            GetServerSettings(string serverKey)
+        {
+            var mgmt = GetManagement(serverKey);
+            if (mgmt == null)
+                return (false, "该实例未启用 RM 模式管理协议支持(需 MC 1.21.9+ 且已连接管理协议)",
+                    new List<Function.ServerSettingValueResult>());
+            try
+            {
+                var list = mgmt.ReadAllSettingsAsync().GetAwaiter().GetResult();
+                return (true, "OK", list);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"读取全服配置失败: {ex.Message}", new List<Function.ServerSettingValueResult>());
+            }
+        }
+
+        /// <summary>应用全服配置(键值对, 类型由键定义推导)</summary>
+        public static (bool Success, string Message) SetServerSettings(
+            string serverKey, List<KeyValuePair<string, string>> values)
+        {
+            var mgmt = GetManagement(serverKey);
+            if (mgmt == null)
+                return (false, "该实例未启用 RM 模式管理协议支持");
+            if (values == null || values.Count == 0)
+                return (false, "没有需要保存的配置项");
+
+            var errors = new List<string>();
+            int applied = 0;
+            foreach (var kv in values)
+            {
+                var def = Function.MCManagementConnection.SettingDefs.FirstOrDefault(d => d.Key == kv.Key);
+                if (def == null)
+                {
+                    errors.Add($"{kv.Key}: 不支持的配置项");
+                    continue;
+                }
+                var (ok, msg) = mgmt.ApplySetting(def.Key, def.Type, kv.Value);
+                if (ok) applied++;
+                else errors.Add($"{kv.Key}: {msg}");
+            }
+
+            if (errors.Count == 0)
+                return (true, $"已应用 {applied} 项");
+            return (false, $"部分失败: {string.Join("; ", errors)}");
+        }
+
+        // ===== RM 管理协议通用操作(游戏规则/名单/服务器控制/能力发现) =====
+
+        /// <summary>
+        /// RM 管理协议通用操作入口。
+        /// category: gamerules / allowlist / operators / bans / ip_bans / server / discover
+        /// action:   get / add / remove / clear / set / save / stop / system_message / status / discover
+        /// 非 RM 实例时对可映射的操作回退命令通道, 读取类操作返回不支持提示。
+        /// </summary>
+        public static (bool Success, string Message, List<Function.RmEntry> Entries, string Raw) RmManage(
+            string serverKey, string category, string action, string target, string value, bool flag)
+        {
+            category = (category ?? "").Trim().ToLowerInvariant();
+            action = (action ?? "").Trim().ToLowerInvariant();
+            target = target ?? "";
+            value = value ?? "";
+
+            var mgmt = GetManagement(serverKey);
+            if (mgmt != null)
+            {
+                try
+                {
+                    switch (category)
+                    {
+                        case "gamerules":
+                            if (action == "get")
+                            {
+                                var rules = mgmt.ReadGamerulesAsync().GetAwaiter().GetResult();
+                                return (true, "OK", rules, "");
+                            }
+                            if (string.IsNullOrWhiteSpace(target))
+                                return (false, "缺少规则名", new List<Function.RmEntry>(), "");
+                            var (gok, gmsg) = mgmt.SetGamerule(target, value);
+                            return (gok, gmsg, new List<Function.RmEntry>(), "");
+
+                        case "allowlist":
+                        case "operators":
+                        case "bans":
+                        case "ip_bans":
+                            if (action == "get")
+                            {
+                                var list = mgmt.ReadListAsync(category).GetAwaiter().GetResult();
+                                return (true, "OK", list, "");
+                            }
+                            if (action == "clear" && category != "allowlist")
+                                return (false, "仅白名单支持一键清空", new List<Function.RmEntry>(), "");
+                            if (action != "clear" && string.IsNullOrWhiteSpace(target))
+                                return (false, "请输入名称/IP", new List<Function.RmEntry>(), "");
+                            var (lok, lmsg) = mgmt.ListModify(category, action, target, value);
+                            return (lok, lmsg, new List<Function.RmEntry>(), "");
+
+                        case "server":
+                            switch (action)
+                            {
+                                case "save":
+                                    var sv = mgmt.ServerSave();
+                                    return (sv.Success, sv.Message, new List<Function.RmEntry>(), "");
+                                case "stop":
+                                    var st = mgmt.ServerStop();
+                                    return (st.Success, st.Message, new List<Function.RmEntry>(), "");
+                                case "system_message":
+                                    if (string.IsNullOrWhiteSpace(value))
+                                        return (false, "请输入系统消息内容", new List<Function.RmEntry>(), "");
+                                    var sm = mgmt.SystemMessage(value, flag);
+                                    return (sm.Success, sm.Message, new List<Function.RmEntry>(), "");
+                                case "status":
+                                    var (stOk, stMsg, stRaw) = mgmt.ServerStatus();
+                                    return (stOk, stMsg, new List<Function.RmEntry>(), stRaw);
+                                default:
+                                    return (false, "未知服务器操作: " + action, new List<Function.RmEntry>(), "");
+                            }
+
+                        case "discover":
+                            var (dOk, dMsg, dRaw) = mgmt.Discover();
+                            return (dOk, dMsg, new List<Function.RmEntry>(), dRaw);
+
+                        default:
+                            return (false, "未知操作类别: " + category, new List<Function.RmEntry>(), "");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return (false, "管理协议操作失败: " + ex.Message, new List<Function.RmEntry>(), "");
+                }
+            }
+
+            // ===== 非 RM: 命令通道回退(读取类不支持) =====
+            if (action == "get" || action == "status" || category == "discover")
+                return (false, "该实例未启用 RM 模式管理协议支持(需 MC 1.21.9+ 且已连接管理协议)", new List<Function.RmEntry>(), "");
+
+            string cmd;
+            switch (category)
+            {
+                case "gamerules":
+                    if (string.IsNullOrWhiteSpace(target)) return (false, "缺少规则名", new List<Function.RmEntry>(), "");
+                    cmd = $"gamerule {target} {value}";
+                    break;
+                case "allowlist":
+                    if (action == "add") cmd = $"whitelist add {target}";
+                    else if (action == "remove") cmd = $"whitelist remove {target}";
+                    else return (false, "非 RM 实例不支持清空白名单", new List<Function.RmEntry>(), "");
+                    break;
+                case "operators":
+                    if (action == "add") cmd = $"op {target}";
+                    else if (action == "remove") cmd = $"deop {target}";
+                    else return (false, "非 RM 实例不支持清空 OP 名单", new List<Function.RmEntry>(), "");
+                    break;
+                case "bans":
+                    if (action == "add") cmd = string.IsNullOrWhiteSpace(value) ? $"ban {target}" : $"ban {target} {value}";
+                    else if (action == "remove") cmd = $"pardon {target}";
+                    else return (false, "非 RM 实例不支持清空封禁名单", new List<Function.RmEntry>(), "");
+                    break;
+                case "ip_bans":
+                    if (action == "add") cmd = string.IsNullOrWhiteSpace(value) ? $"ban-ip {target}" : $"ban-ip {target} {value}";
+                    else if (action == "remove") cmd = $"pardon-ip {target}";
+                    else return (false, "非 RM 实例不支持清空 IP 封禁名单", new List<Function.RmEntry>(), "");
+                    break;
+                case "server":
+                    if (action == "save") cmd = "save-all";
+                    else if (action == "stop") cmd = "stop";
+                    else if (action == "system_message") { cmd = $"say {value}"; }
+                    else return (false, "非 RM 实例不支持该服务器操作", new List<Function.RmEntry>(), "");
+                    break;
+                default:
+                    return (false, "未知操作类别: " + category, new List<Function.RmEntry>(), "");
+            }
+
+            var (ok, msg) = SendMcCommand(serverKey, cmd);
+            return (ok, msg, new List<Function.RmEntry>(), "");
         }
 
         // ===== 实例日志 API =====
@@ -2420,7 +2968,7 @@ namespace RtCli.Modules.Unit
                 if (!File.Exists(logFile))
                     return (false, "日志文件不存在(logs/latest.log)", "", 0);
 
-                var allLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0));
+                var allLines = File.ReadAllLines(logFile, Encoding.UTF8);
                 var totalLines = allLines.Length;
 
                 string content;
@@ -2444,6 +2992,7 @@ namespace RtCli.Modules.Unit
 
         /// <summary>
         /// 分析实例错误日志(使用 regex_settings 中的正则提取错误)。
+        /// 错误块切分规则统一维护于 ErrorBlockParser(与 ErrorStreamDetector 实时识别同源)。
         /// </summary>
         public static (bool Success, string Message, Dictionary<int, string> Errors)
             AnalyzeInstanceErrors(string serverKey)
@@ -2460,69 +3009,17 @@ namespace RtCli.Modules.Unit
 
                 ContentManager.Initialize();
 
-                var handlerPattern = ContentManager.Regex.Console_Error.Handler;
-                var limit = ContentManager.Regex.Console_Error.Limit;
+                var handlerRegex = ErrorBlockParser.CreateHandlerRegex(ContentManager.Regex.Console_Error.Handler);
+                if (handlerRegex == null)
+                    return (false, "正则表达式配置为空或无效", new Dictionary<int, string>());
 
-                if (string.IsNullOrWhiteSpace(handlerPattern))
-                    return (false, "正则表达式配置为空", new Dictionary<int, string>());
+                var logLines = File.ReadAllLines(logFile, Encoding.UTF8);
+                var blocks = ErrorBlockParser.ParseBlocks(logLines, handlerRegex);
 
-                Regex handlerRegex;
-                try
-                {
-                    handlerRegex = new Regex(handlerPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
-                }
-                catch (Exception ex)
-                {
-                    return (false, $"正则表达式无效: {ex.Message}", new Dictionary<int, string>());
-                }
-
-                var logLines = File.ReadAllLines(logFile, Encoding.GetEncoding(0));
                 var errors = new Dictionary<int, string>();
-                int errorIdx = 0;
-                int matchCount = 0;
-                int startIdx = -1;
-
-                for (int i = 0; i < logLines.Length; i++)
-                {
-                    if (handlerRegex.IsMatch(logLines[i]))
-                    {
-                        if (startIdx < 0)
-                            startIdx = i;
-                        matchCount++;
-
-                        // 每个错误块: 从匹配行开始，直到下一个匹配行或非连续行
-                        var sb = new StringBuilder();
-                        sb.AppendLine(logLines[i]);
-
-                        // 向后收集堆栈跟踪(以空白、at、Caused by 等开头的行)
-                        for (int j = i + 1; j < logLines.Length && j < i + 50; j++)
-                        {
-                            var line = logLines[j];
-                            if (handlerRegex.IsMatch(line))
-                                break;
-                            if (string.IsNullOrWhiteSpace(line) && sb.Length > 0)
-                            {
-                                // 空行可能表示错误块结束，但也可能是格式间隔
-                                // 检查下一行是否也是非匹配行
-                                if (j + 1 < logLines.Length && !handlerRegex.IsMatch(logLines[j + 1]) &&
-                                    !IsStackTraceLine(logLines[j + 1]))
-                                    break;
-                                continue;
-                            }
-                            if (IsStackTraceLine(line) || line.TrimStart().StartsWith("at "))
-                                sb.AppendLine(line);
-                            else
-                                break;
-                        }
-
-                        errorIdx++;
-                        errors[errorIdx] = sb.ToString().TrimEnd();
-                        startIdx = i;
-
-                        if (errors.Count >= limit)
-                            break;
-                    }
-                }
+                int limit = ContentManager.Regex.Console_Error.Limit;
+                for (int i = 0; i < blocks.Count && errors.Count < limit; i++)
+                    errors[i + 1] = blocks[i];
 
                 Output.Log($"实例 {serverKey} 日志分析完成: 共 {errors.Count} 条错误", 1, "Backend");
                 return (true, $"分析完成，共 {errors.Count} 条错误", errors);
@@ -2531,19 +3028,6 @@ namespace RtCli.Modules.Unit
             {
                 return (false, $"分析失败: {ex.Message}", new Dictionary<int, string>());
             }
-        }
-
-        private static bool IsStackTraceLine(string line)
-        {
-            var trimmed = line.TrimStart();
-            return trimmed.StartsWith("at ") ||
-                   trimmed.StartsWith("Caused by:") ||
-                   trimmed.StartsWith("... ") ||
-                   trimmed.StartsWith("java.") ||
-                   trimmed.StartsWith("org.") ||
-                   trimmed.StartsWith("com.") ||
-                   trimmed.StartsWith("net.") ||
-                   trimmed.StartsWith("Suppressed:");
         }
 
         /// <summary>
@@ -2594,11 +3078,91 @@ namespace RtCli.Modules.Unit
                 if (string.IsNullOrWhiteSpace(aiResponse))
                     return (false, "AI分析未返回结果", "");
 
+                // 结果同时回显到 RtCli 控制台(来源 AiAnalyze), 并写入 ai_save.yml 供面板"自动化结果"展示
+                Output.Log($"AI分析结果(实例: {serverKey}):", 1, "AiAnalyze");
+                foreach (string lineText in aiResponse.Replace("\r", "").Split('\n'))
+                    Output.Log(lineText.TrimEnd(), 1, "AiAnalyze");
+                Intelligence.AiAutoRunner.SaveManualResponse(serverKey, sb.ToString(), aiResponse);
+
                 return (true, "AI分析完成", aiResponse);
             }
             catch (Exception ex)
             {
                 return (false, $"AI分析失败: {ex.Message}", "");
+            }
+        }
+
+        /// <summary>
+        /// 基础分析实例错误(对应控制台 .fx base): 将选定错误与 base 规则库正则匹配，返回主题/方案/修复脚本。
+        /// </summary>
+        public static (bool Success, string Message, List<(string Topic, string Solution, string Action, string Matched)> Matches)
+            BaseAnalyzeInstanceErrors(string serverKey, string range)
+        {
+            try
+            {
+                var (analyzeOk, analyzeMsg, errors) = AnalyzeInstanceErrors(serverKey);
+                if (!analyzeOk)
+                    return (false, analyzeMsg, new List<(string, string, string, string)>());
+
+                if (errors.Count == 0)
+                    return (false, "未检测到错误，无需基础分析", new List<(string, string, string, string)>());
+
+                List<int> targetIndices;
+                if (string.IsNullOrWhiteSpace(range) || range == "all")
+                    targetIndices = errors.Keys.ToList();
+                else
+                {
+                    var parsed = ParseErrorRange(range, errors.Keys.ToList());
+                    if (parsed == null || parsed.Count == 0)
+                        return (false, $"无效的范围参数: {range}", new List<(string, string, string, string)>());
+                    targetIndices = parsed;
+                }
+
+                var sb = new StringBuilder();
+                foreach (int idx in targetIndices)
+                {
+                    if (errors.TryGetValue(idx, out var errorText))
+                    {
+                        sb.AppendLine($"[错误 #{idx}]");
+                        sb.AppendLine(errorText);
+                        sb.AppendLine("---");
+                    }
+                }
+                string combined = sb.ToString();
+
+                var baseEntries = ContentManager.GetAllBaseEntries();
+                var matches = new List<(string Topic, string Solution, string Action, string Matched, int Length)>();
+
+                foreach (var entry in baseEntries)
+                {
+                    try
+                    {
+                        var regex = new Regex(entry.Pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
+                        var match = regex.Match(combined);
+                        if (match.Success)
+                        {
+                            string matchedText = match.Value.Length > 200
+                                ? match.Value.Substring(0, 197) + "..."
+                                : match.Value;
+                            matches.Add((entry.Topic, entry.Solution, entry.Action, matchedText, match.Value.Length));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Output.Log($"基础规则 {entry.Topic} 的正则无效: {ex.Message}", 2, "Backend");
+                    }
+                }
+
+                var ordered = matches.OrderByDescending(m => m.Length)
+                    .Select(m => (m.Topic, m.Solution, m.Action, m.Matched))
+                    .ToList();
+
+                Output.Log($"实例 {serverKey} 基础分析完成: 匹配 {ordered.Count} 条规则", 1, "Backend");
+                return (true, ordered.Count == 0 ? "未匹配到基础规则" : $"基础分析完成，匹配 {ordered.Count} 条规则", ordered);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"基础分析失败: {ex.Message}", new List<(string, string, string, string)>());
             }
         }
 
@@ -2694,13 +3258,17 @@ namespace RtCli.Modules.Unit
                 EventBus.Subscribe<PlayerChatEvent>(OnPlayerChat);
                 EventBus.Subscribe<PlayerSetModeEvent>(OnPlayerSetMode);
                 EventBus.Subscribe<CustomPlayerEvent>(OnCustomPlayer);
+                EventBus.Subscribe<PlayerOpEvent>(OnPlayerOp);
+                EventBus.Subscribe<PlayerBanEvent>(OnPlayerBan);
 
                 _flushTimer = new Timer(_ => FlushAll(), null, FlushIntervalMs, FlushIntervalMs);
                 Output.Log("玩家事件记录器已启动", 1, "PlayerEventRecorder");
             }
         }
 
-        private static string CurrentServer => Config.App.CurrentServer ?? "";
+        /// <summary>事件归属实例: 优先取当前日志流的实例上下文, 否则回退到当前选中实例</summary>
+        private static string CurrentServer =>
+            Function.InstanceContext.Current ?? Config.App.CurrentServer ?? "";
 
         private static void Buffer(string eventType, string playerName, string triggerTime, string detail)
         {
@@ -2746,6 +3314,16 @@ namespace RtCli.Modules.Unit
         {
             var detail = string.Join("; ", e.Parameters.Select(p => $"{p.Key}={p.Value}"));
             Buffer(e.EventName, e.PlayerName, e.PlayerTriggerTime, detail);
+        }
+
+        private static void OnPlayerOp(PlayerOpEvent e) =>
+            Buffer(e.Granted ? "op" : "deop", e.PlayerName, e.PlayerTriggerTime, e.Source ?? "");
+
+        private static void OnPlayerBan(PlayerBanEvent e)
+        {
+            bool ip = e.BanType == "ip_ban";
+            string type = e.Banned ? (ip ? "ip_ban" : "ban") : (ip ? "ip_unban" : "unban");
+            Buffer(type, e.Target, e.PlayerTriggerTime, e.Reason ?? "");
         }
 
         /// <summary>将内存缓冲的事件批量写入磁盘</summary>
@@ -2812,6 +3390,14 @@ namespace RtCli.Modules.Unit
                 EventBus.Subscribe<ServerCrashEvent>(OnServerCrash);
                 EventBus.Subscribe<AutoRestartEvent>(OnAutoRestart);
                 EventBus.Subscribe<ServerStopUnresponsiveEvent>(OnStopUnresponsive);
+                EventBus.Subscribe<PlayerOpEvent>(OnPlayerOp);
+                EventBus.Subscribe<PlayerBanEvent>(OnPlayerBan);
+                // 扩展加载/卸载与配置重载(全局事件, 无实例标识时回退到当前实例/系统)
+                EventBus.Subscribe<ExtensionLoadEvent>(OnExtensionLoad);
+                EventBus.Subscribe<ExtensionUnloadEvent>(OnExtensionUnload);
+                EventBus.Subscribe<ConfigReloadEvent>(OnConfigReload);
+                // AI 自动化活动(全局事件): 任务开始/完成/失败、工具调用
+                EventBus.Subscribe<AiActivityEvent>(OnAiActivity);
 
                 _flushTimer = new Timer(_ => FlushAll(), null, FlushIntervalMs, FlushIntervalMs);
                 Output.Log("事件板记录器已启动", 1, "BoardEventRecorder");
@@ -2826,14 +3412,50 @@ namespace RtCli.Modules.Unit
                 : key;
         }
 
-        private static void Buffer(string eventType, string instanceId, string title, string detail)
+        /// <summary>
+        /// 全局事件的实例标识: 扩展加载/卸载、配置重载、面板指令等不属于任何单个实例。
+        /// 面板据此把这类事件单列成「全局」分组, 而不是并到当前实例名下。
+        /// </summary>
+        public const string GlobalInstanceId = "*";
+
+        /// <summary>
+        /// 事件归属判定。
+        /// 全局事件(GlobalInstanceId)原样保留, 绝不回退到"当前实例" —— 否则扩展加载这类
+        /// 与实例无关的事件会被错记到当前实例名下(此前事件板把全局事件显示成实例事件就是此因)。
+        /// 只有空标识才回退: 先当前实例, 再 system。
+        /// </summary>
+        internal static string ResolveEventInstanceId(string? instanceId)
         {
-            if (string.IsNullOrEmpty(instanceId)) return;
+            if (instanceId == GlobalInstanceId) return GlobalInstanceId;
+            if (string.IsNullOrEmpty(instanceId)) instanceId = Config.App.CurrentServer;
+            if (string.IsNullOrEmpty(instanceId)) instanceId = "system";
+            return instanceId;
+        }
+
+        /// <summary>记录一条全局事件(不属于任何实例)</summary>
+        private static void BufferGlobal(string eventType, string title, string detail)
+            => Buffer(eventType, GlobalInstanceId, title, detail);
+
+        /// <summary>
+        /// 记录一条普通操作事件(归属于指定实例)。
+        /// 供文件/备份/插件模组等面板与命令通道操作调用; 标题与详情由调用方按 i18n 组装。
+        /// </summary>
+        public static void Record(string eventType, string instanceId, string title, string detail = "")
+            => Buffer(eventType, instanceId, title, detail);
+
+        private static void Buffer(string eventType, string? instanceId, string title, string detail)
+        {
+            instanceId = ResolveEventInstanceId(instanceId);
+
+            string instanceName = instanceId == GlobalInstanceId
+                ? I18n.Get("board_event_global")
+                : ResolveInstanceName(instanceId);
+
             var entry = new BoardEventEntry
             {
                 EventType = eventType,
                 InstanceId = instanceId,
-                InstanceName = ResolveInstanceName(instanceId),
+                InstanceName = instanceName,
                 Title = title,
                 Detail = detail ?? "",
                 RecordedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss")
@@ -2869,6 +3491,79 @@ namespace RtCli.Modules.Unit
                         ? I18n.Get("board_event_unresponsive_slow")
                         : I18n.Get("board_event_unresponsive_silent")));
 
+        private static void OnPlayerOp(PlayerOpEvent e)
+        {
+            string by = string.IsNullOrWhiteSpace(e.Source) ? "" : I18n.Get("board_event_op_by", e.Source);
+            Buffer(e.Granted ? "op" : "deop", Function.InstanceContext.Current,
+                I18n.Get(e.Granted ? "board_event_op_added" : "board_event_op_removed"),
+                I18n.Get("board_event_op_detail", e.PlayerName, by));
+        }
+
+        private static void OnPlayerBan(PlayerBanEvent e)
+        {
+            bool ip = e.BanType == "ip_ban";
+            string type = e.Banned ? (ip ? "ip_ban" : "ban") : (ip ? "ip_unban" : "unban");
+            string titleKey = e.Banned
+                ? (ip ? "board_event_ip_ban_added" : "board_event_ban_added")
+                : (ip ? "board_event_ip_ban_removed" : "board_event_ban_removed");
+            string reason = string.IsNullOrWhiteSpace(e.Reason) ? "" : I18n.Get("board_event_ban_reason", e.Reason);
+            Buffer(type, Function.InstanceContext.Current, I18n.Get(titleKey),
+                I18n.Get("board_event_ban_detail", e.Target, reason));
+        }
+
+        private static void OnExtensionLoad(ExtensionLoadEvent e) =>
+            BufferGlobal("plugin_load",
+                I18n.Get("board_event_plugin_load"),
+                I18n.Get("board_event_plugin_load_detail", e.ExtensionName,
+                    string.IsNullOrWhiteSpace(e.Version) ? I18n.Get("board_event_plugin_no_version") : e.Version));
+
+        private static void OnExtensionUnload(ExtensionUnloadEvent e) =>
+            BufferGlobal("plugin_unload",
+                I18n.Get("board_event_plugin_unload"),
+                I18n.Get("board_event_plugin_unload_detail", e.ExtensionName));
+
+        /// <summary>AI 自动化活动 -> 事件板(全局事件, 不属于任何实例)。</summary>
+        private static void OnAiActivity(AiActivityEvent e)
+        {
+            string type = (e.Kind ?? "") switch
+            {
+                "task_start" => "ai_task_start",
+                "task_done" => "ai_task_done",
+                "task_fail" => "ai_task_fail",
+                "tool_call" => "ai_tool_call",
+                "runner" => "ai_runner",
+                _ => "ai_activity"
+            };
+            string title = (e.Kind ?? "") switch
+            {
+                "task_start" => "AI 任务开始",
+                "task_done" => "AI 任务完成",
+                "task_fail" => "AI 任务失败",
+                "tool_call" => "AI 调用工具",
+                "runner" => "AI 自动化状态",
+                _ => "AI 活动"
+            };
+            string detail = e.TaskKey.Length > 0 ? $"[{e.TaskKey}] {e.Detail}" : e.Detail;
+            BufferGlobal(type, title, detail);
+        }
+
+        private static void OnConfigReload(ConfigReloadEvent e) =>
+            BufferGlobal("config_reload",
+                I18n.Get("board_event_config_reload"),
+                I18n.Get("board_event_config_reload_detail"));
+
+        /// <summary>
+        /// 记录一条面板下发的指令(供 Backend.DispatchCommand 调用)。
+        /// 标题为指令原文, 详情标注来源为面板; 事件板读取类调用不经过命令分发, 不会在此刷屏。
+        /// </summary>
+        public static void RecordPanelCommand(string command)
+        {
+            if (string.IsNullOrWhiteSpace(command)) return;
+            BufferGlobal("panel_command",
+                command.Trim(),
+                I18n.Get("board_event_panel_command_detail"));
+        }
+
         /// <summary>将内存缓冲的事件批量写入磁盘</summary>
         private static void FlushAll()
         {
@@ -2885,5 +3580,51 @@ namespace RtCli.Modules.Unit
                 catch (Exception ex) { Output.Log($"写入事件板失败: {ex.Message}", 3, "BoardEventRecorder"); }
             }
         }
+    }
+
+    /// <summary>AI 技能导入包装(YAML 对象形式: skills: [...])</summary>
+    public class AiSkillImportWrapper
+    {
+        public List<AiSkill> Skills { get; set; } = new List<AiSkill>();
+    }
+
+    /// <summary>AI 工作流运行参数(对应 ai_settings.yml 中 ServerAutoAi 的连接/运行字段)</summary>
+    public class AiRuntimeView
+    {
+        /// <summary>系统提示词(总)</summary>
+        public string Prompt { get; set; } = "";
+
+        /// <summary>AI输出最大token数</summary>
+        public int MaxTokens { get; set; }
+
+        /// <summary>API地址(留空复用 Console_Error 配置)</summary>
+        public string ApiEndpoint { get; set; } = "";
+
+        /// <summary>API密钥(仅提交时使用; 回显时由面板掩码展示)</summary>
+        public string ApiKey { get; set; } = "";
+
+        /// <summary>模型名称</summary>
+        public string Model { get; set; } = "";
+
+        /// <summary>生成温度</summary>
+        public double Temperature { get; set; }
+
+        /// <summary>请求超时(秒)</summary>
+        public int RequestTimeoutSeconds { get; set; }
+
+        /// <summary>异常时是否自动重连</summary>
+        public bool RetryOnError { get; set; }
+
+        /// <summary>最大重试次数</summary>
+        public int RetryCount { get; set; }
+
+        /// <summary>是否保存AI回复(上下文缓存)</summary>
+        public bool SaveResponse { get; set; }
+
+        /// <summary>上下文缓存最大条数</summary>
+        public int ContextCacheSize { get; set; }
+
+        /// <summary>工具调用最大轮次</summary>
+        public int MaxToolRounds { get; set; }
     }
 }

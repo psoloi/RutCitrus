@@ -57,8 +57,8 @@ namespace RtCli.Modules.Unit
         public bool EnableAutoTips { get; set; } = true;
         public List<string> DonePatterns { get; set; } = new List<string>
         {
+            // s 可选: 新版(1.20+)为 Done (3.456s)!, 旧版为 Done (3.456)! — 一条即可覆盖
             @"Done \([\d.]+s?\)!",
-            @"Done \([\d.]+\)! For help",
         };
 
         // 自动备份
@@ -84,7 +84,7 @@ namespace RtCli.Modules.Unit
 
         public List<string> PopularVersions { get; set; } = new List<string>
         {
-            "26.1", "26.2",
+            "26.1", "26.2", "26.3",
             "1.21.11", "1.21.8", "1.21.4", "1.21.3", "1.21.1", "1.21",
             "1.20.6", "1.20.4", "1.20.2", "1.20.1",
             "1.19.4", "1.19.2",
@@ -116,39 +116,53 @@ namespace RtCli.Modules.Unit
 
         // 各事件的正则表达式列表（支持多个，匹配任意一个）
         // 使用命名组提取参数: player_name, player_trigger_time, player_ip, player_lost_reason, player_mode
+        // 日志前缀锚定行首，兼容三种主流格式与毫秒时间戳——
+        //   vanilla/Spigot: [12:34:56] [Server thread/INFO]: ...
+        //   Paper:          [12:34:56 INFO]: ...
+        //   Forge/NeoForge: [12:34:56] [Server thread/INFO] [net.minecraft.../]: ...
+        // 锚定行首可避免玩家在聊天里伪造 "Steve joined the game" 触发事件
+        private const string LogPrefix = @"^\s*\[\s*(?<player_trigger_time>\d{1,2}:\d{2}:\d{2}(?:[.,]\d{1,3})?)[^\]]*\](?:\s*\[[^\]]+\])*\s*:";
+
+        // 玩家名: 允许基岩版(Floodgate 的 .Name)、点号与特殊字符; 排除 <>[]" 等聊天/命令包裹符
+        private const string PlayerName = @"(?<player_name>[^\s<>\[\]""']+)";
+
         public List<string> PlayerJoin { get; set; } = new List<string>
         {
-            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+joined the game"
+            LogPrefix + @"\s+" + PlayerName + @"\s+joined the game\s*$"
         };
 
         public List<string> Connect { get; set; } = new List<string>
         {
-            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\[/(?<player_ip>[\d\.]+):\d+\]\s+logged in"
+            // player_ip 同时兼容 IPv4 与 IPv6(vanilla 将 IPv6 完整展开, 端口在末个冒号后, 由回溯取端口)
+            LogPrefix + @"\s+" + PlayerName + @"\[/(?<player_ip>[\da-fA-F\.:]+):\d+\]\s+logged in\s*$"
         };
 
         public List<string> Lost { get; set; } = new List<string>
         {
-            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+lost connection(?<player_lost_reason>.*)"
+            LogPrefix + @"\s+" + PlayerName + @"\s+lost connection(?<player_lost_reason>.*)$"
         };
 
         public List<string> Leaves { get; set; } = new List<string>
         {
-            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+left the game"
+            LogPrefix + @"\s+" + PlayerName + @"\s+left the game\s*$"
         };
 
         public List<string> Command { get; set; } = new List<string>
         {
-            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+issued server command:\s*(?<command>.*)"
+            LogPrefix + @"\s+" + PlayerName + @"\s+issued server command:\s*(?<command>.*)$"
         };
 
         public List<string> Chat { get; set; } = new List<string>
         {
-            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+<(?<player_name>\w+)>\s*(?<message>.*)"
+            LogPrefix + @"\s+<(?<player_name>[^>]{1,64})>\s?(?<message>.*)$"
         };
 
         public List<string> Setmode { get; set; } = new List<string>
         {
-            @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+Set own game mode to\s+(?<player_mode>\w+ Mode)"
+            // 自身改模式(消息里没有玩家名)
+            LogPrefix + @"\s+Set own game mode to\s+(?<player_mode>[^.]+?)\.?\s*$",
+            // 修改他人模式(如 /gamemode creative Steve)
+            LogPrefix + @"\s+Set\s+" + PlayerName + @"'s\s+game mode to\s+(?<player_mode>[^.]+?)\.?\s*$"
         };
 
         // 自定义事件: 键名=事件名, 值=配置(patterns+parameters)
@@ -158,10 +172,28 @@ namespace RtCli.Modules.Unit
             {
                 Patterns = new List<string>
                 {
-                    @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+moved too quickly!\s+(?<speed>[\d.,]+)",
-                    @"\[(?<player_trigger_time>[\d:]+)\][^\]]*:\s+(?<player_name>\w+)\s+moved wrongly!"
+                    LogPrefix + @"\s+" + PlayerName + @"\s+moved too quickly!\s+(?<speed>-?[\d.,]+)",
+                    LogPrefix + @"\s+" + PlayerName + @"\s+moved wrongly!"
                 },
                 Parameters = new List<string> { "speed" }
+            },
+            ["PlayerKick"] = new CustomPlayerEventConfig
+            {
+                Patterns = new List<string>
+                {
+                    LogPrefix + @"\s+" + PlayerName + @"\s+was kicked by\s+(?<actor>.+?):\s*(?<reason>.*)$",
+                    LogPrefix + @"\s+" + PlayerName + @"\s+left the game \((?<reason>[^)]*)\)\s*$"
+                },
+                Parameters = new List<string> { "reason", "actor" }
+            },
+            ["PlayerDeath"] = new CustomPlayerEventConfig
+            {
+                Patterns = new List<string>
+                {
+                    LogPrefix + @"\s+" + PlayerName + @"\s+was (?:slain|shot|killed|blown up) by\s+(?<killer>.+?)\s*$",
+                    LogPrefix + @"\s+" + PlayerName + @"\s+(?:drowned|blew up|burned to death|fell from a high place|died)\s*$"
+                },
+                Parameters = new List<string> { "killer" }
             }
         };
     }
@@ -271,6 +303,16 @@ namespace RtCli.Modules.Unit
 
             App = LoadYamlConfig<AppConfig>(configPath, new AppConfig(), "config.yml");
 
+            // YAML 中「键:」这类空值会被反序列化为 null, 统一兜底, 避免后续 .Contains/.Any 触发 NullReferenceException
+            App.HideConsoleServers ??= new List<string>();
+            App.ConsoleStripPatterns ??= new List<string>();
+            App.DonePatterns ??= new List<string>();
+            App.PopularVersions ??= new List<string>();
+            App.AutoBackupServers ??= new List<string>();
+            App.AutoBackupIgnorePaths ??= new List<string>();
+            App.AutoBackupIgnorePatterns ??= new List<string>();
+            App.ServerList ??= new Dictionary<string, ServerEntry> { ["default"] = new ServerEntry() };
+
             // 确保当前服务端标识有效
             if (!App.ServerList.ContainsKey(App.CurrentServer))
             {
@@ -284,6 +326,55 @@ namespace RtCli.Modules.Unit
             }
         }
 
+
+        // config.yml 逐键注释表(单一来源): 由 YamlCommentInjector 注入序列化结果,
+        // 新增配置项只需在此登记一行注释, 不再写 if 分支; 键名与 YAML 序列化名一致(下划线风格)
+        private static readonly YamlCommentInjector.Comment[] ConfigKeyComments =
+        {
+            new("check_java", "# 是否检查 Java 运行时环境", BlankLineBefore: false),
+            new("check_dot_net", "# 是否检查 .NET 运行时环境"),
+            new("check_python", "# 是否检查 Python 运行时环境(推荐Python 3及以上)"),
+            new("check_os_bit", "# 是否检查操作系统位数 (32位/64位)"),
+            new("check_update", "# 是否在启动时检查版本更新"),
+            new("current_server", "# 当前选中的服务端标识(对应server_list中的键名)"),
+            new("grpc_port", "# gRPC管理端口（RtPanel面板连接此端口，全局共享）"),
+            new("grpc_auth_key", "# gRPC认证密钥（RtPanel登录时需输入此密钥，留空则自动生成）"),
+            new("bridge_bind", "# Bridge REST API 监听地址（默认 localhost 仅本机，\"+\" 为所有网卡）"),
+            new("server_list", "# 服务端列表(每个键为服务端标识，值为服务端配置)"),
+            new("server_name", "# 服务器名称", BlankLineBefore: false),
+            new("analyzer_mode", "# MC控制台模式 (Run/Rcon/RR/RM)"),
+            new("work_path", "# MC服务端工作目录"),
+            new("run_server_flags", "# JVM启动参数"),
+            new("java_path", "# Java可执行文件路径(留空则使用系统默认java)"),
+            new("auto_agree_eula", "# 自动同意Minecraft EULA(全局设置, 请确认你已经阅读并同意 https://www.minecraft.net/eula)"),
+            new("start_run_ai", "# 启动程序后自动开启MC服务端并启动AI自动化管理(.ai命令功能)"),
+            new("enable_auto_tips", "# 是否开启自动提示功能(监控日志自动显示问题提示)"),
+            new("done_patterns", "# 服务端启动完成(Done)消息的正则表达式列表(留空则不提示)"),
+            new("rcon_host", "# RCON服务地址"),
+            new("rcon_port", "# RCON服务端口"),
+            new("rcon_password", "# RCON密码"),
+            new("management_host", "# 服务端管理协议地址(RM模式, 需MC 1.21.9+)"),
+            new("management_port", "# 服务端管理协议端口(0=自动分配)"),
+            new("management_secret", "# 服务端管理协议认证令牌(40位字母数字)"),
+            new("management_tls_enabled", "# 是否启用TLS连接管理协议"),
+            new("auto_restart_max_retries", "# 自动重启最大尝试次数(0=无限次)"),
+            new("auto_restart", "# 服务端崩溃后是否自动重启"),
+            new("auto_backup_enabled", "# 是否开启自动备份"),
+            new("auto_backup_interval_minutes", "# 备份间隔(分钟)"),
+            new("auto_backup_servers", "# 需要备份的服务端标识列表(为空则备份所有)"),
+            new("auto_backup_path", "# 备份保存路径(留空则使用Content/Data/backup)"),
+            new("auto_backup_file_name_pattern", "# 备份文件名模式({time}=时间, {server}=服务端标识)"),
+            new("auto_backup_little_enabled", "# 是否开启Little增量备份(首次完整备份，后续仅备份差异文件)"),
+            new("auto_backup_little_force_binary", "# 是否强制备份大小不同的二进制文件(jar/dat等，否则仅备份文本差异)"),
+            new("auto_backup_ignore_paths", "# 忽略备份的目录路径(相对于工作目录，如 logs、crash-reports)"),
+            new("auto_backup_ignore_patterns", "# 忽略备份的文件正则表达式列表(如 \\.log$、\\.log\\.gz$)"),
+            new("hide_console_servers", "# 隐藏指定服务端标识的控制台消息(为空则不隐藏)"),
+            new("console_strip_patterns", "# 控制台显示过滤正则表达式列表(匹配的内容将从控制台显示中移除，不影响日志和广播)"),
+            new("popular_versions", "# 引导中显示的流行版本列表，这些版本基本支持"),
+            new("skip_select", "# 跳过模式选择"),
+            new("player_event", "# 玩家事件监听设置(监听控制台消息并发布事件, 正则中使用命名组提取参数)"),
+            new("debug", "# 调试模式 (No)"),
+        };
 
         private static void SaveConfig(string configPath)
         {
@@ -300,65 +391,9 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("#  说明:");
             sb.AppendLine("#    该程序配置文件如果不清晰，未来将会考虑Wiki制作");
             sb.AppendLine("#    如果你不知道那些项有什么作用，请考虑使用RtPanel来设置");
-            sb.AppendLine("#    修改配置后可使用 .cfg reload 热重载生效");
+            sb.AppendLine("#    修改配置后可使用 .cfg reload 热重载生效(各配置项说明见对应键上方注释)");
             sb.AppendLine("#");
-            sb.AppendLine("#  配置项说明:");
-            sb.AppendLine("#    check_java      - 是否在启动时检查 Java 运行时环境 (true/false)");
-            sb.AppendLine("#    check_dot_net   - 是否在启动时检查 .NET 运行时环境 (true/false)");
-            sb.AppendLine("#    check_python    - 是否在启动时检查 Python 运行时环境 (true/false)");
-            sb.AppendLine("#    check_os_bit    - 是否检查操作系统位数 (true/false)");
-            sb.AppendLine("#    check_update    - 是否在启动时检查版本更新 (true/false)");
-            sb.AppendLine("#    skip_select     - 是否跳过模式选择界面直接进入默认模式 (true/false)");
-            sb.AppendLine("#    current_server  - 当前选中的服务端标识(对应server_list中的键名)");
-            sb.AppendLine("#    grpc_port       - gRPC管理端口（RtPanel面板连接此端口，全局共享）");
-            sb.AppendLine("#    grpc_auth_key   - gRPC认证密钥（RtPanel登录时需输入此密钥，留空则自动生成）");
-            sb.AppendLine("#    bridge_bind     - Bridge REST API 监听地址（默认 localhost 仅本机，\"+\" 为所有网卡）");
-            sb.AppendLine("#");
-            sb.AppendLine("#  server_list 中的每个服务端配置:");
-            sb.AppendLine("#    server_name       - 服务器名称，用于标识");
-            sb.AppendLine("#    analyzer_mode     - MC控制台模式:");
-            sb.AppendLine("#                          Run: 启动MC服务端作为子进程，通过stdout获取控制台，stdin发送命令");
-            sb.AppendLine("#                          Rcon: 不启动服务端，仅通过RCON发送命令并显示返回信息");
-            sb.AppendLine("#                          RR: (Run+Rcon) 启动服务端读取stdout控制台，通过RCON发送命令");
-            sb.AppendLine("#                          RM: (Run+Management) 启动服务端通过日志文件读取控制台，stdin发送命令");
-            sb.AppendLine("#                              RM模式可使用服务端管理协议(MC 1.21.9+, 需开启management-server-enabled)");
-            sb.AppendLine("#    work_path         - MC服务端的工作目录路径");
-            sb.AppendLine("#    run_server_flags  - 启动MC服务端的JVM参数");
-            sb.AppendLine("#    java_path         - Java可执行文件路径(留空则使用系统默认java)");
-            sb.AppendLine("#    rcon_host         - RCON服务地址");
-            sb.AppendLine("#    rcon_port         - RCON服务端口");
-            sb.AppendLine("#    rcon_password     - RCON密码");
-            sb.AppendLine("#    management_host   - 服务端管理协议地址(RM模式, 需MC 1.21.9+)");
-            sb.AppendLine("#    management_port   - 服务端管理协议端口(0=自动, RM模式)");
-            sb.AppendLine("#    management_secret - 服务端管理协议认证令牌(40位字母数字)");
-            sb.AppendLine("#    management_tls_enabled - 是否启用TLS连接管理协议");
-            sb.AppendLine("#    auto_restart      - 服务端崩溃后是否自动重启 (true/false)");
-            sb.AppendLine("#    auto_restart_max_retries - 自动重启最大尝试次数 (0=无限次)");
-            sb.AppendLine("#");
-            sb.AppendLine("#  自动备份配置:");
-            sb.AppendLine("#    auto_backup_enabled - 是否开启自动备份 (true/false)");
-            sb.AppendLine("#    auto_backup_interval_minutes - 备份间隔(分钟)");
-            sb.AppendLine("#    auto_backup_servers - 需要备份的服务端标识列表(为空则备份所有)");
-            sb.AppendLine("#    auto_backup_path - 备份保存路径(留空则使用Content/Data/backup)");
-            sb.AppendLine("#    auto_backup_file_name_pattern - 备份文件名模式({time}=时间, {server}=服务端标识)");
-            sb.AppendLine("#    auto_backup_little_enabled - 是否开启Little增量备份 (true/false)");
-            sb.AppendLine("#    auto_backup_little_force_binary - 是否强制备份大小不同的二进制文件 (true/false)");
-            sb.AppendLine("#    auto_backup_ignore_paths - 忽略备份的目录路径(相对于工作目录)");
-            sb.AppendLine("#    auto_backup_ignore_patterns - 忽略备份的文件正则表达式列表");
-            sb.AppendLine("#");
-            sb.AppendLine("#  隐藏控制台消息:");
-            sb.AppendLine("#    hide_console_servers - 隐藏指定服务端标识的控制台消息(为空则不隐藏)");
-            sb.AppendLine("#");
-            sb.AppendLine("#  控制台显示过滤:");
-            sb.AppendLine("#    console_strip_patterns - 正则表达式列表，匹配的内容将从控制台显示中移除");
-            sb.AppendLine("#                              (仅影响控制台显示，不影响日志文件记录和gRPC广播)");
-            sb.AppendLine("#                              默认移除MC日志行首时间戳，如 [12:34:56] ... 中的 [12:34:56] ");
-            sb.AppendLine("#");
-            sb.AppendLine("#  EULA设置:");
-            sb.AppendLine("#    auto_agree_eula - 自动同意Minecraft EULA (true/false, 全局设置)");
-            sb.AppendLine("#    start_run_ai    - 启动程序后自动开启MC服务端并启动AI自动化管理 (true/false)");
-            sb.AppendLine("#");
-            sb.AppendLine("#  玩家事件监听 (player_event):");
+            sb.AppendLine("#  玩家事件监听 (player_event) 子项说明:");
             sb.AppendLine("#    enabled  - 是否启用控制台消息监听并发布玩家事件 (true/false)");
             sb.AppendLine("#    ticks    - 每次监听的延迟(ms, 推荐10, 人数越多建议越小)");
             sb.AppendLine("#    player_join  - 玩家加入事件正则列表(传递: player_name, player_trigger_time)");
@@ -377,221 +412,7 @@ namespace RtCli.Modules.Unit
             sb.AppendLine("# ==============================================================================");
             sb.AppendLine();
 
-            var lines = yaml.Split('\n');
-            foreach (var line in lines)
-            {
-                var trimmedLine = line.Trim();
-                if (trimmedLine.StartsWith("check_java:"))
-                {
-                    sb.AppendLine("# 是否检查 Java 运行时环境");
-                }
-                else if (trimmedLine.StartsWith("check_dot_net:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否检查 .NET 运行时环境");
-                }
-                else if (trimmedLine.StartsWith("check_python:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否检查 Python 运行时环境(推荐Python 3及以上)");
-                }
-                else if (trimmedLine.StartsWith("check_os_bit:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否检查操作系统位数 (32位/64位)");
-                }
-                else if (trimmedLine.StartsWith("check_update:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否在启动时检查版本更新");
-                }
-                else if (trimmedLine.StartsWith("current_server:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 当前选中的服务端标识(对应server_list中的键名)");
-                }
-                else if (trimmedLine.StartsWith("grpc_port:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# gRPC管理端口（RtPanel面板连接此端口，全局共享）");
-                }
-                else if (trimmedLine.StartsWith("grpc_auth_key:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# gRPC认证密钥（RtPanel登录时需输入此密钥，留空则自动生成）");
-                }
-                else if (trimmedLine.StartsWith("server_list:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 服务端列表(每个键为服务端标识，值为服务端配置)");
-                }
-                else if (trimmedLine.StartsWith("server_name:"))
-                {
-                    sb.AppendLine("# 服务器名称");
-                }
-                else if (trimmedLine.StartsWith("analyzer_mode:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# MC控制台模式 (Run/Rcon/RR/RM)");
-                }
-                else if (trimmedLine.StartsWith("work_path:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# MC服务端工作目录");
-                }
-                else if (trimmedLine.StartsWith("run_server_flags:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# JVM启动参数");
-                }
-                else if (trimmedLine.StartsWith("java_path:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# Java可执行文件路径(留空则使用系统默认java)");
-                }
-                else if (trimmedLine.StartsWith("auto_agree_eula:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 自动同意Minecraft EULA(全局设置, 请确认你已经阅读并同意 https://www.minecraft.net/eula)");
-                }
-                else if (trimmedLine.StartsWith("start_run_ai:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 启动程序后自动开启MC服务端并启动AI自动化管理(.ai命令功能)");
-                }
-                else if (trimmedLine.StartsWith("enable_auto_tips:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否开启自动提示功能(监控日志自动显示问题提示)");
-                }
-                else if (trimmedLine.StartsWith("done_patterns:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 服务端启动完成(Done)消息的正则表达式列表(留空则不提示)");
-                }
-                else if (trimmedLine.StartsWith("rcon_host:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# RCON服务地址");
-                }
-                else if (trimmedLine.StartsWith("rcon_port:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# RCON服务端口");
-                }
-                else if (trimmedLine.StartsWith("rcon_password:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# RCON密码");
-                }
-                else if (trimmedLine.StartsWith("management_host:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 服务端管理协议地址(RM模式, 需MC 1.21.9+)");
-                }
-                else if (trimmedLine.StartsWith("management_port:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 服务端管理协议端口(0=自动分配)");
-                }
-                else if (trimmedLine.StartsWith("management_secret:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 服务端管理协议认证令牌(40位字母数字)");
-                }
-                else if (trimmedLine.StartsWith("management_tls_enabled:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否启用TLS连接管理协议");
-                }
-                else if (trimmedLine.StartsWith("auto_restart_max_retries:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 自动重启最大尝试次数(0=无限次)");
-                }
-                else if (trimmedLine.StartsWith("auto_restart:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 服务端崩溃后是否自动重启");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_enabled:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否开启自动备份");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_interval_minutes:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 备份间隔(分钟)");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_servers:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 需要备份的服务端标识列表(为空则备份所有)");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_path:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 备份保存路径(留空则使用Content/Data/backup)");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_file_name_pattern:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 备份文件名模式({time}=时间, {server}=服务端标识)");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_little_enabled:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否开启Little增量备份(首次完整备份，后续仅备份差异文件)");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_little_force_binary:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 是否强制备份大小不同的二进制文件(jar/dat等，否则仅备份文本差异)");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_ignore_paths:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 忽略备份的目录路径(相对于工作目录，如 logs、crash-reports)");
-                }
-                else if (trimmedLine.StartsWith("auto_backup_ignore_patterns:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 忽略备份的文件正则表达式列表(如 \\.log$、\\.log\\.gz$)");
-                }
-                else if (trimmedLine.StartsWith("hide_console_servers:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 隐藏指定服务端标识的控制台消息(为空则不隐藏)");
-                }
-                else if (trimmedLine.StartsWith("console_strip_patterns:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 控制台显示过滤正则表达式列表(匹配的内容将从控制台显示中移除，不影响日志和广播)");
-                }
-                else if (trimmedLine.StartsWith("popular_versions:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 引导中显示的流行版本列表，这些版本基本支持");
-                }
-                else if (trimmedLine.StartsWith("skip_select"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 跳过模式选择");
-                }
-                else if (trimmedLine.StartsWith("player_event:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 玩家事件监听设置(监听控制台消息并发布事件, 正则中使用命名组提取参数)");
-                }
-                else if (trimmedLine.StartsWith("debug:"))
-                {
-                    sb.AppendLine();
-                    sb.AppendLine("# 调试模式 (No)");
-                }
-
-                sb.AppendLine(line.TrimEnd('\r'));
-            }
+            sb.Append(YamlCommentInjector.Inject(yaml, YamlCommentInjector.Section.Default(ConfigKeyComments)));
 
             AtomicFile.WriteAllText(configPath, sb.ToString());
         }
@@ -611,7 +432,8 @@ namespace RtCli.Modules.Unit
             // 若AI自动化管理正在运行，则重载任务配置
             if (Intelligence.AiAutoRunner.IsRunning)
             {
-                try { Intelligence.AiAutoRunner.Reload(); } catch { }
+                try { Intelligence.AiAutoRunner.Reload(); }
+                catch (Exception ex) { Output.Debug(ex, "重载AI任务配置失败", "Config"); }
             }
 
             Output.Log(I18n.Get("conf_reload_done"), 1, "Config");
@@ -748,7 +570,7 @@ namespace RtCli.Modules.Unit
             }
 
             try { Directory.Delete(path, false); }
-            catch { }
+            catch (Exception ex) { Output.Debug(ex, $"删除目录失败: {path}", "Config"); }
         }
 
         private static string GenerateAuthKey()
@@ -770,27 +592,47 @@ namespace RtCli.Modules.Unit
     /// </summary>
     public static class AtomicFile
     {
+        /// <summary>统一使用 UTF-8 无 BOM: MC/Java 侧 Properties.load(InputStream) 与 Gson 对 BOM 敏感。</summary>
+        public static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
         /// <summary>
         /// 原子写入文本文件。目标已存在时使用 File.Replace 原子替换(保留原文件内容直到替换成功)；
         /// 平台不支持 Replace 时回退为覆盖式 Move。
+        /// keepBackup=true 时把替换前的旧文件保留为 &lt;path&gt;.bak，用于文件损坏后恢复。
         /// </summary>
-        public static void WriteAllText(string path, string content, Encoding? encoding = null)
+        public static void WriteAllText(string path, string content, Encoding? encoding = null, bool keepBackup = false)
         {
-            encoding ??= Encoding.UTF8;
+            // 显式传入 Encoding.UTF8 时其 Preamble 带 BOM, 这里统一归一化为无 BOM
+            encoding ??= Utf8NoBom;
+            if (encoding is UTF8Encoding)
+                encoding = Utf8NoBom;
 
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
             var tmpPath = path + ".tmp";
-            File.WriteAllText(tmpPath, content, encoding);
+            // 用 WriteThrough + Flush(true) 强制刷盘, 确保数据真正写入磁盘后再原子替换;
+            // 否则断电/崩溃(尤其 NTFS 延迟写)可能留下全 0 或半截文件, 导致下次读取时 JSON 解析失败。
+            using (var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            using (var sw = new StreamWriter(fs, encoding))
+            {
+                sw.Write(content);
+                sw.Flush();
+                fs.Flush(true);
+            }
 
             try
             {
                 if (File.Exists(path))
-                    File.Replace(tmpPath, path, null);
+                {
+                    // 保留旧文件为 .bak(原子替换同时产生备份), 便于损坏时恢复
+                    File.Replace(tmpPath, path, keepBackup ? path + ".bak" : null);
+                }
                 else
+                {
                     File.Move(tmpPath, path);
+                }
             }
             catch (PlatformNotSupportedException)
             {

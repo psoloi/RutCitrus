@@ -40,6 +40,15 @@ namespace RtCli.Modules.Extension
     }
 
     /// <summary>
+    /// 可选扩展生命周期接口: 扩展若实现它, 宿主在卸载前会先调用 RequestStop(),
+    /// 扩展应在此停止自建线程/定时器并释放资源, 随后宿主再调用 Unload()。
+    /// </summary>
+    public interface IStoppableExtension
+    {
+        void RequestStop();
+    }
+
+    /// <summary>
     /// 插件信息
     /// </summary>
     public class ExtensionInfo

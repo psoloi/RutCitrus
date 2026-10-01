@@ -25,7 +25,7 @@ namespace RtPanel.Controllers
             if (!_client.IsConnected)
                 return Ok(new { success = false, message = "未连接到服务器" });
 
-            var response = await _client.ExecuteCommandAsync(request.Command);
+            var response = await _client.ExecuteCommandAsync(request.Command, request.InstanceId);
             if (response == null)
                 return Ok(new { success = false, message = "请求失败，连接可能已断开" });
 
@@ -33,12 +33,14 @@ namespace RtPanel.Controllers
         }
 
         /// <summary>
-        /// 轮询获取最新日志。传入 afterSeq 获取该序号之后的日志。
+        /// 轮询获取最新日志。传入 afterSeq 获取该序号之后的日志；instanceId 为空返回全部实例日志。
         /// </summary>
         [HttpGet("logs")]
-        public IActionResult GetLogs([FromQuery] int afterSeq = 0)
+        public IActionResult GetLogs([FromQuery] int afterSeq = 0, [FromQuery] string? instanceId = null,
+            [FromQuery] int max = 0)
         {
-            var (lines, latestSeq) = _client.GetRecentLogs(afterSeq);
+            var (lines, latestSeq) = _client.GetRecentLogs(afterSeq,
+                string.IsNullOrWhiteSpace(instanceId) ? null : instanceId, max);
             return Ok(new { lines, latestSeq, connected = _client.IsConnected });
         }
 
@@ -91,5 +93,7 @@ namespace RtPanel.Controllers
     public class ExecuteRequest
     {
         public string Command { get; set; } = "";
+        /// <summary>目标实例标识, 空 = RtCli 当前实例</summary>
+        public string? InstanceId { get; set; }
     }
 }

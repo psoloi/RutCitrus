@@ -6,7 +6,7 @@ using System.Collections.Generic;
 
 namespace Rt.Core.PacketEvents.Protocol
 {
-    public static class McPacketTables
+    public static class MCPacketTables
     {
         public static readonly Dictionary<string, Dictionary<int, string>> Tables = new()
         {

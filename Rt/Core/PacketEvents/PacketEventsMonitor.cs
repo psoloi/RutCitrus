@@ -30,7 +30,7 @@ namespace Rt.Core.PacketEvents
 
         private readonly ConcurrentQueue<NetworkPacketEventArgs> _clientPackets = new();
         private readonly ConcurrentQueue<NetworkPacketEventArgs> _serverPackets = new();
-        private readonly McDecoder _decoder = new();
+        private readonly MCDecoder _decoder = new();
 
         private CancellationTokenSource? _cts;
         private Task? _clientTask;

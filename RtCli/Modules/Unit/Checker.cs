@@ -210,6 +210,59 @@ namespace RtCli.Modules.Unit
             }, TaskContinuationOptions.OnlyOnFaulted);
         }
 
+        /// <summary>版本检查结果(.status 用, 不抛异常)</summary>
+        public readonly record struct UpdateStatus(
+            bool Ok,
+            bool HasUpdate,
+            string? LatestDate,
+            string? Url,
+            string? Error);
+
+        /// <summary>
+        /// 同步查询最新版本, 供 .status 集中展示。
+        /// 超时/网络错误/解析失败都通过返回值表达, 不抛异常也不写日志。
+        /// </summary>
+        public static UpdateStatus QueryUpdateStatus(TimeSpan timeout)
+        {
+            try
+            {
+                using var httpClient = new HttpClient();
+                httpClient.DefaultRequestHeaders.Add("User-Agent", "RtCli-UpdateCheck");
+                httpClient.Timeout = timeout;
+
+                string response = httpClient.GetStringAsync(GitHubRepoApi).GetAwaiter().GetResult();
+                var json = JObject.Parse(response);
+                string? tagName = json["tag_name"]?.ToString();
+                string? htmlUrl = json["html_url"]?.ToString();
+
+                if (string.IsNullOrEmpty(tagName))
+                    return new UpdateStatus(false, false, null, htmlUrl, "无法获取最新版本信息");
+
+                var match = Regex.Match(tagName, @"(\d{8})");
+                if (!match.Success)
+                    return new UpdateStatus(false, false, null, htmlUrl, $"无法解析版本标签: {tagName}");
+
+                long remoteDate = long.Parse(match.Groups[1].Value);
+                long localDate = ExtractVersionDate();
+                if (localDate == 0)
+                    return new UpdateStatus(false, false, match.Groups[1].Value, htmlUrl, "无法解析当前版本号");
+
+                return new UpdateStatus(true, remoteDate > localDate, match.Groups[1].Value, htmlUrl, null);
+            }
+            catch (TaskCanceledException)
+            {
+                return new UpdateStatus(false, false, null, null, "请求超时");
+            }
+            catch (HttpRequestException ex)
+            {
+                return new UpdateStatus(false, false, null, null, "网络错误: " + ex.Message);
+            }
+            catch (Exception ex)
+            {
+                return new UpdateStatus(false, false, null, null, ex.Message);
+            }
+        }
+
         public static void CheckOS()
         {
             string os = Environment.OSVersion.Platform switch

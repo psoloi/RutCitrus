@@ -207,6 +207,7 @@
     let allInstances = [];
     let allGroups = [];
     let pendingDeleteQueue = []; // 批量删除队列
+    let currentServerKey = '';   // RtCli 当前选中的服务端(= 实例 ID)
 
     // === 工具函数 ===
     function escapeHtml(s) {
@@ -231,6 +232,9 @@
 
     // === 加载数据 ===
     async function loadInstances() {
+        // 仅依赖 /api/instances/list(内存数据, 毫秒级返回);
+        // 当前实例标识由该接口一并返回, 不再并入较慢的 /api/system/stats(TPS 查询有 3 秒超时),
+        // 否则实例列表要等系统状态采集完成才显示。
         const resp = await fetch('/api/instances/list').then(r => r.json()).catch(() => ({ success: false }));
         if (!resp.success) {
             showStatus(resp.message || '加载失败', 'danger');
@@ -238,6 +242,8 @@
         }
         allInstances = resp.instances || [];
         allGroups = resp.groups || [];
+        // 记录当前选中的服务端(取不到时保留原值, 避免闪烁)
+        if (resp.currentServerKey) currentServerKey = resp.currentServerKey;
         render();
     }
 
@@ -308,7 +314,9 @@
 
     function renderInstanceRow(inst, groupId) {
         const row = document.createElement('div');
+        const isCurrent = !!currentServerKey && inst.id === currentServerKey;
         row.className = 'instance-row d-flex align-items-center border rounded mb-2 p-2';
+        if (isCurrent) row.style.borderColor = 'var(--accent)';
         row.dataset.id = inst.id;
         row.dataset.groupId = groupId;
         const statusBadge = inst.isRunning
@@ -323,14 +331,16 @@
                     ${statusBadge}
                     <strong>${escapeHtml(inst.name)}</strong>
                     <small class="text-muted">${escapeHtml(inst.id)}</small>
+                    ${isCurrent ? '<span class="badge bg-primary">当前</span>' : ''}
                     ${inst.hidden ? '<span class="badge bg-warning text-dark">隐藏</span>' : ''}
                     ${inst.autoRestart ? '<span class="badge bg-info">自动重启</span>' : ''}
                 </div>
                 <small class="text-muted d-block">${escapeHtml(inst.workPath || '未配置工作目录')} · ${escapeHtml(inst.analyzerMode)}</small>
             </div>
             <div class="d-flex gap-1">
+                <button class="btn btn-sm ${isCurrent ? 'btn-outline-secondary' : 'btn-outline-primary'} instance-icon-btn" onclick="switchToInstance('${escapeHtml(inst.id)}')" title="切换至该实例(.server change)" ${isCurrent?'disabled':''}>⇄</button>
                 <button class="btn btn-sm btn-outline-success instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','start')" title="启动" ${inst.isRunning?'disabled':''}>▶</button>
-                <button class="btn btn-sm btn-outline-danger instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','stop')" title="停止" ${!inst.isRunning?'disabled':''}>■</button>
+                <button class="btn btn-sm btn-outline-danger instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','stop')" title="停止" ${!inst.isRunning?'disabled':''}>‖</button>
                 <button class="btn btn-sm btn-outline-warning instance-icon-btn" onclick="singleAction('${escapeHtml(inst.id)}','restart')" title="重启">⟳</button>
                 <a class="btn btn-sm btn-outline-info instance-icon-btn" href="/Instances/Manage/${encodeURIComponent(inst.id)}" title="管理">⚙</a>
                 <button class="btn btn-sm btn-outline-secondary instance-icon-btn" onclick="showCloneModal('${escapeHtml(inst.id)}')" title="克隆实例(复制配置与文件)">⧉</button>
@@ -364,6 +374,17 @@
             body: JSON.stringify({ action, ids: [id] })
         }).then(r => r.json());
         showStatus(resp.message || (resp.success ? '操作成功' : '操作失败'), resp.success ? 'success' : 'danger');
+        if (resp.success) loadInstances();
+    }
+
+    // === 切换当前实例(执行 .server change) ===
+    async function switchToInstance(id) {
+        if (id === currentServerKey) { showStatus('已经在该实例上', 'info'); return; }
+        const resp = await fetch('/api/console/execute', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ command: `.server change ${id}` })
+        }).then(r => r.json()).catch(() => ({ success: false, message: '请求失败' }));
+        showStatus(resp.result || resp.message || (resp.success ? '已切换' : '切换失败'), resp.success ? 'success' : 'danger');
         if (resp.success) loadInstances();
     }
 
@@ -1049,7 +1070,7 @@
                     <select class="form-select form-select-sm" id="mg_inst_mode">
                         ${(() => {
                             // 与 RtCli Analyzer 的模式规范一致: RM/RUN/RR/RCON(旧名自动映射)
-                            const legacy = { MANAGEMENT:'RM', RUN:'RUN', RCON:'RR', ONLYRCON:'RCON' };
+                            const legacy = { MANAGEMENT:'RM', RUN:'RUN', RCON:'RCON', ONLYRCON:'RCON', RR:'RR' };
                             const cur = (inst.analyzerMode || 'RM').toUpperCase();
                             const val = legacy[cur] || cur;
                             const modes = [['RM','RM - 管理(推荐)'],['RUN','RUN - 子进程'],['RR','RR - 子进程+Rcon'],['RCON','RCON - 纯远程']];
@@ -1238,7 +1259,7 @@
         }
         errArea.innerHTML = `
             <div class="d-flex justify-content-between align-items-center mb-1">
-                <small class="text-muted">检测到 ${errors.length} 条错误</small>
+                <small class="text-muted">基础分析 · 检测到 ${errors.length} 条错误(含堆栈)</small>
                 <div class="d-flex gap-1">
                     <input type="text" class="form-control form-control-sm" id="aiRangeInput" placeholder="如 1 或 1-3(空=全部)" style="width:140px;" />
                     <button class="btn btn-sm btn-primary" onclick="aiAnalyzeErrors('${escapeHtml(id)}')">AI分析</button>
@@ -1249,7 +1270,7 @@
                     <div class="d-flex justify-content-between">
                         <span class="badge bg-danger">#${e.index}</span>
                     </div>
-                    <pre class="small text-muted mb-0" style="white-space:pre-wrap;">${escapeHtml(e.content)}</pre>
+                    <div class="small mt-1">${window.RtLog ? RtLog.render((e.content || '').split('\n')) : escapeHtml(e.content)}</div>
                 </div>`).join('')}
             </div>
         `;

@@ -104,8 +104,8 @@ namespace RtCli.Modules
                 EventBus.Publish(new ProgramShutdownEvent());
                 Intelligence.StopAutoBackup();
                 Scheduler.Stop();
-                Analyzer.StopServer();
-                Analyzer.Detach();
+                // 多实例并发: 统一停止所有运行中的实例, 避免留下孤儿进程
+                Analyzer.StopAllInstances();
                 var grpcTask = Connector.StopServerAsync();
                 if (!grpcTask.Wait(3000)) // 过低可能会卡死
                 {

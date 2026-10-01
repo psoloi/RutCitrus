@@ -2,14 +2,18 @@ using RtCli.Modules.Extension;
 using RtCli.Modules.Unit;
 using Spectre.Console;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,45 +22,104 @@ namespace RtCli.Modules.Function
 {
     public class Analyzer
     {
-        private static Process? _serverProcess;
-        private static StreamWriter? _serverInput;
-        private static CancellationTokenSource? _outputCts;
-        private static readonly object _attachLock = new object();
-        private static int _attachedProcessId = 0;
-        private static string _attachedWindowTitle = "";
-        private static string _connectedServerName = "";
+        // ===== 多实例运行时 =====
+        // 每个实例一份独立状态(进程/stdin/RCON/管理协议/日志缓冲/查询缓存), 静态 Analyzer 仅做门面路由。
+        private static readonly ConcurrentDictionary<string, InstanceRuntime> _runtimes =
+            new ConcurrentDictionary<string, InstanceRuntime>(StringComparer.OrdinalIgnoreCase);
         private static readonly object _scanLock = new object();
         private static List<MinecraftServerInfo> _lastScanResults = new List<MinecraftServerInfo>();
-        private static long _logFilePosition = 0;
-        private static string _currentMode = "RM";
-        private static bool _isRunModeActive = false;
-
-        internal static readonly object _logBufferLock = new object();
-        internal static readonly List<string> _logBuffer = new List<string>();
         private const int MaxLogBufferSize = 5000;
+        // 兼容附加扫描(本机 PID/序号)的串行锁; 命令发送已改为每实例独立锁
+        private static readonly object _attachLock = new object();
 
-        // 当前活跃的日志流标识(服务器启动时记录,停止后保留用于 .fx get 分析)
-        private static string _activeStreamKey = "";
+        /// <summary>当前选中实例的运行时(CLI 默认操作对象)</summary>
+        private static InstanceRuntime Rt => GetRuntime(Config.App.CurrentServer);
 
-        // 实时崩溃检测状态(去重用)
-        private static DateTime _lastCrashSignalTime = DateTime.MinValue;
-        private static readonly object _crashSignalLock = new object();
+        /// <summary>解析实例标识(空 = 当前实例)并返回对应运行时(不存在则创建)。</summary>
+        internal static InstanceRuntime GetRuntime(string? instanceId)
+        {
+            // 未显式指定实例时优先使用当前实例上下文(面板按实例下发的命令), 否则回退全局当前实例
+            string id = string.IsNullOrWhiteSpace(instanceId)
+                ? (InstanceContext.Current ?? Config.App.CurrentServer)
+                : instanceId!;
+            return _runtimes.GetOrAdd(id, key =>
+            {
+                var rt = new InstanceRuntime(key);
+                RefreshEntry(rt);
+                rt.StreamKey = key;
+                return rt;
+            });
+        }
 
-        private static CancellationTokenSource? _clientGuideCts;
-        private static volatile bool _clientGuideActive = false;
-        private static readonly List<ClientGuideMatch> _lastClientGuideMatches = new List<ClientGuideMatch>();
-        private static readonly object _clientGuideLock = new object();
+        /// <summary>刷新实例配置快照(未运行时; 运行中保留启动时快照)</summary>
+        private static void RefreshEntry(InstanceRuntime rt)
+        {
+            if (Config.App.ServerList != null && Config.App.ServerList.TryGetValue(rt.Id, out var entry))
+                rt.Entry = entry;
+            else
+                rt.Entry = Config.CurrentServer;
+        }
+
+        private static string NormalizeMode(string raw)
+        {
+            return raw.ToUpperInvariant() switch
+            {
+                "RUN" => "RUN",
+                "RR" => "RR",          // 子进程 + RCON
+                "RCON" => "RCON",      // 纯远程 RCON(可直接连接任意远程服务端)
+                "ONLYRCON" => "RCON",  // 旧名 OnlyRcon = 新 RCON
+                "MANAGEMENT" => "RM",  // 旧名 Management = 新 RM (Run+Management)
+                "RM" => "RM",
+                _ => "RM"
+            };
+        }
+
+        // ===== 兼容别名: 指向"当前选中实例"的运行时字段 =====
+        private static Process? _serverProcess { get => Rt.Process; set => Rt.Process = value; }
+        private static StreamWriter? _serverInput { get => Rt.Stdin; set => Rt.Stdin = value; }
+        private static CancellationTokenSource? _outputCts { get => Rt.Cts; set => Rt.Cts = value; }
+        private static int _attachedProcessId { get => Rt.AttachedProcessId; set => Rt.AttachedProcessId = value; }
+        private static string _attachedWindowTitle { get => Rt.AttachedWindowTitle; set => Rt.AttachedWindowTitle = value; }
+        private static string _connectedServerName { get => Rt.ConnectedServerName; set => Rt.ConnectedServerName = value; }
+        private static string _currentMode { get => Rt.Mode; set => Rt.Mode = value; }
+        private static bool _isRunModeActive { get => Rt.Running; set => Rt.Running = value; }
+        private static string _activeInstanceId { get => Rt.Id; set { } }
+        private static string _activeStreamKey { get => Rt.StreamKey; set => Rt.StreamKey = value; }
+        private static RconClient? _rconClient { get => Rt.Rcon; set => Rt.Rcon = value; }
+        private static int _restartAttemptCount { get => Rt.RestartAttemptCount; set => Rt.RestartAttemptCount = value; }
+        private static bool _userInitiatedStop { get => Rt.UserInitiatedStop; set => Rt.UserInitiatedStop = value; }
+        private static int _crashNotified { get => Rt.CrashNotified; set => Rt.CrashNotified = value; }
+        private static bool _shutdownInProgress { get => Rt.ShutdownInProgress; set => Rt.ShutdownInProgress = value; }
+        private static DateTime _serverStartTime { get => Rt.StartTime; set => Rt.StartTime = value; }
+        private static object _crashSignalLock => Rt.CrashSignalLock;
+        private static List<string> _recentErrorLines => Rt.RecentErrorLines;
+        private static CancellationTokenSource? _clientGuideCts { get => Rt.ClientGuideCts; set => Rt.ClientGuideCts = value; }
+        private static bool _clientGuideActive { get => Rt.ClientGuideActive; set => Rt.ClientGuideActive = value; }
+        private static List<ClientGuideMatch> _lastClientGuideMatches => Rt.LastClientGuideMatches;
+        private static object _clientGuideLock => Rt.ClientGuideLock;
+        internal static object _logBufferLock => Rt.LogBufferLock;
+        internal static LogRingBuffer _logBuffer => Rt.LogBuffer;
+        private const int MaxErrorSignatureLines = 30;
+
+        // 基础错误库正则缓存(按 pattern 缓存编译结果, 避免每次分析重复编译全部条目)
+        private static readonly Dictionary<string, Regex?> _baseEntryRegexCache = new Dictionary<string, Regex?>(StringComparer.Ordinal);
+        private static readonly object _baseEntryRegexLock = new object();
+        // 玩家事件正则缓存(逐行匹配的高频路径, 必须预编译并设置超时)
+        private static readonly Dictionary<string, Regex?> _playerEventRegexCache = new Dictionary<string, Regex?>(StringComparer.Ordinal);
+        private static readonly object _playerEventRegexLock = new object();
+        // 玩家事件总预筛正则: 全部事件 pattern 合并为一条, 绝大多数日志行只需一次匹配即可快速返回
+        private static Regex? _playerEventPrefilter;
+        private static PlayerEventConfig? _playerEventPrefilterConfig;
+        private static readonly object _playerEventPrefilterLock = new object();
+        private const int MaxBaseMatchResults = 8;
+        private static readonly TimeSpan DynamicRegexTimeout = TimeSpan.FromMilliseconds(500);
 
         private static readonly List<ConfigDiffEntry> _lastConfigDiffs = new List<ConfigDiffEntry>();
         private static readonly object _filterLock = new object();
         private static readonly List<PluginEntry> _lastPluginList = new List<PluginEntry>();
         private static readonly string ConfigBackupDir = Path.Combine(Path.GetDirectoryName(Config.DataPath)!, "config_backup");
 
-        private static RconClient? _rconClient;
-        private static int _restartAttemptCount = 0;
-        private static bool _userInitiatedStop = false;
-        // 服务器日志活动计数器(RUN stdout 与 RM 日志文件双埋点): stop 看门狗用于检测"无响应信息流"
-        private static long _logActivityCounter = 0;
+        private const int StableRunResetMinutes = 5;
 
         public static IReadOnlyList<MinecraftServerInfo> LastScanResults
         {
@@ -69,7 +132,7 @@ namespace RtCli.Modules.Function
         public static bool IsRconMode => _currentMode == "RCON";
         /// <summary>RR模式(Run+Rcon) - 启动服务端读取stdout控制台，通过RCON发送命令</summary>
         public static bool IsRRMode => _currentMode == "RR";
-        /// <summary>RM模式(Run+Management) - 启动服务端通过日志文件读取控制台，stdin发送命令</summary>
+        /// <summary>RM模式(Run+Management) - 启动服务端读取stdout控制台，stdin发送命令，管理协议承担事件/玩家/配置</summary>
         public static bool IsRMMode => _currentMode == "RM";
         // 兼容旧属性名
         public static bool IsOnlyRconMode => _currentMode == "RCON";
@@ -80,333 +143,442 @@ namespace RtCli.Modules.Function
         public static bool UsesRconCommands => _currentMode == "RCON" || _currentMode == "RR";
         /// <summary>是否使用stdin发送命令(Run/RM)</summary>
         public static bool UsesStdinCommands => _currentMode == "RUN" || _currentMode == "RM";
-        /// <summary>是否从stdout读取控制台(Run/RR)</summary>
-        public static bool ReadsFromStdout => _currentMode == "RUN" || _currentMode == "RR";
-        /// <summary>是否从日志文件读取控制台(RM)</summary>
-        public static bool ReadsFromLogFile => _currentMode == "RM";
+        /// <summary>是否从stdout读取控制台(Run/RR/RM)</summary>
+        public static bool ReadsFromStdout => _currentMode == "RUN" || _currentMode == "RR" || _currentMode == "RM";
+        /// <summary>是否从日志文件读取控制台(已废弃: 所有模式均使用子进程stdout/stderr)</summary>
+        public static bool ReadsFromLogFile => false;
         /// <summary>是否使用服务端管理协议(RM)</summary>
         public static bool UsesManagementProtocol => _currentMode == "RM";
+        /// <summary>当前实例的管理协议连接是否已就绪</summary>
+        public static bool IsManagementConnected => Rt.Management?.IsConnected == true;
+        /// <summary>当前实例的管理协议连接地址</summary>
+        public static string ManagementEndpoint => Rt.Management?.Endpoint ?? "";
+        /// <summary>获取指定实例的管理协议连接(非 RM 或尚未连接时为 null)</summary>
+        public static MCManagementConnection? GetManagementConnection(string? instanceId = null)
+            => GetRuntime(instanceId).Management;
 
-        public static void Initialize()
+        /// <summary>按实例判断是否使用 stdin 命令通道</summary>
+        internal static bool UsesStdinCommandsOf(string instanceId)
+            => GetRuntime(instanceId).Mode == "RUN" || GetRuntime(instanceId).Mode == "RM";
+        internal static bool UsesRconCommandsOf(string instanceId)
+            => GetRuntime(instanceId).Mode == "RCON" || GetRuntime(instanceId).Mode == "RR";
+        internal static bool UsesManagementProtocolOf(string instanceId)
+            => GetRuntime(instanceId).Mode == "RM";
+
+        public static void Initialize(string? instanceId = null)
         {
-            string raw = Config.CurrentServer.AnalyzerMode.ToUpperInvariant();
-            // 向后兼容: 旧模式名映射到新模式名
-            _currentMode = raw switch
-            {
-                "RUN" => "RUN",
-                "RCON" => "RR",        // 旧Rcon = 新RR (Run+Rcon)
-                "ONLYRCON" => "RCON",  // 旧OnlyRcon = 新Rcon (纯RCON)
-                "MANAGEMENT" => "RM",  // 旧Management = 新RM (Run+Management)
-                "RR" => "RR",
-                "RM" => "RM",
-                _ => "RM"
-            };
+            var rt = GetRuntime(instanceId);
+            if (!rt.Running) RefreshEntry(rt);
+            rt.Mode = NormalizeMode(rt.Entry.AnalyzerMode);
         }
+
+        /// <summary>当前选中实例是否正在运行(进程存活或远程 RCON 已连接)</summary>
+        public static bool IsRunning(string? instanceId = null) => GetRuntime(instanceId).Running;
+
+        /// <summary>当前所有运行中的实例标识</summary>
+        public static IReadOnlyCollection<string> RunningInstanceIds =>
+            _runtimes.Values.Where(r => r.Running).Select(r => r.Id).ToList();
+
+        /// <summary>兼容旧属性: 当前运行实例(优先当前选中实例)</summary>
+        public static string ActiveInstanceId =>
+            IsRunning(Config.App.CurrentServer) ? Config.App.CurrentServer : (RunningInstanceIds.FirstOrDefault() ?? "");
+
+        public static string CurrentModeOf(string? instanceId = null) => GetRuntime(instanceId).Mode;
+
+        /// <summary>当前实例最新日志的绝对序号(用作"从此刻开始"的消费游标)</summary>
+        internal static long LogCursor => Rt.LogCursor;
+
+        internal static long LogCursorOf(string? instanceId = null) => GetRuntime(instanceId).LogCursor;
+
+        /// <summary>读取指定实例序号大于 cursor 的日志增量</summary>
+        internal static List<string> ReadLogLinesSince(long cursor, out long nextCursor, string? instanceId = null)
+            => GetRuntime(instanceId).ReadLogLinesSince(cursor, out nextCursor);
 
         #region RUN Mode
 
         public static bool IsRunModeActive => _isRunModeActive;
 
-        public static void StartServer()
+        public static void StartServer(string? instanceId = null)
         {
-            string ThisProgramName = "Analyzer";
+            const string ThisProgramName = "Analyzer";
 
-            if (!NeedsRunServer)
+            var rt = GetRuntime(instanceId);
+            if (!rt.Running) RefreshEntry(rt);
+            if (rt.Mode == "RCON")
+            {
+                // 纯远程 RCON: 不启动本地进程, 直接连接配置中的远程服务器
+                ConnectRemoteRcon(rt.Entry.RconHost, rt.Entry.RconPort, rt.Entry.RconPassword, rt.Id);
+                return;
+            }
+
+            if (!ValidateStartPrerequisites(rt, out string workPath, out string flags))
+                return;
+
+            if (!EnsureEulaAgreedBeforeStart(workPath, rt.Id))
+                return;
+
+            try
+            {
+                rt.Process = BuildServerProcess(rt, workPath, flags);
+
+                rt.Process.Start();
+                rt.Process.BeginOutputReadLine();
+                rt.Process.BeginErrorReadLine();
+                rt.Stdin = rt.Process.StandardInput;
+                rt.Stdin.AutoFlush = true;
+
+                rt.Running = true;
+                rt.AttachedProcessId = rt.Process.Id;
+                rt.ConnectedServerName = rt.Entry.ServerName;
+                // 每次启动只清零崩溃/关停标记; 重启计数在"稳定运行"后由进程监视器重置,
+                // 否则自动重启会在每次 StartServer 时清零, 使最大重试次数形同虚设
+                rt.CrashNotified = 0;
+                rt.ShutdownInProgress = false;
+                rt.StartTime = DateTime.Now;
+                rt.UserInitiatedStop = false;
+                rt.LogActivityCounter = 0;
+
+                // 注册日志数据流(服务器启动即开始缓存,停止后保留供 .fx get 分析)
+                rt.StreamKey = rt.Id;
+                LogStreamStore.BeginServerStream(rt.StreamKey, rt.ConnectedServerName);
+
+                rt.Cts?.Cancel();
+                rt.Cts?.Dispose();
+                rt.Cts = new CancellationTokenSource();
+                var token = rt.Cts.Token;
+                _ = Task.Run(() => MonitorServerProcess(rt, token), token);
+
+                Output.Log(I18n.Get("anz_server_started", rt.Process.Id, rt.Mode), 1, ThisProgramName);
+                EventBus.Publish(new ServerStartEvent(Config.App.GrpcPort, rt.Id));
+
+                TriggerStartupLittleBackup();
+
+                Output.Log(I18n.Get("anz_workdir_label", workPath), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_flags_label", flags), 1, ThisProgramName);
+
+                StartModeSpecificFollowUp(rt, workPath, ThisProgramName);
+
+                Output.Log(I18n.Get("anz_input_stop_hint"), 1, ThisProgramName);
+
+                Intelligence.StartAutoTips(rt.Id);
+            }
+            catch (Exception ex)
+            {
+                Output.ReportError(ex, false, I18n.Get("anz_start_server_failed"));
+                CleanupRunMode(rt);
+            }
+        }
+
+        /// <summary>启动前置校验: 模式/运行状态/工作目录/启动参数; 通过时输出解析后的路径与参数</summary>
+        private static bool ValidateStartPrerequisites(InstanceRuntime rt, out string workPath, out string flags)
+        {
+            const string ThisProgramName = "Analyzer";
+
+            workPath = rt.Entry.WorkPath;
+            flags = rt.Entry.RunServerFlags;
+
+            if (!(rt.Mode == "RUN" || rt.Mode == "RR" || rt.Mode == "RM"))
             {
                 Output.Log(I18n.Get("anz_rcon_mode_cannot_start"), 2, ThisProgramName);
-                return;
+                return false;
             }
 
-            if (_isRunModeActive)
+            if (rt.Running)
             {
                 Output.Log(I18n.Get("anz_server_already_running"), 2, ThisProgramName);
-                return;
+                return false;
             }
-
-            string? workPath = Config.CurrentServer.WorkPath;
-            string flags = Config.CurrentServer.RunServerFlags;
 
             if (string.IsNullOrWhiteSpace(workPath))
             {
-                workPath = FindServerPathFromScan();
+                workPath = FindServerPathFromScan() ?? string.Empty;
                 if (string.IsNullOrEmpty(workPath))
                 {
                     Output.Log(I18n.Get("anz_workpath_not_configured"), 2, ThisProgramName);
-                    return;
+                    return false;
                 }
             }
 
             if (string.IsNullOrWhiteSpace(flags))
             {
                 Output.Log(I18n.Get("anz_flags_not_configured"), 2, ThisProgramName);
-                return;
+                return false;
             }
 
             if (!Directory.Exists(workPath))
             {
                 Output.Log(I18n.Get("anz_workpath_not_exists", workPath), 3, ThisProgramName);
-                return;
+                return false;
             }
 
-            // EULA 预检查: 启动前检查 eula.txt
+            return true;
+        }
+
+        /// <summary>
+        /// 启动前 EULA 预检查: 检查 eula.txt 并按配置自动同意或询问用户。
+        /// 返回 false 表示用户明确拒绝, 调用方不应继续启动(检查本身出错不阻断启动)。
+        /// </summary>
+        private static bool EnsureEulaAgreedBeforeStart(string workPath, string instanceId)
+        {
+            const string ThisProgramName = "Analyzer";
             string eulaPath = Path.Combine(workPath, "eula.txt");
-            if (File.Exists(eulaPath))
-            {
-                try
-                {
-                    string eulaContent = File.ReadAllText(eulaPath);
-                    if (eulaContent.Contains("eula=false"))
-                    {
-                        if (Config.App.AutoAgreeEula)
-                        {
-                            eulaContent = eulaContent.Replace("eula=false", "eula=true");
-                            File.WriteAllText(eulaPath, eulaContent);
-                            Output.Log(I18n.Get("anz_eula_auto_agreed_config"), 1, ThisProgramName);
-                        }
-                        else
-                        {
-                            Output.Log(I18n.Get("anz_eula_not_agreed_detected"), 2, ThisProgramName);
-                            Output.Log(I18n.Get("anz_eula_notice"), 1, ThisProgramName);
-                            bool agree = AnsiConsole.Confirm(I18n.Get("anz_eula_confirm"), false);
-                            if (agree)
-                            {
-                                eulaContent = eulaContent.Replace("eula=false", "eula=true");
-                                File.WriteAllText(eulaPath, eulaContent);
-                                Output.Log(I18n.Get("anz_eula_agreed"), 1, ThisProgramName);
-                            }
-                            else
-                            {
-                                Output.Log(I18n.Get("anz_eula_refused_cannot_start"), 2, ThisProgramName);
-                                return;
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Output.Log(I18n.Get("anz_eula_check_failed", ex.Message), 2, ThisProgramName);
-                }
-            }
+            if (!File.Exists(eulaPath)) return true;
 
             try
             {
-                _serverProcess = new Process
+                string eulaContent = File.ReadAllText(eulaPath);
+                if (!eulaContent.Contains("eula=false")) return true;
+
+                if (Config.App.AutoAgreeEula)
                 {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = string.IsNullOrWhiteSpace(Config.CurrentServer.JavaPath) ? "java" : Config.CurrentServer.JavaPath,
-                        Arguments = flags,
-                        WorkingDirectory = workPath,
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        RedirectStandardInput = true,
-                        CreateNoWindow = true,
-                        StandardOutputEncoding = Encoding.GetEncoding(0),
-                        StandardErrorEncoding = Encoding.GetEncoding(0)
-                    },
-                    EnableRaisingEvents = true
-                };
-
-                _serverProcess.OutputDataReceived += (sender, e) =>
-                {
-                    if (!string.IsNullOrEmpty(e.Data))
-                    {
-                        // RM模式: 不从stdout读取控制台(改用日志文件)，但仍检测EULA
-                        if (ReadsFromStdout)
-                        {
-                            AddToLogBuffer(e.Data);
-                            if (!ShouldHideConsole())
-                                Output.Log(e.Data, 0, _connectedServerName);
-
-                            ProcessPlayerEventLine(e.Data);
-                            ProcessCrashDetectionLine(e.Data);
-                        }
-
-                        // 自动检测EULA提示 (首次启动时服务端生成eula.txt后退出)
-                        if (e.Data.Contains("eula=false", StringComparison.OrdinalIgnoreCase) ||
-                            e.Data.Contains("You need to agree to the EULA", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (!string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
-                            {
-                                string eulaPath = Path.Combine(Config.CurrentServer.WorkPath, "eula.txt");
-                                if (File.Exists(eulaPath))
-                                {
-                                    try
-                                    {
-                                        string content = File.ReadAllText(eulaPath);
-                                        if (content.Contains("eula=false"))
-                                        {
-                                            if (Config.App.AutoAgreeEula)
-                                            {
-                                                // auto_agree_eula=true: 自动同意并自动重启
-                                                content = content.Replace("eula=false", "eula=true");
-                                                File.WriteAllText(eulaPath, content);
-                                                Output.Log(I18n.Get("anz_eula_auto_agreed_restarting"), 1, "Analyzer");
-                                                _ = Task.Run(async () =>
-                                                {
-                                                    await Task.Delay(2000);
-                                                    StopServer();
-                                                    await Task.Delay(1000);
-                                                    StartServer();
-                                                });
-                                            }
-                                            else
-                                            {
-                                                // auto_agree_eula=false: 提示用户阅读并确认
-                                                _ = Task.Run(async () =>
-                                                {
-                                                    await Task.Delay(2000); // 等待服务端退出
-                                                    Output.Log(I18n.Get("anz_eula_refused_closed"), 2, "Analyzer");
-                                                    Output.Log(I18n.Get("anz_eula_notice"), 1, "Analyzer");
-                                                    bool agree = AnsiConsole.Confirm(I18n.Get("anz_eula_confirm"), false);
-                                                    if (agree)
-                                                    {
-                                                        try
-                                                        {
-                                                            content = File.ReadAllText(eulaPath);
-                                                            content = content.Replace("eula=false", "eula=true");
-                                                            File.WriteAllText(eulaPath, content);
-                                                            Output.Log(I18n.Get("anz_eula_agreed"), 1, "Analyzer");
-
-                                                            bool restart = AnsiConsole.Confirm(I18n.Get("anz_confirm_restart_server"), true);
-                                                            if (restart)
-                                                            {
-                                                                StartServer();
-                                                                Output.Log(I18n.Get("anz_server_restarted"), 1, "Analyzer");
-                                                            }
-                                                        }
-                                                        catch (Exception ex)
-                                                        {
-                                                            Output.Log(I18n.Get("anz_eula_agree_failed", ex.Message), 2, "Analyzer");
-                                                        }
-                                                    }
-                                                    else
-                                                    {
-                                                        Output.Log(I18n.Get("anz_eula_refused_hint"), 2, "Analyzer");
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Output.Log(I18n.Get("anz_eula_handle_failed", ex.Message), 2, "Analyzer");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                };
-
-                _serverProcess.ErrorDataReceived += (sender, e) =>
-                {
-                    if (!string.IsNullOrEmpty(e.Data))
-                    {
-                        // RM模式: 不从stderr读取控制台(改用日志文件)
-                        if (ReadsFromStdout)
-                        {
-                            AddToLogBuffer(e.Data);
-                            if (!ShouldHideConsole())
-                                Output.Log(e.Data, 0, _connectedServerName);
-                            ProcessPlayerEventLine(e.Data);
-                            ProcessCrashDetectionLine(e.Data);
-                        }
-                    }
-                };
-
-                _serverProcess.Start();
-                _serverProcess.BeginOutputReadLine();
-                _serverProcess.BeginErrorReadLine();
-                _serverInput = _serverProcess.StandardInput;
-                _serverInput.AutoFlush = true;
-
-                _isRunModeActive = true;
-                _attachedProcessId = _serverProcess.Id;
-                _connectedServerName = Config.CurrentServer.ServerName;
-                _restartAttemptCount = 0;
-                _userInitiatedStop = false;
-
-                // 注册日志数据流(服务器启动即开始缓存,停止后保留供 .fx get 分析)
-                _activeStreamKey = Config.App.CurrentServer;
-                LogStreamStore.BeginServerStream(_activeStreamKey, _connectedServerName);
-
-                _outputCts = new CancellationTokenSource();
-                _ = Task.Run(() => MonitorServerProcess(_outputCts.Token), _outputCts.Token);
-
-                Output.Log(I18n.Get("anz_server_started", _serverProcess.Id, _currentMode), 1, ThisProgramName);
-                EventBus.Publish(new ServerStartEvent(Config.App.GrpcPort, Config.App.CurrentServer));
-
-                // Little备份：服务端启动时触发首次完整备份
-                if (Config.App.AutoBackupEnabled && Config.App.AutoBackupLittleEnabled)
-                {
-                    _ = Task.Run(() =>
-                    {
-                        try
-                        {
-                            System.Threading.Thread.Sleep(5000); // 等待服务端文件稳定
-                            Intelligence.TriggerLittleFullBackupIfNeeded();
-                        }
-                        catch { }
-                    });
-                }
-                Output.Log(I18n.Get("anz_workdir_label", workPath), 1, ThisProgramName);
-                Output.Log(I18n.Get("anz_flags_label", flags), 1, ThisProgramName);
-
-                // RR模式：启动后尝试RCON连接
-                if (UsesRconCommands)
-                {
-                    _rconClient = new RconClient();
-                    Output.Log(I18n.Get("anz_rr_auto_connect_rcon"), 1, ThisProgramName);
-                    _ = Task.Run(() =>
-                    {
-                        // 等待服务端启动完成（最多等待5分钟）
-                        for (int i = 0; i < 300; i++)
-                        {
-                            if (!_isRunModeActive) break;
-                            Thread.Sleep(1000);
-                            try
-                            {
-                                if (_rconClient.Connect(
-                                    Config.CurrentServer.RconHost,
-                                    Config.CurrentServer.RconPort,
-                                    Config.CurrentServer.RconPassword))
-                                {
-                                    Output.Log(I18n.Get("anz_rcon_connected", Config.CurrentServer.RconHost, Config.CurrentServer.RconPort), 1, ThisProgramName);
-                                    break;
-                                }
-                            }
-                            catch { }
-                        }
-                    });
-                    Output.Log(I18n.Get("anz_cmd_via_rcon_hint"), 1, ThisProgramName);
-                }
-                else if (IsRunMode)
-                {
-                    Output.Log(I18n.Get("anz_cmd_hint"), 1, ThisProgramName);
-                }
-                else if (IsRMMode)
-                {
-                    // RM模式: 通过日志文件获取控制台信息流
-                    Output.Log(I18n.Get("anz_rm_log_monitor_starting"), 1, ThisProgramName);
-                    // 注册日志数据流(RM模式由日志文件监控写入缓存)
-                    _activeStreamKey = Config.App.CurrentServer;
-                    LogStreamStore.BeginServerStream(_activeStreamKey, Config.CurrentServer.ServerName);
-                    _ = Task.Run(() => StartRMLogFileMonitor(workPath, _outputCts.Token));
-                    Output.Log(I18n.Get("anz_cmd_hint"), 1, ThisProgramName);
+                    eulaContent = eulaContent.Replace("eula=false", "eula=true");
+                    File.WriteAllText(eulaPath, eulaContent);
+                    Output.Log(I18n.Get("anz_eula_auto_agreed_config"), 1, ThisProgramName);
+                    return true;
                 }
 
-                Output.Log(I18n.Get("anz_input_stop_hint"), 1, ThisProgramName);
+                Output.Log(I18n.Get("anz_eula_not_agreed_detected"), 2, ThisProgramName);
+                Output.Log(I18n.Get("anz_eula_notice"), 1, ThisProgramName);
+                bool agree = AnsiConsole.Confirm(I18n.Get("anz_eula_confirm"), false);
+                if (!agree)
+                {
+                    Output.Log(I18n.Get("anz_eula_refused_cannot_start"), 2, ThisProgramName);
+                    return false;
+                }
 
-                Intelligence.StartAutoTips();
+                eulaContent = eulaContent.Replace("eula=false", "eula=true");
+                File.WriteAllText(eulaPath, eulaContent);
+                Output.Log(I18n.Get("anz_eula_agreed"), 1, ThisProgramName);
+                return true;
             }
             catch (Exception ex)
             {
-                Output.ReportError(ex, false, I18n.Get("anz_start_server_failed"));
-                CleanupRunMode();
+                Output.Log(I18n.Get("anz_eula_check_failed", ex.Message), 2, ThisProgramName);
+                return true;
             }
         }
 
+        /// <summary>构建 MC 服务端进程对象并挂接 stdout/stderr 处理</summary>
+        private static Process BuildServerProcess(InstanceRuntime rt, string workPath, string flags)
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = string.IsNullOrWhiteSpace(rt.Entry.JavaPath) ? "java" : rt.Entry.JavaPath,
+                    Arguments = flags,
+                    WorkingDirectory = workPath,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    RedirectStandardInput = true,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
+                },
+                EnableRaisingEvents = true
+            };
+
+            process.OutputDataReceived += (_, e) => OnServerStdout(rt, e);
+            process.ErrorDataReceived += (_, e) => OnServerStderr(rt, e);
+            return process;
+        }
+
+        /// <summary>服务端 stdout 处理(含运行中检测到 EULA 未同意时的自动处理)</summary>
+        private static void OnServerStdout(InstanceRuntime rt, DataReceivedEventArgs e)
+        {
+            if (!string.IsNullOrEmpty(e.Data))
+            {
+                if (rt.Mode == "RUN" || rt.Mode == "RR" || rt.Mode == "RM")
+                {
+                    using (InstanceContext.Push(rt.Id))
+                    {
+                        AddToLogBuffer(rt, e.Data);
+                        if (!ShouldHideConsole(rt.Id))
+                            Output.Log(e.Data, 0, rt.ConnectedServerName);
+
+                        ProcessPlayerEventLine(rt, e.Data);
+                        ProcessCrashDetectionLine(rt, e.Data);
+                    }
+                }
+
+                // 自动检测EULA提示 (首次启动时服务端生成eula.txt后退出)
+                if (e.Data.Contains("eula=false", StringComparison.OrdinalIgnoreCase) ||
+                    e.Data.Contains("You need to agree to the EULA", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!string.IsNullOrWhiteSpace(rt.Entry.WorkPath))
+                    {
+                        string eulaPath = Path.Combine(rt.Entry.WorkPath, "eula.txt");
+                        if (File.Exists(eulaPath))
+                        {
+                            try
+                            {
+                                string content = File.ReadAllText(eulaPath);
+                                if (content.Contains("eula=false"))
+                                {
+                                    if (Config.App.AutoAgreeEula)
+                                    {
+                                        // auto_agree_eula=true: 自动同意并自动重启
+                                        content = content.Replace("eula=false", "eula=true");
+                                        File.WriteAllText(eulaPath, content);
+                                        Output.Log(I18n.Get("anz_eula_auto_agreed_restarting"), 1, "Analyzer");
+                                        _ = Task.Run(async () =>
+                                        {
+                                            await Task.Delay(2000);
+                                            StopServer(instanceId: rt.Id);
+                                            await Task.Delay(1000);
+                                            StartServer(rt.Id);
+                                        });
+                                    }
+                                    else
+                                    {
+                                        // auto_agree_eula=false: 提示用户阅读并确认
+                                        // (经 ConsoleGate 与主输入循环串行化, 避免抢夺控制台输入)
+                                        _ = Task.Run(async () =>
+                                        {
+                                            await Task.Delay(2000); // 等待服务端退出
+                                            Output.Log(I18n.Get("anz_eula_refused_closed"), 2, "Analyzer");
+                                            Output.Log(I18n.Get("anz_eula_notice"), 1, "Analyzer");
+                                            bool agree = ConsoleGate.InteractConfirm(I18n.Get("anz_eula_confirm"), false);
+                                            if (agree)
+                                            {
+                                                try
+                                                {
+                                                    content = File.ReadAllText(eulaPath);
+                                                    content = content.Replace("eula=false", "eula=true");
+                                                    File.WriteAllText(eulaPath, content);
+                                                    Output.Log(I18n.Get("anz_eula_agreed"), 1, "Analyzer");
+
+                                                    bool restart = ConsoleGate.InteractConfirm(I18n.Get("anz_confirm_restart_server"), true);
+                                                    if (restart)
+                                                    {
+                                                        StartServer(rt.Id);
+                                                        Output.Log(I18n.Get("anz_server_restarted"), 1, "Analyzer");
+                                                    }
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    Output.Log(I18n.Get("anz_eula_agree_failed", ex.Message), 2, "Analyzer");
+                                                }
+                                            }
+                                            else
+                                            {
+                                                Output.Log(I18n.Get("anz_eula_refused_hint"), 2, "Analyzer");
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Output.Log(I18n.Get("anz_eula_handle_failed", ex.Message), 2, "Analyzer");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>服务端 stderr 处理</summary>
+        private static void OnServerStderr(InstanceRuntime rt, DataReceivedEventArgs e)
+        {
+            if (!string.IsNullOrEmpty(e.Data))
+            {
+                if (rt.Mode == "RUN" || rt.Mode == "RR" || rt.Mode == "RM")
+                {
+                    using (InstanceContext.Push(rt.Id))
+                    {
+                        AddToLogBuffer(rt, e.Data);
+                        if (!ShouldHideConsole(rt.Id))
+                            Output.Log(e.Data, 0, rt.ConnectedServerName);
+                        ProcessPlayerEventLine(rt, e.Data);
+                        ProcessCrashDetectionLine(rt, e.Data);
+                    }
+                }
+            }
+        }
+
+        /// <summary>启动时按配置触发 Little 首次完整备份(延迟 5 秒等待文件稳定)</summary>
+        private static void TriggerStartupLittleBackup()
+        {
+            // Little备份：服务端启动时触发首次完整备份
+            if (Config.App.AutoBackupEnabled && Config.App.AutoBackupLittleEnabled)
+            {
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        System.Threading.Thread.Sleep(5000); // 等待服务端文件稳定
+                        Intelligence.TriggerLittleFullBackupIfNeeded();
+                    }
+                    catch (Exception ex) { Output.Debug(ex, "启动时 Little 完整备份失败", "Analyzer"); }
+                });
+            }
+        }
+
+        /// <summary>启动后的模式相关后续动作: RR 自动连 RCON / RM 连接管理协议 / Run 提示</summary>
+        private static void StartModeSpecificFollowUp(InstanceRuntime rt, string workPath, string ThisProgramName)
+        {
+            // RR模式：启动后尝试RCON连接
+            if (rt.Mode == "RR")
+            {
+                rt.Rcon = new RconClient();
+                Output.Log(I18n.Get("anz_rr_auto_connect_rcon"), 1, ThisProgramName);
+                _ = Task.Run(() =>
+                {
+                    // 等待服务端启动完成（最多等待5分钟）
+                    for (int i = 0; i < 300; i++)
+                    {
+                        if (!rt.Running) break;
+                        Thread.Sleep(1000);
+                        try
+                        {
+                            if (rt.Rcon.Connect(
+                                rt.Entry.RconHost,
+                                rt.Entry.RconPort,
+                                rt.Entry.RconPassword))
+                            {
+                                Output.Log(I18n.Get("anz_rcon_connected", rt.Entry.RconHost, rt.Entry.RconPort), 1, ThisProgramName);
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                });
+                Output.Log(I18n.Get("anz_cmd_via_rcon_hint"), 1, ThisProgramName);
+            }
+            else if (rt.Mode == "RUN")
+            {
+                Output.Log(I18n.Get("anz_cmd_hint"), 1, ThisProgramName);
+            }
+            else if (rt.Mode == "RM")
+            {
+                // RM模式: 控制台来自子进程 stdout/stderr, 管理协议仅用于事件订阅/玩家管理/全服配置
+                StartRmManagement(rt, workPath);
+                StartRmManagementWatchdog(rt, workPath);
+                Output.Log(I18n.Get("anz_cmd_hint"), 1, ThisProgramName);
+            }
+        }
+
+        /// <summary>
+        /// 管理协议重连看门狗。服务端刚启动时管理端口可能尚未就绪或 server.properties 尚未写出,
+        /// 初次连接会失败; 这里定期重新拉起连接循环, 确保后续能自动重连(RM 模式下信息获取随之恢复)。
+        /// </summary>
+        private static void StartRmManagementWatchdog(InstanceRuntime rt, string workPath)
+        {
+            _ = Task.Run(async () =>
+            {
+                while (rt.Running)
+                {
+                    try { await Task.Delay(TimeSpan.FromSeconds(15)).ConfigureAwait(false); }
+                    catch { break; }
+                    if (!rt.Running) break;
+                    // 连接循环仍在运行(内部已带指数退避重连)时无需干预
+                    if (rt.Management != null && rt.Management.IsRunning) continue;
+                    StartRmManagement(rt, workPath, quiet: true);
+                }
+            });
+        }
         /// <summary>StopServer 结果</summary>
         public enum StopResult
         {
@@ -422,25 +594,34 @@ namespace RtCli.Modules.Function
         /// killOnTimeout: 无响应时是否自动强杀兜底(内部自动流程保持 true; 面板/CLI 用户路径为 false, 由用户决定)。
         /// asyncReturn: true 时发送 stop 后立即返回 Sent, 看门狗在后台执行(面板路径, 避免阻塞 gRPC)。
         /// </summary>
-        public static StopResult StopServer(bool prompt = false, bool killOnTimeout = true, bool asyncReturn = false)
+        public static StopResult StopServer(bool prompt = false, bool killOnTimeout = true, bool asyncReturn = false, string? instanceId = null)
         {
-            string ThisProgramName = "Analyzer";
+            const string ThisProgramName = "Analyzer";
+            var rt = GetRuntime(instanceId);
 
-            if (!_isRunModeActive)
+            if (!rt.Running)
             {
                 Output.Log(I18n.Get("anz_server_not_running"), 1, ThisProgramName);
                 return StopResult.NotRunning;
             }
 
-            _userInitiatedStop = true;
-            long baseline = Interlocked.Read(ref _logActivityCounter);
+            // 纯远程 RCON: 只断开连接, 不向远程服务器发送 stop
+            if (rt.Mode == "RCON")
+            {
+                Detach(rt.Id);
+                Output.Log(I18n.Get("anz_rcon_disconnected"), 1, ThisProgramName);
+                return StopResult.Stopped;
+            }
+
+            rt.UserInitiatedStop = true;
+            long baseline = Interlocked.Read(ref rt.LogActivityCounter);
 
             try
             {
-                if (_serverInput != null)
+                if (rt.Stdin != null)
                 {
-                    _serverInput.WriteLine("stop");
-                    _serverInput.Flush();
+                    rt.Stdin.WriteLine("stop");
+                    rt.Stdin.Flush();
                 }
             }
             catch (Exception ex)
@@ -451,18 +632,18 @@ namespace RtCli.Modules.Function
             if (asyncReturn)
             {
                 long taskBaseline = baseline;
-                _ = Task.Run(() => WatchStopResponse(taskBaseline, prompt, killOnTimeout));
+                _ = Task.Run(() => WatchStopResponse(rt, taskBaseline, prompt, killOnTimeout));
                 return StopResult.Sent;
             }
 
-            return WatchStopResponse(baseline, prompt, killOnTimeout);
+            return WatchStopResponse(rt, baseline, prompt, killOnTimeout);
         }
 
         /// <summary>
         /// 等待 stop 响应: 进程退出即成功;
         /// 前 10 秒完全无新日志流 → 提前判定无响应; 日志仍流动但 30 秒未退出 → 判定无响应(慢关闭)。
         /// </summary>
-        private static StopResult WatchStopResponse(long baseline, bool prompt, bool killOnTimeout)
+        private static StopResult WatchStopResponse(InstanceRuntime rt, long baseline, bool prompt, bool killOnTimeout)
         {
             const int GraceSeconds = 30;          // 最长等待进程退出
             const int SilentDetectSeconds = 10;   // 完全无日志流时提前判定无响应的阈值
@@ -471,28 +652,28 @@ namespace RtCli.Modules.Function
             bool hadLogActivity = false;
             while (sw.Elapsed.TotalSeconds < GraceSeconds)
             {
-                var proc = _serverProcess;
+                var proc = rt.Process;
                 if (proc == null || proc.HasExited)
                 {
-                    CleanupRunMode();
-                    Intelligence.StopAutoTips();
+                    CleanupRunMode(rt);
+                    Intelligence.StopAutoTips(rt.Id);
                     return StopResult.Stopped;
                 }
-                if (Interlocked.Read(ref _logActivityCounter) != baseline)
+                if (Interlocked.Read(ref rt.LogActivityCounter) != baseline)
                     hadLogActivity = true;
                 else if (sw.Elapsed.TotalSeconds >= SilentDetectSeconds)
-                    return HandleStopUnresponsive(hadLogActivity: false, (int)sw.Elapsed.TotalSeconds, prompt, killOnTimeout);
+                    return HandleStopUnresponsive(rt, hadLogActivity: false, (int)sw.Elapsed.TotalSeconds, prompt, killOnTimeout);
                 Thread.Sleep(250);
             }
-            return HandleStopUnresponsive(hadLogActivity, (int)sw.Elapsed.TotalSeconds, prompt, killOnTimeout);
+            return HandleStopUnresponsive(rt, hadLogActivity, (int)sw.Elapsed.TotalSeconds, prompt, killOnTimeout);
         }
 
         /// <summary>stop 无响应处理: 发布事件 + 控制台警告; 按调用方决定交互确认/自动强杀/交由用户在事件板处理</summary>
-        private static StopResult HandleStopUnresponsive(bool hadLogActivity, int waitedSeconds, bool prompt, bool killOnTimeout)
+        private static StopResult HandleStopUnresponsive(InstanceRuntime rt, bool hadLogActivity, int waitedSeconds, bool prompt, bool killOnTimeout)
         {
             Output.Log(I18n.Get("anz_stop_unresponsive", waitedSeconds,
                 hadLogActivity ? I18n.Get("anz_stop_unresponsive_slow") : I18n.Get("anz_stop_unresponsive_silent")), 2, "Analyzer");
-            EventBus.Publish(new ServerStopUnresponsiveEvent(Config.App.CurrentServer, hadLogActivity, waitedSeconds));
+            EventBus.Publish(new ServerStopUnresponsiveEvent(rt.Id, hadLogActivity, waitedSeconds));
 
             if (prompt)
             {
@@ -500,7 +681,7 @@ namespace RtCli.Modules.Function
                 bool force = AnsiConsole.Confirm(I18n.Get("prog_stop_confirm_force"), false);
                 if (force)
                 {
-                    ForceKillServer();
+                    ForceKillServer(rt.Id);
                     return StopResult.Stopped;
                 }
                 Output.Log(I18n.Get("prog_stop_declined_hint"), 1, "Analyzer");
@@ -511,7 +692,7 @@ namespace RtCli.Modules.Function
             {
                 // 内部自动流程(restart/计划任务/重载等): 保持强杀兜底
                 Output.Log(I18n.Get("anz_stop_force_killed"), 2, "Analyzer");
-                ForceKillServer();
+                ForceKillServer(rt.Id);
                 return StopResult.Stopped;
             }
 
@@ -520,23 +701,27 @@ namespace RtCli.Modules.Function
         }
 
         /// <summary>是否存在本地托管子进程(可强制关闭)</summary>
-        public static bool HasManagedProcess
+        public static bool HasManagedProcess => HasManagedProcessOf(null);
+
+        public static bool HasManagedProcessOf(string? instanceId)
         {
-            get { var p = _serverProcess; return p != null && !p.HasExited; }
+            var p = GetRuntime(instanceId).Process;
+            return p != null && !p.HasExited;
         }
 
         /// <summary>强制结束服务端进程树(可能丢失未保存数据, 须经用户确认后调用)</summary>
-        public static void ForceKillServer()
+        public static void ForceKillServer(string? instanceId = null)
         {
-            string ThisProgramName = "Analyzer";
-            var proc = _serverProcess;
+            const string ThisProgramName = "Analyzer";
+            var rt = GetRuntime(instanceId);
+            var proc = rt.Process;
             if (proc == null || proc.HasExited)
             {
                 Output.Log(I18n.Get("anz_force_no_process"), 2, ThisProgramName);
                 return;
             }
 
-            _userInitiatedStop = true;
+            rt.UserInitiatedStop = true;
             try
             {
                 Output.Log(I18n.Get("anz_force_killing", proc.Id), 2, ThisProgramName);
@@ -548,51 +733,125 @@ namespace RtCli.Modules.Function
                 Output.Log(I18n.Get("anz_stop_server_error", ex.Message), 2, ThisProgramName);
             }
 
-            CleanupRunMode();
-            Intelligence.StopAutoTips();
+            CleanupRunMode(rt);
+            Intelligence.StopAutoTips(rt.Id);
         }
 
-        private static void MonitorServerProcess(CancellationToken cancellationToken)
+        /// <summary>
+        /// 程序退出时停止所有运行中的实例(多实例并发场景)。
+        /// 统一发送 stop 后共享一段宽限时间, 仍未退出的进程直接强杀, 避免留下孤儿进程。
+        /// </summary>
+        public static void StopAllInstances()
+        {
+            var ids = RunningInstanceIds.ToList();
+            if (ids.Count == 0) return;
+
+            foreach (var id in ids)
+            {
+                try
+                {
+                    var rt = GetRuntime(id);
+                    if (rt.Mode == "RCON")
+                    {
+                        Detach(id);
+                        continue;
+                    }
+                    rt.UserInitiatedStop = true;
+                    if (rt.Stdin != null)
+                    {
+                        rt.Stdin.WriteLine("stop");
+                        rt.Stdin.Flush();
+                    }
+                }
+                catch { }
+            }
+
+            var sw = Stopwatch.StartNew();
+            while (sw.Elapsed.TotalSeconds < 15)
+            {
+                bool anyAlive = ids.Any(id =>
+                {
+                    var p = GetRuntime(id).Process;
+                    return p != null && !p.HasExited;
+                });
+                if (!anyAlive) return;
+                Thread.Sleep(250);
+            }
+
+            foreach (var id in ids)
+            {
+                try
+                {
+                    var p = GetRuntime(id).Process;
+                    if (p != null && !p.HasExited) p.Kill(entireProcessTree: true);
+                }
+                catch { }
+            }
+        }
+
+        private static void MonitorServerProcess(InstanceRuntime rt, CancellationToken cancellationToken)
         {
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    if (_serverProcess == null || _serverProcess.HasExited)
+                    if (rt.Process == null || rt.Process.HasExited)
                     {
-                        int exitCode = _serverProcess?.ExitCode ?? -1;
-                        Output.Log(I18n.Get("anz_server_exited", exitCode), 0, "Analyzer");
-                        CleanupRunMode();
-                        Intelligence.StopAutoTips();
-
-                        // 自动重启逻辑
-                        if (!_userInitiatedStop && Config.CurrentServer.AutoRestart && NeedsRunServer)
+                        bool hadProcess = rt.Process != null;
+                        int exitCode = rt.Process?.ExitCode ?? -1;
+                        using (InstanceContext.Push(rt.Id))
                         {
-                            int maxRetries = Config.CurrentServer.AutoRestartMaxRetries;
-                            if (maxRetries == 0 || _restartAttemptCount < maxRetries)
+                            Output.Log(I18n.Get("anz_server_exited", exitCode), 0, "Analyzer");
+                            CleanupRunMode(rt);
+                            Intelligence.StopAutoTips(rt.Id);
+                        }
+
+                        if (!hadProcess) break;
+
+                        // 计划内关停(用户 stop / 收到正常停服序列)或退出码为 0 视为正常停止;
+                        // 其余非零退出视为崩溃。崩溃事件在同一次运行内只发布一次。
+                        bool plannedShutdown = rt.UserInitiatedStop || rt.ShutdownInProgress;
+                        bool crashed = !plannedShutdown && exitCode != 0;
+
+                        if (crashed)
+                        {
+                            NotifyServerCrashOnce(exitCode, null, rt.Id);
+                        }
+                        else
+                        {
+                            rt.RestartAttemptCount = 0;
+                            EventBus.Publish(new ServerStopEvent(rt.Id));
+                            Output.Log(I18n.Get("anz_server_stopped"), 1, "Analyzer");
+                        }
+
+                        // 自动重启逻辑(仅真实崩溃)
+                        if (crashed && rt.Entry.AutoRestart && (rt.Mode == "RUN" || rt.Mode == "RR" || rt.Mode == "RM"))
+                        {
+                            // 稳定运行超过阈值后视为新的故障序列, 重置重试计数
+                            if (rt.StartTime != DateTime.MinValue &&
+                                (DateTime.Now - rt.StartTime).TotalMinutes >= StableRunResetMinutes)
                             {
-                                _restartAttemptCount++;
-                                EventBus.Publish(new ServerCrashEvent(Config.App.CurrentServer, exitCode));
-                                EventBus.Publish(new AutoRestartEvent(Config.App.CurrentServer, _restartAttemptCount, maxRetries));
+                                rt.RestartAttemptCount = 0;
+                            }
+
+                            int maxRetries = rt.Entry.AutoRestartMaxRetries;
+                            if (maxRetries == 0 || rt.RestartAttemptCount < maxRetries)
+                            {
+                                rt.RestartAttemptCount++;
+                                EventBus.Publish(new AutoRestartEvent(rt.Id, rt.RestartAttemptCount, maxRetries));
                                 string attemptTotal = maxRetries > 0 ? "/" + maxRetries : "";
-                                Output.Log(I18n.Get("anz_auto_restart", _restartAttemptCount, attemptTotal), 1, "Analyzer");
+                                Output.Log(I18n.Get("anz_auto_restart", rt.RestartAttemptCount, attemptTotal), 1, "Analyzer");
                                 Thread.Sleep(5000);
-                                if (!_userInitiatedStop)
+                                if (!rt.UserInitiatedStop)
                                 {
-                                    StartServer();
+                                    StartServer(rt.Id);
                                 }
                             }
                             else
                             {
                                 Output.Log(I18n.Get("anz_max_retries_reached", maxRetries), 2, "Analyzer");
-                                _restartAttemptCount = 0;
+                                rt.RestartAttemptCount = 0;
                             }
-                        }
-                        else
-                        {
-                            _restartAttemptCount = 0;
-                            EventBus.Publish(new ServerStopEvent(Config.App.CurrentServer));
-                            Output.Log(I18n.Get("anz_server_stopped"), 1, "Analyzer");
                         }
                         break;
                     }
@@ -603,41 +862,45 @@ namespace RtCli.Modules.Function
             catch { }
         }
 
-        private static void CleanupRunMode()
+        private static void CleanupRunMode(InstanceRuntime rt)
         {
-            lock (_attachLock)
+            lock (rt.CommandLock)
             {
-                _outputCts?.Cancel();
-                _outputCts?.Dispose();
-                _outputCts = null;
+                rt.Cts?.Cancel();
+                rt.Cts?.Dispose();
+                rt.Cts = null;
 
-                _serverInput?.Dispose();
-                _serverInput = null;
+                rt.Stdin?.Dispose();
+                rt.Stdin = null;
 
-                if (_serverProcess != null)
+                if (rt.Process != null)
                 {
                     try
                     {
-                        if (!_serverProcess.HasExited)
+                        if (!rt.Process.HasExited)
                         {
-                            _serverProcess.CancelOutputRead();
-                            _serverProcess.CancelErrorRead();
+                            rt.Process.CancelOutputRead();
+                            rt.Process.CancelErrorRead();
                         }
                     }
                     catch { }
 
-                    try { _serverProcess.Dispose(); } catch { }
-                    _serverProcess = null;
+                    try { rt.Process.Dispose(); } catch { }
+                    rt.Process = null;
                 }
 
-                _isRunModeActive = false;
-                _attachedProcessId = 0;
-                _attachedWindowTitle = "";
-                _connectedServerName = "";
+                rt.Running = false;
+                rt.AttachedProcessId = 0;
+                rt.AttachedWindowTitle = "";
+                rt.ConnectedServerName = "";
+
+                // 断开该实例的管理协议连接(RM模式)
+                rt.Management?.Stop();
+                rt.Management = null;
 
                 // 标记日志流停止(流与数据保留, .fx get 仍可分析异常关闭前的日志)
-                if (!string.IsNullOrEmpty(_activeStreamKey))
-                    LogStreamStore.SetLive(_activeStreamKey, false);
+                if (!string.IsNullOrEmpty(rt.StreamKey))
+                    LogStreamStore.SetLive(rt.StreamKey, false);
             }
         }
 
@@ -728,8 +991,8 @@ namespace RtCli.Modules.Function
             }
 
             var selectedServer = scanResults[index - 1];
-            AttachToServerRcon(selectedServer, index.ToString());
-            Intelligence.StartAutoTips();
+            AttachToServerRcon(selectedServer, index.ToString(), Rt.Id);
+            Intelligence.StartAutoTips(Rt.Id);
         }
 
         public static void ConnectToServerByPid(int pid)
@@ -746,7 +1009,7 @@ namespace RtCli.Modules.Function
             lock (_scanLock) { server = _lastScanResults.FirstOrDefault(s => s.ProcessId == pid); }
             if (server != null)
             {
-                AttachToServerRcon(server, $"PID:{pid}");
+                AttachToServerRcon(server, $"PID:{pid}", Rt.Id);
                 return;
             }
 
@@ -761,8 +1024,8 @@ namespace RtCli.Modules.Function
                     JarPath = $"PID:{pid}",
                     CommandLine = ""
                 };
-                AttachToServerRcon(tempServer, $"PID:{pid}");
-                Intelligence.StartAutoTips();
+                AttachToServerRcon(tempServer, $"PID:{pid}", Rt.Id);
+                Intelligence.StartAutoTips(Rt.Id);
             }
             catch (Exception ex)
             {
@@ -770,58 +1033,44 @@ namespace RtCli.Modules.Function
             }
         }
 
-        private static void AttachToServerRcon(MinecraftServerInfo server, string serverName)
+        private static void AttachToServerRcon(MinecraftServerInfo server, string serverName, string? instanceId = null)
         {
             string ThisProgramName = "Analyzer";
+            var rt = GetRuntime(instanceId);
             lock (_attachLock)
             {
-                DetachCore();
+                DetachCore(rt);
 
                 try
                 {
-                    _attachedProcessId = server.ProcessId;
-                    _attachedWindowTitle = server.WindowTitle;
-                    _connectedServerName = serverName;
+                    rt.AttachedProcessId = server.ProcessId;
+                    rt.AttachedWindowTitle = server.WindowTitle;
+                    rt.ConnectedServerName = serverName;
+                    rt.Mode = "RCON";
 
-                    _outputCts = new CancellationTokenSource();
-                    var token = _outputCts.Token;
-
-                    // Rcon模式: 不读取日志文件，仅通过RCON通信
-                    string? serverDir = ResolveServerDirectory(server);
-                    if (!string.IsNullOrEmpty(serverDir))
-                    {
-                        string logFile = Path.Combine(serverDir, "logs", "latest.log");
-                        if (File.Exists(logFile))
-                        {
-                            using (var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                            {
-                                Interlocked.Exchange(ref _logFilePosition, fs.Length);
-                            }
-                            var capturedServerName = _connectedServerName;
-                            var capturedLogFile = logFile;
-                            _ = Task.Run(() => WatchLogFile(capturedLogFile, capturedServerName, token), token);
-                            Output.Log(I18n.Get("anz_logfile_label", logFile), 1, ThisProgramName);
-                        }
-                    }
-
-                    _rconClient = new RconClient();
+                    // RCON模式: 控制台来源仅为 RCON 命令/响应, 不跟随任何日志文件
+                    rt.Rcon = new RconClient();
                     bool rconConnected = false;
                     try
                     {
-                        rconConnected = _rconClient.Connect(
-                            Config.CurrentServer.RconHost,
-                            Config.CurrentServer.RconPort,
-                            Config.CurrentServer.RconPassword);
+                        rconConnected = rt.Rcon.Connect(
+                            rt.Entry.RconHost,
+                            rt.Entry.RconPort,
+                            rt.Entry.RconPassword);
                     }
                     catch (Exception ex)
                     {
                         Output.Log(I18n.Get("anz_rcon_connect_failed", ex.Message), 2, ThisProgramName);
                     }
 
+                    rt.Running = rconConnected;
+                    rt.StreamKey = rt.Id;
+                    LogStreamStore.BeginServerStream(rt.StreamKey, serverName);
+
                     Output.Log(I18n.Get("anz_attached_server", Path.GetFileName(server.JarPath), server.ProcessId), 1, ThisProgramName);
                     if (rconConnected)
                     {
-                        Output.Log(I18n.Get("anz_rcon_connected", Config.CurrentServer.RconHost, Config.CurrentServer.RconPort), 1, ThisProgramName);
+                        Output.Log(I18n.Get("anz_rcon_connected", rt.Entry.RconHost, rt.Entry.RconPort), 1, ThisProgramName);
                     }
                     else
                     {
@@ -832,197 +1081,307 @@ namespace RtCli.Modules.Function
                 }
                 catch (Exception ex)
                 {
-                    _attachedProcessId = 0;
-                    _attachedWindowTitle = "";
-                    _connectedServerName = "";
-                    Interlocked.Exchange(ref _logFilePosition, 0);
+                    rt.AttachedProcessId = 0;
+                    rt.AttachedWindowTitle = "";
+                    rt.ConnectedServerName = "";
+                    rt.Running = false;
                     Output.ReportError(ex, false, I18n.Get("anz_connect_server_failed"));
                 }
             }
         }
 
         /// <summary>
-        /// RM模式日志文件监控: 等待日志文件创建后开始监控
+        /// RCON 纯远程连接: 不依赖本机扫描/PID, 直接用 host/port/password 连接任意远程服务器。
+        /// 控制台来源为 RCON 命令与响应。
         /// </summary>
-        private static void StartRMLogFileMonitor(string workPath, CancellationToken cancellationToken)
+        public static bool ConnectRemoteRcon(string host, int port, string password, string? instanceId = null)
         {
-            string ThisProgramName = "Analyzer";
-            string logFile = Path.Combine(workPath, "logs", "latest.log");
+            const string ThisProgramName = "Analyzer";
+            var rt = GetRuntime(instanceId);
+            if (!rt.Running) RefreshEntry(rt);
 
-            // 记录监控开始时已存在的旧日志长度(用于检测轮转,防止重放上一会话的日志)
-            long initialLength = -1;
-            try
+            if (string.IsNullOrWhiteSpace(host) || port <= 0 || string.IsNullOrWhiteSpace(password))
             {
-                if (File.Exists(logFile))
-                    initialLength = new FileInfo(logFile).Length;
+                Output.Log(I18n.Get("anz_rcon_remote_incomplete"), 2, ThisProgramName);
+                return false;
             }
-            catch { }
 
-            // 等待日志文件创建/轮转(最多90秒)。
-            // MC服务端进程启动后需经JVM引导(可达数十秒)才轮转latest.log:
-            // 旧文件归档为日期.gz并新建latest.log。若在轮转前从0读取,会把上一会话的
-            // 完整日志(含其关闭序列)重放到控制台,造成"服务器启动后立即被关闭"的假象。
-            bool waitLogged = false;
-            for (int i = 0; i < 180; i++)
+            // 已以本地子进程模式运行时不允许直接改成纯远程连接, 避免丢失进程/stdin 跟踪
+            if (rt.Running && (rt.Mode == "RUN" || rt.Mode == "RR" || rt.Mode == "RM"))
             {
-                if (cancellationToken.IsCancellationRequested) return;
+                Output.Log(I18n.Get("anz_rcon_remote_busy"), 2, ThisProgramName);
+                return false;
+            }
+
+            lock (rt.CommandLock)
+            {
                 try
                 {
-                    if (!File.Exists(logFile))
+                    rt.Rcon?.Disconnect();
+                    rt.Rcon = new RconClient();
+                    Output.Log(I18n.Get("anz_rcon_remote_connecting", host, port), 1, ThisProgramName);
+                    if (!rt.Rcon.Connect(host, port, password))
                     {
-                        initialLength = -1; // 文件尚不存在,等待创建
+                        Output.Log(I18n.Get("anz_rcon_remote_failed", host, port), 2, ThisProgramName);
+                        rt.Running = false;
+                        return false;
                     }
-                    else
-                    {
-                        long len = new FileInfo(logFile).Length;
-                        if (initialLength < 0)
-                            break; // 全新创建的文件: 从头读取
-                        if (len < initialLength)
-                        {
-                            // 文件比初始长度短: 已轮转,新文件从头读取
-                            initialLength = 0;
-                            break;
-                        }
-                    }
-                }
-                catch { }
 
-                if (i == 20 && !waitLogged && initialLength >= 0)
+                    rt.Mode = "RCON";
+                    rt.Running = true;
+                    rt.AttachedProcessId = 0;
+                    rt.AttachedWindowTitle = "";
+                    rt.ConnectedServerName = rt.Entry.ServerName;
+                    rt.StartTime = DateTime.Now;
+                    rt.StreamKey = rt.Id;
+                    LogStreamStore.BeginServerStream(rt.StreamKey, rt.ConnectedServerName);
+                    Output.Log(I18n.Get("anz_rcon_remote_connected", host, port), 1, ThisProgramName);
+                    EventBus.Publish(new ServerStartEvent(Config.App.GrpcPort, rt.Id));
+                    return true;
+                }
+                catch (Exception ex)
                 {
-                    // JVM引导中,等待服务端轮转日志文件(旧日志不会重放)
-                    waitLogged = true;
-                    Output.Log(I18n.Get("anz_rm_wait_rotation"), 1, ThisProgramName);
+                    rt.Running = false;
+                    Output.Log(I18n.Get("anz_rcon_remote_failed_detail", host, port, ex.Message), 2, ThisProgramName);
+                    return false;
                 }
-                Thread.Sleep(500);
             }
-
-            if (!File.Exists(logFile))
-            {
-                Output.Log(I18n.Get("anz_rm_logfile_missing"), 2, ThisProgramName);
-                return;
-            }
-
-            if (initialLength > 0)
-            {
-                // 超时未检测到轮转: 从旧文件长度处读取(仅采集新增行,避免重放旧会话日志)
-                long pos = initialLength;
-                try
-                {
-                    using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    if (fs.Length < pos) pos = fs.Length;
-                }
-                catch { }
-                Interlocked.Exchange(ref _logFilePosition, pos);
-                Output.Log(I18n.Get("anz_rm_append_mode", pos), 1, ThisProgramName);
-            }
-            else
-            {
-                Interlocked.Exchange(ref _logFilePosition, 0);
-            }
-
-            string serverName = _connectedServerName;
-            Output.Log(I18n.Get("anz_rm_log_monitor_started", logFile), 1, ThisProgramName);
-
-            WatchLogFile(logFile, serverName, cancellationToken);
         }
 
-        private static void WatchLogFile(string logFile, string serverName, CancellationToken cancellationToken)
+        // ===== RM 模式: 服务端管理协议(MC 1.21.9+) 接入 =====
+
+        /// <summary>
+        /// 启动服务端管理协议连接(RM模式)。连接参数优先取实例配置, 缺失时回退读取 server.properties。
+        /// </summary>
+        private static void StartRmManagement(InstanceRuntime rt, string workPath, bool quiet = false)
         {
             try
             {
-                using var watcher = new FileSystemWatcher(Path.GetDirectoryName(logFile)!, Path.GetFileName(logFile))
+                if (rt.Management != null && rt.Management.IsConnected) return;
+
+                rt.Management?.Stop();
+                rt.Management = new MCManagementConnection();
+                string capturedId = rt.Id;
+                rt.Management.NotificationReceived += (method, prms) =>
                 {
-                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size
+                    using (InstanceContext.Push(capturedId))
+                        OnMgmtNotification(capturedId, method, prms);
                 };
 
-                var changedEvent = new AutoResetEvent(false);
-                watcher.Changed += (s, e) => changedEvent.Set();
-                watcher.EnableRaisingEvents = true;
+                var props = ReadServerProperties(workPath);
 
-                while (!cancellationToken.IsCancellationRequested)
+                bool enabled = string.Equals(GetProp(props, "management-server-enabled", "false"), "true", StringComparison.OrdinalIgnoreCase);
+                string host = rt.Entry.ManagementHost;
+                if (string.IsNullOrWhiteSpace(host)) host = "localhost";
+                string propHost = GetProp(props, "management-server-host", "");
+                if (!string.IsNullOrWhiteSpace(propHost) && (host == "localhost" || string.IsNullOrWhiteSpace(host)))
+                    host = propHost;
+
+                int port = rt.Entry.ManagementPort;
+                if (port <= 0) int.TryParse(GetProp(props, "management-server-port", "0"), out port);
+
+                string secret = rt.Entry.ManagementSecret;
+                if (string.IsNullOrWhiteSpace(secret)) secret = GetProp(props, "management-server-secret", "");
+
+                bool tls = rt.Entry.ManagementTlsEnabled;
+
+                if (!enabled && string.IsNullOrWhiteSpace(secret) && port <= 0)
                 {
-                    WaitHandle.WaitAny(new WaitHandle[] { changedEvent, cancellationToken.WaitHandle }, 2000);
-
-                    if (cancellationToken.IsCancellationRequested)
-                        break;
-
-                    ReadNewLogLines(logFile, serverName);
-
-                    // 玩家事件监听延迟(ticks)，人数越多建议越小
-                    int ticks = Config.App.PlayerEvent?.Enabled == true
-                        ? Math.Max(1, Config.App.PlayerEvent.Ticks)
-                        : 50;
-                    Thread.Sleep(ticks);
+                    if (!quiet) Output.Log(I18n.Get("anz_mgmt_not_enabled"), 1, ThisProgramName);
+                    return;
                 }
+                if (port <= 0)
+                {
+                    if (!quiet) Output.Log(I18n.Get("anz_mgmt_no_port"), 2, ThisProgramName);
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(secret))
+                {
+                    if (!quiet) Output.Log(I18n.Get("anz_mgmt_no_secret"), 2, ThisProgramName);
+                    return;
+                }
+
+                if (!quiet) Output.Log(I18n.Get("anz_mgmt_connecting", host, port), 1, ThisProgramName);
+                rt.Management.Start(host, port, secret, tls);
             }
-            catch (OperationCanceledException) { }
-            catch { }
+            catch (Exception ex)
+            {
+                if (!quiet) Output.Log(I18n.Get("anz_mgmt_start_failed", ex.Message), 2, ThisProgramName);
+            }
         }
 
-        private static void ReadNewLogLines(string logFile, string serverName)
+        private static string ThisProgramName => "Analyzer";
+
+        /// <summary>读取 server.properties 为键值字典(不存在时返回空字典)</summary>
+        private static Dictionary<string, string> ReadServerProperties(string workPath)
+        {
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                string file = Path.Combine(workPath, "server.properties");
+                if (!File.Exists(file)) return dict;
+                foreach (var line in File.ReadAllLines(file))
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.Length == 0 || trimmed.StartsWith("#")) continue;
+                    int idx = trimmed.IndexOf('=');
+                    if (idx <= 0) continue;
+                    dict[trimmed.Substring(0, idx).Trim()] = trimmed.Substring(idx + 1).Trim();
+                }
+            }
+            catch { }
+            return dict;
+        }
+
+        private static string GetProp(Dictionary<string, string> props, string key, string def)
+            => props.TryGetValue(key, out var v) ? v : def;
+
+        /// <summary>管理协议通知 → EventBus 事件(RM 事件需面板开关 showRmEvents 开启, 默认开启)</summary>
+        private static void OnMgmtNotification(string instanceId, string method, JsonElement prms)
         {
             try
             {
-                using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                long currentPos = Interlocked.Read(ref _logFilePosition);
-                if (fs.Length < currentPos)
+                if (!PanelDataManager.GetBool("showRmEvents", true)) return;
+                string m = method ?? "";
+                string time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+                if (m.EndsWith("operators/added", StringComparison.OrdinalIgnoreCase))
                 {
-                    // 文件比上次读取位置短: 日志已轮转(旧文件归档、新文件从0开始),从头读取
-                    currentPos = 0;
-                    Interlocked.Exchange(ref _logFilePosition, 0);
+                    EventBus.Publish(new PlayerOpEvent(ExtractPlayerName(prms), true, ExtractString(prms, "source"), time));
                 }
-                else if (fs.Length == currentPos)
+                else if (m.EndsWith("operators/removed", StringComparison.OrdinalIgnoreCase))
                 {
-                    return; // 无新内容
+                    EventBus.Publish(new PlayerOpEvent(ExtractPlayerName(prms), false, ExtractString(prms, "source"), time));
                 }
-
-                fs.Seek(currentPos, SeekOrigin.Begin);
-                using var reader = new StreamReader(fs, Encoding.GetEncoding(0));
-
-                string? line;
-                while ((line = reader.ReadLine()) != null)
+                else if (m.EndsWith("bans/added", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (!string.IsNullOrWhiteSpace(line))
-                    {
-                        Interlocked.Increment(ref _logActivityCounter);
-                        if (!ShouldHideConsole())
-                            Output.Log(line, 0, serverName);
-                        ProcessPlayerEventLine(line);
-
-                        // RM模式: 日志文件行同步写入全局日志流缓存
-                        if (!string.IsNullOrEmpty(_activeStreamKey))
-                            LogStreamStore.Append(_activeStreamKey, line);
-                    }
+                    EventBus.Publish(new PlayerBanEvent(ExtractPlayerName(prms), "ban", true, ExtractString(prms, "reason"), time));
                 }
-
-                Interlocked.Exchange(ref _logFilePosition, fs.Position);
+                else if (m.EndsWith("bans/removed", StringComparison.OrdinalIgnoreCase))
+                {
+                    EventBus.Publish(new PlayerBanEvent(ExtractPlayerName(prms), "ban", false, "", time));
+                }
+                else if (m.EndsWith("ip_bans/added", StringComparison.OrdinalIgnoreCase))
+                {
+                    EventBus.Publish(new PlayerBanEvent(ExtractIp(prms), "ip_ban", true, ExtractString(prms, "reason"), time));
+                }
+                else if (m.EndsWith("ip_bans/removed", StringComparison.OrdinalIgnoreCase))
+                {
+                    EventBus.Publish(new PlayerBanEvent(ExtractIp(prms), "ip_ban", false, "", time));
+                }
             }
-            catch (IOException) { }
-            catch { }
+            catch (Exception ex)
+            {
+                Output.Log($"管理协议事件处理异常: {ex.Message}", 2, "Analyzer");
+            }
+        }
+
+        /// <summary>递归查找通知参数中的玩家名(优先 player.name)</summary>
+        private static string ExtractPlayerName(JsonElement el)
+        {
+            switch (el.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    if (el.TryGetProperty("player", out var p) && p.ValueKind == JsonValueKind.Object)
+                    {
+                        string r = ExtractPlayerName(p);
+                        if (!string.IsNullOrEmpty(r)) return r;
+                    }
+                    if (el.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
+                        return n.GetString() ?? "";
+                    foreach (var prop in el.EnumerateObject())
+                    {
+                        string r = ExtractPlayerName(prop.Value);
+                        if (!string.IsNullOrEmpty(r)) return r;
+                    }
+                    break;
+                case JsonValueKind.Array:
+                    foreach (var item in el.EnumerateArray())
+                    {
+                        string r = ExtractPlayerName(item);
+                        if (!string.IsNullOrEmpty(r)) return r;
+                    }
+                    break;
+            }
+            return "";
+        }
+
+        /// <summary>递归查找通知参数中的 IP(优先 ip 字段, 其次裸字符串)</summary>
+        private static string ExtractIp(JsonElement el)
+        {
+            switch (el.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    if (el.TryGetProperty("ip", out var ip) && ip.ValueKind == JsonValueKind.String)
+                        return ip.GetString() ?? "";
+                    foreach (var prop in el.EnumerateObject())
+                    {
+                        string r = ExtractIp(prop.Value);
+                        if (!string.IsNullOrEmpty(r)) return r;
+                    }
+                    break;
+                case JsonValueKind.Array:
+                    foreach (var item in el.EnumerateArray())
+                    {
+                        string r = ExtractIp(item);
+                        if (!string.IsNullOrEmpty(r)) return r;
+                    }
+                    break;
+                case JsonValueKind.String:
+                    return el.GetString() ?? "";
+            }
+            return "";
+        }
+
+        /// <summary>递归查找通知参数中的字符串字段</summary>
+        private static string ExtractString(JsonElement el, string field)
+        {
+            switch (el.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    if (el.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.String)
+                        return v.GetString() ?? "";
+                    foreach (var prop in el.EnumerateObject())
+                    {
+                        string r = ExtractString(prop.Value, field);
+                        if (!string.IsNullOrEmpty(r)) return r;
+                    }
+                    break;
+                case JsonValueKind.Array:
+                    foreach (var item in el.EnumerateArray())
+                    {
+                        string r = ExtractString(item, field);
+                        if (!string.IsNullOrEmpty(r)) return r;
+                    }
+                    break;
+            }
+            return "";
         }
 
         #endregion
 
         #region Common
 
-        public static bool IsAttached => _attachedProcessId != 0 || _isRunModeActive;
+        public static bool IsAttached => Rt.Running && (Rt.AttachedProcessId != 0 || Rt.Mode == "RCON");
 
         /// <summary>
-        /// 获取 MC 服务端进程。
-        /// Run 模式返回 _serverProcess；Attach/RCON 模式通过 _attachedProcessId 获取。
+        /// 获取指定实例的 MC 服务端进程。
+        /// Run/RR/RM 返回托管子进程; Attach/RCON 模式通过 attached PID 获取(纯远程 RCON 无本地进程)。
         /// </summary>
-        public static Process? GetServerProcess()
+        public static Process? GetServerProcess(string? instanceId = null)
         {
-            // Run 模式：直接返回启动的进程
-            if (_serverProcess != null && !_serverProcess.HasExited)
-                return _serverProcess;
+            var rt = GetRuntime(instanceId);
+
+            // Run/RR/RM 模式：直接返回启动的进程
+            if (rt.Process != null && !rt.Process.HasExited)
+                return rt.Process;
 
             // Attach/RCON 模式：通过 PID 获取
-            if (_attachedProcessId != 0)
+            if (rt.AttachedProcessId != 0)
             {
                 try
                 {
-                    var proc = Process.GetProcessById(_attachedProcessId);
+                    var proc = Process.GetProcessById(rt.AttachedProcessId);
                     if (proc != null && !proc.HasExited)
                         return proc;
                 }
@@ -1032,34 +1391,39 @@ namespace RtCli.Modules.Function
             return null;
         }
 
-        private static bool ShouldHideConsole()
+        /// <summary>是否在 CLI 控制台隐藏该实例的服务端输出(按实例配置判断, 多实例互不影响)</summary>
+        private static bool ShouldHideConsole(string? instanceId = null)
         {
             var hideList = Config.App.HideConsoleServers;
             if (hideList == null || hideList.Count == 0)
                 return false;
-            return hideList.Contains(Config.App.CurrentServer);
+            return hideList.Contains(instanceId ?? Config.App.CurrentServer);
         }
 
-        public static void SendCommand(string command)
+        public static void SendCommand(string command, string? instanceId = null)
         {
-            lock (_attachLock)
+            var rt = GetRuntime(instanceId);
+            using (InstanceContext.Push(rt.Id))
             {
-                if (UsesStdinCommands)
+                lock (rt.CommandLock)
                 {
-                    SendCommandRunMode(command);
-                }
-                else if (UsesRconCommands)
-                {
-                    SendCommandRconMode(command);
+                    if (rt.Mode == "RUN" || rt.Mode == "RM")
+                    {
+                        SendCommandRunMode(rt, command);
+                    }
+                    else if (rt.Mode == "RCON" || rt.Mode == "RR")
+                    {
+                        SendCommandRconMode(rt, command);
+                    }
                 }
             }
         }
 
-        private static void SendCommandRunMode(string command)
+        private static void SendCommandRunMode(InstanceRuntime rt, string command)
         {
             string ThisProgramName = "Analyzer";
 
-            if (!_isRunModeActive || _serverInput == null)
+            if (!rt.Running || rt.Stdin == null)
             {
                 Output.Log(I18n.Get("anz_server_not_running_start_first"), 2, ThisProgramName);
                 return;
@@ -1067,9 +1431,9 @@ namespace RtCli.Modules.Function
 
             try
             {
-                _serverInput.WriteLine(command);
-                _serverInput.Flush();
-                Output.Log($"> {command}", 1, _connectedServerName);
+                rt.Stdin.WriteLine(command);
+                rt.Stdin.Flush();
+                Output.Log($"> {command}", 1, rt.ConnectedServerName);
             }
             catch (Exception ex)
             {
@@ -1077,17 +1441,11 @@ namespace RtCli.Modules.Function
             }
         }
 
-        private static void SendCommandRconMode(string command)
+        private static void SendCommandRconMode(InstanceRuntime rt, string command)
         {
             string ThisProgramName = "Analyzer";
 
-            if (_attachedProcessId == 0)
-            {
-                Output.Log(I18n.Get("anz_not_attached_hint"), 2, ThisProgramName);
-                return;
-            }
-
-            if (_rconClient == null || !_rconClient.IsConnected)
+            if (rt.Rcon == null || !rt.Rcon.IsConnected)
             {
                 Output.Log(I18n.Get("anz_rcon_not_connected_send"), 2, ThisProgramName);
                 return;
@@ -1095,11 +1453,16 @@ namespace RtCli.Modules.Function
 
             try
             {
-                string response = _rconClient.SendCommand(command);
-                Output.Log($"> {command}", 1, _connectedServerName);
+                string response = rt.Rcon.SendCommand(command);
+                // RCON 模式控制台来源为命令与响应: 写入实例日志缓冲, 供面板控制台/分析使用
+                AddToLogBuffer(rt, $"> {command}");
+                if (!string.IsNullOrWhiteSpace(response))
+                    AddToLogBuffer(rt, response);
+
+                Output.Log($"> {command}", 1, rt.ConnectedServerName);
                 if (!string.IsNullOrWhiteSpace(response))
                 {
-                    Output.Log(Markup.Escape(response), 1, _connectedServerName);
+                    Output.Log(Markup.Escape(response), 1, rt.ConnectedServerName);
                 }
             }
             catch (Exception ex)
@@ -1118,87 +1481,87 @@ namespace RtCli.Modules.Function
         /// <param name="timeoutMs">等待响应的超时时间(毫秒)</param>
         /// <param name="silent">静默模式: 不打印 "> 命令" 与响应行到控制台(用于 tps/list 等内部信息采集)</param>
         /// <returns>捕获到的响应行列表</returns>
-        public static List<string> SendCommandWithCapture(string command, int timeoutMs = 3000, bool silent = false)
+        public static List<string> SendCommandWithCapture(string command, int timeoutMs = 3000, bool silent = false, string? instanceId = null)
         {
             var result = new List<string>();
-            lock (_attachLock)
+            var rt = GetRuntime(instanceId);
+            using (InstanceContext.Push(rt.Id))
             {
-                if (UsesRconCommands && _rconClient != null && _rconClient.IsConnected)
+                lock (rt.CommandLock)
                 {
-                    // RCON 模式：SendCommand 直接返回响应字符串
-                    try
+                    if ((rt.Mode == "RCON" || rt.Mode == "RR") && rt.Rcon != null && rt.Rcon.IsConnected)
                     {
-                        string response = _rconClient.SendCommand(command);
-                        if (!silent)
+                        // RCON 模式：SendCommand 直接返回响应字符串
+                        try
                         {
-                            Output.Log($"> {command}", 1, _connectedServerName);
+                            string response = rt.Rcon.SendCommand(command);
+                            AddToLogBuffer(rt, $"> {command}");
                             if (!string.IsNullOrWhiteSpace(response))
-                                Output.Log(Markup.Escape(response), 1, _connectedServerName);
-                        }
-                        if (!string.IsNullOrWhiteSpace(response))
-                        {
-                            // RCON 响应可能是多行的
-                            foreach (var line in response.Replace("\r\n", "\n").Split('\n'))
+                                AddToLogBuffer(rt, response);
+                            if (!silent)
                             {
-                                if (!string.IsNullOrWhiteSpace(line))
-                                    result.Add(line);
+                                Output.Log($"> {command}", 1, rt.ConnectedServerName);
+                                if (!string.IsNullOrWhiteSpace(response))
+                                    Output.Log(Markup.Escape(response), 1, rt.ConnectedServerName);
+                            }
+                            if (!string.IsNullOrWhiteSpace(response))
+                            {
+                                // RCON 响应可能是多行的
+                                foreach (var line in response.Replace("\r\n", "\n").Split('\n'))
+                                {
+                                    if (!string.IsNullOrWhiteSpace(line))
+                                        result.Add(line);
+                                }
                             }
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        Output.Log(I18n.Get("anz_rcon_send_cmd_failed", ex.Message), 3, "Analyzer");
-                    }
-                    return result;
-                }
-
-                if (UsesStdinCommands && _isRunModeActive && _serverInput != null)
-                {
-                    // Run 模式：写入 stdin，然后从日志缓冲区收集新行
-                    int startCount;
-                    lock (_logBufferLock)
-                    {
-                        startCount = _logBuffer.Count;
-                    }
-
-                    try
-                    {
-                        _serverInput.WriteLine(command);
-                        _serverInput.Flush();
-                        if (!silent)
-                            Output.Log($"> {command}", 1, _connectedServerName);
-                    }
-                    catch (Exception ex)
-                    {
-                        Output.Log(I18n.Get("anz_send_cmd_failed", ex.Message), 3, "Analyzer");
+                        catch (Exception ex)
+                        {
+                            Output.Log(I18n.Get("anz_rcon_send_cmd_failed", ex.Message), 3, "Analyzer");
+                        }
                         return result;
                     }
 
-                    // 轮询日志缓冲区等待响应
-                    var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-                    bool gotAny = false;
-                    while (DateTime.UtcNow < deadline)
+                    if ((rt.Mode == "RUN" || rt.Mode == "RM") && rt.Running && rt.Stdin != null)
                     {
-                        Thread.Sleep(100);
-                        lock (_logBufferLock)
+                        // Run/RM 模式：写入 stdin，然后按绝对序号从该实例日志缓冲区收集新增行
+                        long cursor = rt.LogCursor;
+
+                        try
                         {
-                            result.Clear();
-                            for (int i = startCount; i < _logBuffer.Count; i++)
-                                result.Add(_logBuffer[i]);
+                            rt.Stdin.WriteLine(command);
+                            rt.Stdin.Flush();
+                            if (!silent)
+                                Output.Log($"> {command}", 1, rt.ConnectedServerName);
                         }
-                        if (result.Count > 0)
+                        catch (Exception ex)
                         {
-                            if (!gotAny)
+                            Output.Log(I18n.Get("anz_send_cmd_failed", ex.Message), 3, "Analyzer");
+                            return result;
+                        }
+
+                        // 轮询日志缓冲区等待响应
+                        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                        bool gotAny = false;
+                        while (DateTime.UtcNow < deadline)
+                        {
+                            Thread.Sleep(100);
+                            var newLines = rt.ReadLogLinesSince(cursor, out cursor);
+                            if (newLines.Count > 0)
+                                result.AddRange(newLines);
+                            if (result.Count > 0)
                             {
-                                // 第一次收到响应，再等 300ms 收集完整输出
-                                gotAny = true;
-                                Thread.Sleep(300);
-                                continue;
+                                if (!gotAny)
+                                {
+                                    // 第一次收到响应，再等 300ms 收集完整输出
+                                    gotAny = true;
+                                    Thread.Sleep(300);
+                                    continue;
+                                }
+                                break;
                             }
-                            break;
                         }
+                        return result;
                     }
-                    return result;
                 }
             }
             return result;
@@ -1206,129 +1569,213 @@ namespace RtCli.Modules.Function
 
         // ===== TPS 查询(发送 tps 命令解析返回) =====
 
-        private static DateTime _lastTpsQueryTime = DateTime.MinValue;
-        private static (double T1m, double T5m, double T15m) _cachedTps = (-1, -1, -1);
-        private static readonly TimeSpan _tpsQueryInterval = TimeSpan.FromSeconds(10);
+        private static Regex? _tpsCustomRegex;
+        private static string? _tpsCustomPattern;
+        private static Regex? _listCustomRegex;
+        private static string? _listCustomPattern;
+
+        /// <summary>
+        /// 编译 regex_settings 中的自定义解析正则(带匹配超时)。
+        /// 同一 pattern 只编译/告警一次; 留空或非法返回 null, 由调用方回退内置规则。
+        /// </summary>
+        private static Regex? GetConfiguredRegex(ref Regex? cache, ref string? cachedPattern, string? pattern, string name)
+        {
+            if (cachedPattern == pattern) return cache;
+            cachedPattern = pattern;
+            cache = null;
+            if (string.IsNullOrWhiteSpace(pattern)) return null;
+            try
+            {
+                cache = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase,
+                    TimeSpan.FromMilliseconds(200));
+            }
+            catch (ArgumentException ex)
+            {
+                Output.Log($"regex_settings 中 {name} 的正则无效，已回退内置规则: {ex.Message}", 2, "Analyzer");
+            }
+            return cache;
+        }
+
+        /// <summary>按配置正则解析 TPS: 3 个捕获组视为 1m/5m/15m, 1 个捕获组视为单值</summary>
+        private static bool TryParseTpsByRegex(Regex regex, string line, out double t1m, out double t5m, out double t15m)
+        {
+            t1m = t5m = t15m = -1;
+            if (string.IsNullOrEmpty(line)) return false;
+
+            Match m;
+            try { m = regex.Match(line); }
+            catch (RegexMatchTimeoutException) { return false; }
+            if (!m.Success) return false;
+
+            int groups = m.Groups.Count - 1;
+            if (groups >= 3)
+            {
+                if (!double.TryParse(m.Groups[1].Value, out var a)) return false;
+                if (!double.TryParse(m.Groups[2].Value, out var b)) return false;
+                if (!double.TryParse(m.Groups[3].Value, out var c)) return false;
+                t1m = a; t5m = b; t15m = c;
+                return true;
+            }
+            if (groups == 1)
+            {
+                if (!double.TryParse(m.Groups[1].Value, out var single)) return false;
+                t1m = t5m = t15m = single;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>按配置正则解析在线人数: 需要 2 个捕获组(count/max)</summary>
+        private static bool TryParsePlayerCountByRegex(Regex regex, string line, out int count, out int max)
+        {
+            count = max = -1;
+            if (string.IsNullOrEmpty(line)) return false;
+
+            Match m;
+            try { m = regex.Match(line); }
+            catch (RegexMatchTimeoutException) { return false; }
+            if (!m.Success || m.Groups.Count - 1 < 2) return false;
+            if (!int.TryParse(m.Groups[1].Value, out var c)) return false;
+            if (!int.TryParse(m.Groups[2].Value, out var mx)) return false;
+            count = c; max = mx;
+            return true;
+        }
 
         /// <summary>
         /// 发送 tps 命令并解析返回结果。
-        /// 支持 Spark 插件格式："TPS from last 1m, 5m, 15m: 20.0*, 20.0, 19.9"
-        /// 也兼容旧式单值格式。
-        /// 带 10 秒节流缓存，避免频繁发送命令。
+        /// 指令/正则/开关均由 regex_settings.yml 的 server_query.tps 控制;
+        /// 配置正则为空或非法时回退 MCConsole 内置规则(Spark 多值优先, 旧式单值兜底)。
+        /// 带节流缓存(间隔由 interval_seconds 配置)，避免频繁发送命令。
         /// </summary>
-        public static (double Tps1m, double Tps5m, double Tps15m) QueryTps(int timeoutMs = 3000)
+        public static (double Tps1m, double Tps5m, double Tps15m) QueryTps(int timeoutMs = 3000, string? instanceId = null)
         {
-            if (!IsRunModeActive && !IsAttached)
+            // 配置关闭时不发送指令, 返回未知值(不读缓存、不更新节流时间)
+            var cfg = ContentManager.Regex?.ServerQuery?.Tps;
+            if (cfg == null || !cfg.Enabled)
                 return (-1, -1, -1);
 
-            // 节流：10 秒内不重复查询
-            if (DateTime.UtcNow - _lastTpsQueryTime < _tpsQueryInterval)
-                return _cachedTps;
+            var rt = GetRuntime(instanceId);
+            if (!rt.Running)
+                return (-1, -1, -1);
 
-            _lastTpsQueryTime = DateTime.UtcNow;
+            // 节流：间隔由 regex_settings.yml 的 server_query.tps.interval_seconds 控制(默认10秒)
+            var interval = TimeSpan.FromSeconds(Math.Max(1, cfg.IntervalSeconds));
+            if (DateTime.UtcNow - rt.LastTpsQueryTime < interval)
+                return rt.CachedTps;
+
+            rt.LastTpsQueryTime = DateTime.UtcNow;
+
+            var command = string.IsNullOrWhiteSpace(cfg.Command) ? "tps" : cfg.Command.Trim().TrimStart('/');
+            var customRegex = GetConfiguredRegex(ref _tpsCustomRegex, ref _tpsCustomPattern, cfg.Regex, "TPS");
 
             try
             {
-                var lines = SendCommandWithCapture("tps", timeoutMs, silent: true);
-                // Spark 格式: TPS from last 1m, 5m, 15m: 20.0*, 20.0, 19.9
-                var sparkPattern = new Regex(
-                    @"TPS\s+from\s+last\s+\d+m\s*,\s*\d+m\s*,\s*\d+m\s*:\s*([\d.]+)\s*\*?\s*,\s*([\d.]+)\s*\*?\s*,\s*([\d.]+)\s*\*?",
-                    RegexOptions.IgnoreCase);
-                // 旧式单值格式: TPS: 20.0  或  TPS from last 1m: 20.0
-                var singlePattern = new Regex(
-                    @"TPS\s*(?:from\s+last\s+\d+m)?\s*:\s*([\d.]+)",
-                    RegexOptions.IgnoreCase);
-
+                var lines = SendCommandWithCapture(command, timeoutMs, silent: true, instanceId: rt.Id);
                 foreach (var line in lines)
                 {
-                    var m = sparkPattern.Match(line);
-                    if (m.Success)
+                    if (customRegex != null && TryParseTpsByRegex(customRegex, line, out var c1, out var c5, out var c15))
                     {
-                        _cachedTps = (
-                            double.TryParse(m.Groups[1].Value, out var t1) ? t1 : -1,
-                            double.TryParse(m.Groups[2].Value, out var t5) ? t5 : -1,
-                            double.TryParse(m.Groups[3].Value, out var t15) ? t15 : -1
-                        );
-                        return _cachedTps;
+                        rt.CachedTps = (c1, c5, c15);
+                        return rt.CachedTps;
                     }
-                    m = singlePattern.Match(line);
-                    if (m.Success && double.TryParse(m.Groups[1].Value, out var t))
+                    // 解析规则统一维护于 MCConsole(Spark 多值优先, 旧式单值兜底)
+                    if (MCConsole.TryParseSparkTps(line, out var t1, out var t5, out var t15))
                     {
-                        _cachedTps = (t, t, t);
-                        return _cachedTps;
+                        rt.CachedTps = (t1, t5, t15);
+                        return rt.CachedTps;
+                    }
+                    if (MCConsole.TryParseSingleTps(line, out var t))
+                    {
+                        rt.CachedTps = (t, t, t);
+                        return rt.CachedTps;
                     }
                 }
             }
             catch { }
 
-            return _cachedTps;
+            return rt.CachedTps;
         }
 
         // ===== 玩家数量查询(发送 list 命令解析返回) =====
 
-        private static DateTime _lastListQueryTime = DateTime.MinValue;
-        private static (int Count, int Max) _cachedPlayers = (-1, -1);
-        private static readonly TimeSpan _listQueryInterval = TimeSpan.FromSeconds(10);
-
         /// <summary>
-        /// 发送 list 命令并解析在线玩家数。
-        /// 解析格式："There are 2 of a max of 20 players online: ..."
-        /// 带 10 秒节流缓存。
+        /// 获取在线玩家数。RM 模式优先使用管理协议 server/status(无需发命令),
+        /// 不可用时回退命令通道(由 regex_settings.yml 的 server_query.player_count 控制)。
+        /// 节流间隔由 interval_seconds 配置。
         /// </summary>
-        public static (int Count, int Max) QueryPlayerCount(int timeoutMs = 3000)
+        public static (int Count, int Max) QueryPlayerCount(int timeoutMs = 3000, string? instanceId = null)
         {
-            if (!IsRunModeActive && !IsAttached)
+            // 配置关闭时不发送指令, 返回未知值
+            var cfg = ContentManager.Regex?.ServerQuery?.PlayerCount;
+            if (cfg == null || !cfg.Enabled)
                 return (-1, -1);
 
-            if (DateTime.UtcNow - _lastListQueryTime < _listQueryInterval)
-                return _cachedPlayers;
+            var rt = GetRuntime(instanceId);
+            if (!rt.Running)
+                return (-1, -1);
 
-            _lastListQueryTime = DateTime.UtcNow;
+            // 节流：间隔由 regex_settings.yml 的 server_query.player_count.interval_seconds 控制(默认10秒)
+            var interval = TimeSpan.FromSeconds(Math.Max(1, cfg.IntervalSeconds));
+            if (DateTime.UtcNow - rt.LastListQueryTime < interval)
+                return rt.CachedPlayers;
+
+            rt.LastListQueryTime = DateTime.UtcNow;
+
+            // RM: 管理协议 server/status 直接给出在线人数与上限, 不占用命令通道
+            if (rt.Mode == "RM" && rt.Management != null && rt.Management.IsConnected)
+            {
+                try
+                {
+                    var (ok, online, max) = rt.Management.TryGetPlayerCount(Math.Max(timeoutMs, 3000));
+                    if (ok && online >= 0)
+                    {
+                        rt.CachedPlayers = (online, max);
+                        return rt.CachedPlayers;
+                    }
+                }
+                catch { }
+            }
+
+            var command = string.IsNullOrWhiteSpace(cfg.Command) ? "list" : cfg.Command.Trim().TrimStart('/');
+            var customRegex = GetConfiguredRegex(ref _listCustomRegex, ref _listCustomPattern, cfg.Regex, "在线人数");
 
             try
             {
-                var lines = SendCommandWithCapture("list", timeoutMs, silent: true);
-                // 格式: There are 2 of a max of 20 players online: player1, player2
-                // 也兼容中文端: 当前有 2 名玩家在线 / 共 20 个 slot
-                var pattern = new Regex(
-                    @"(?:There\s+(?:are|'re)\s+)(\d+)\s+of\s+a\s+max\s+of\s+(\d+)\s+players?\s+online",
-                    RegexOptions.IgnoreCase);
-
+                var lines = SendCommandWithCapture(command, timeoutMs, silent: true, instanceId: rt.Id);
+                // 格式: There are 2 of a max of 20 players online: player1, player2 — 规则维护于 MCConsole
                 foreach (var line in lines)
                 {
-                    var m = pattern.Match(line);
-                    if (m.Success)
+                    if (customRegex != null && TryParsePlayerCountByRegex(customRegex, line, out var c, out var mx))
                     {
-                        _cachedPlayers = (
-                            int.TryParse(m.Groups[1].Value, out var c) ? c : -1,
-                            int.TryParse(m.Groups[2].Value, out var mx) ? mx : -1
-                        );
-                        return _cachedPlayers;
+                        rt.CachedPlayers = (c, mx);
+                        return rt.CachedPlayers;
+                    }
+                    if (MCConsole.TryParsePlayerCount(line, out var c2, out var mx2))
+                    {
+                        rt.CachedPlayers = (c2, mx2);
+                        return rt.CachedPlayers;
                     }
                 }
             }
             catch { }
 
-            return _cachedPlayers;
+            return rt.CachedPlayers;
         }
 
         // ===== MC 进程 CPU 使用率(基于 TotalProcessorTime 两次采样) =====
-
-        private static DateTime _lastMcCpuSampleTime = DateTime.MinValue;
-        private static TimeSpan _lastMcCpuTime = TimeSpan.Zero;
-        private static double _cachedMcCpuUsage = -1;
 
         /// <summary>
         /// 获取 MC 服务端 Java 进程的 CPU 使用率(%)。
         /// 基于 Process.TotalProcessorTime 两次采样计算，首次调用返回 -1。
         /// </summary>
-        public static double GetMcCpuUsage()
+        public static double GetMcCpuUsage(string? instanceId = null)
         {
-            var proc = GetServerProcess();
+            var rt = GetRuntime(instanceId);
+            var proc = GetServerProcess(rt.Id);
             if (proc == null || proc.HasExited)
             {
-                _lastMcCpuSampleTime = DateTime.MinValue;
-                _cachedMcCpuUsage = -1;
+                rt.LastMcCpuSampleTime = DateTime.MinValue;
+                rt.CachedMcCpuUsage = -1;
                 return -1;
             }
 
@@ -1337,27 +1784,27 @@ namespace RtCli.Modules.Function
                 var now = DateTime.UtcNow;
                 var cpuTime = proc.TotalProcessorTime;
 
-                if (_lastMcCpuSampleTime == DateTime.MinValue)
+                if (rt.LastMcCpuSampleTime == DateTime.MinValue)
                 {
                     // 首次采样，只记录基准值
-                    _lastMcCpuSampleTime = now;
-                    _lastMcCpuTime = cpuTime;
-                    return _cachedMcCpuUsage < 0 ? -1 : _cachedMcCpuUsage;
+                    rt.LastMcCpuSampleTime = now;
+                    rt.LastMcCpuTime = cpuTime;
+                    return rt.CachedMcCpuUsage < 0 ? -1 : rt.CachedMcCpuUsage;
                 }
 
-                var wallElapsed = now - _lastMcCpuSampleTime;
-                var cpuElapsed = cpuTime - _lastMcCpuTime;
+                var wallElapsed = now - rt.LastMcCpuSampleTime;
+                var cpuElapsed = cpuTime - rt.LastMcCpuTime;
 
                 // 至少间隔 0.5 秒才更新，避免抖动
                 if (wallElapsed.TotalSeconds >= 0.5)
                 {
-                    _cachedMcCpuUsage = (cpuElapsed.TotalMilliseconds /
+                    rt.CachedMcCpuUsage = (cpuElapsed.TotalMilliseconds /
                         (wallElapsed.TotalMilliseconds * Environment.ProcessorCount)) * 100;
-                    _lastMcCpuSampleTime = now;
-                    _lastMcCpuTime = cpuTime;
+                    rt.LastMcCpuSampleTime = now;
+                    rt.LastMcCpuTime = cpuTime;
                 }
 
-                return _cachedMcCpuUsage < 0 ? -1 : _cachedMcCpuUsage;
+                return rt.CachedMcCpuUsage < 0 ? -1 : rt.CachedMcCpuUsage;
             }
             catch
             {
@@ -1365,11 +1812,12 @@ namespace RtCli.Modules.Function
             }
         }
 
-        public static void Detach()
+        public static void Detach(string? instanceId = null)
         {
-            lock (_attachLock)
+            var rt = GetRuntime(instanceId);
+            lock (rt.CommandLock)
             {
-                DetachCore();
+                DetachCore(rt);
             }
         }
 
@@ -1389,7 +1837,7 @@ namespace RtCli.Modules.Function
 
             try
             {
-                var lines = File.ReadAllLines(path, Encoding.GetEncoding(0)).ToList();
+                var lines = File.ReadAllLines(path, Encoding.UTF8).ToList();
                 string name = Path.GetFileNameWithoutExtension(path);
 
                 // 加入日志流缓存(外部流)并流式识别错误(来源=文件名)
@@ -1435,7 +1883,7 @@ namespace RtCli.Modules.Function
                 {
                     try
                     {
-                        var lines = File.ReadAllLines(filePath, Encoding.GetEncoding(0)).ToList();
+                        var lines = File.ReadAllLines(filePath, Encoding.UTF8).ToList();
                         batches.Add((Path.GetFileNameWithoutExtension(filePath), "external", lines));
                     }
                     catch (Exception ex)
@@ -1474,7 +1922,7 @@ namespace RtCli.Modules.Function
                     List<string> fallback = new List<string>();
                     lock (_logBufferLock)
                     {
-                        fallback = _logBuffer.ToList();
+                        fallback = _logBuffer.Snapshot();
                     }
 
                     if (fallback.Count == 0 && IsRunModeActive && !string.IsNullOrWhiteSpace(Config.CurrentServer.WorkPath))
@@ -1484,7 +1932,7 @@ namespace RtCli.Modules.Function
                         {
                             try
                             {
-                                fallback = File.ReadAllLines(logFile, Encoding.GetEncoding(0)).ToList();
+                                fallback = File.ReadAllLines(logFile, Encoding.UTF8).ToList();
                                 Output.Log(I18n.Get("anz_read_logfile_lines", fallback.Count), 1, ThisProgramName);
                             }
                             catch (Exception ex)
@@ -1636,21 +2084,17 @@ namespace RtCli.Modules.Function
 
             _clientGuideActive = true;
 
-            int startBufferCount;
-            lock (_logBufferLock)
-            {
-                startBufferCount = _logBuffer.Count;
-            }
+            long startSequence = LogCursor;
 
             int timeout = ContentManager.Regex.ClientGuide.Timeout;
             Output.Log(I18n.Get("anz_clientguide_waiting", timeout), 1, ThisProgramName);
             Output.Log(I18n.Get("anz_clientguide_wait_hint"), 1, ThisProgramName);
 
             var token = _clientGuideCts.Token;
-            _ = Task.Run(() => MonitorClientGuide(startBufferCount, timeout, token), token);
+            _ = Task.Run(() => MonitorClientGuide(startSequence, timeout, token), token);
         }
 
-        private static void MonitorClientGuide(int startBufferCount, int timeout, CancellationToken cancellationToken)
+        private static void MonitorClientGuide(long startSequence, int timeout, CancellationToken cancellationToken)
         {
             try
             {
@@ -1659,14 +2103,14 @@ namespace RtCli.Modules.Function
                 string clientErrorPattern = ContentManager.Regex.ClientGuide.ClientError;
                 string errorHandlerPattern = ContentManager.Regex.ClientGuide.ErrorHandler;
 
-                Regex joinRegex = new Regex(joinPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
-                Regex disconnectRegex = new Regex(disconnectPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
-                Regex clientErrorRegex = new Regex(clientErrorPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
-                Regex errorHandlerRegex = new Regex(errorHandlerPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+                Regex joinRegex = new Regex(joinPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, DynamicRegexTimeout);
+                Regex disconnectRegex = new Regex(disconnectPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, DynamicRegexTimeout);
+                Regex clientErrorRegex = new Regex(clientErrorPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, DynamicRegexTimeout);
+                Regex errorHandlerRegex = new Regex(errorHandlerPattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, DynamicRegexTimeout);
 
                 DateTime startTime = DateTime.Now;
                 List<string> capturedMessages = new List<string>();
-                int lastCheckedIndex = startBufferCount;
+                long lastSequence = startSequence;
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -1677,19 +2121,7 @@ namespace RtCli.Modules.Function
                         return;
                     }
 
-                    List<string> newLines = new List<string>();
-                    lock (_logBufferLock)
-                    {
-                        int currentCount = _logBuffer.Count;
-                        if (lastCheckedIndex > currentCount)
-                            lastCheckedIndex = 0;
-
-                        for (int i = lastCheckedIndex; i < currentCount; i++)
-                        {
-                            newLines.Add(_logBuffer[i]);
-                        }
-                        lastCheckedIndex = currentCount;
-                    }
+                    List<string> newLines = ReadLogLinesSince(lastSequence, out lastSequence);
 
                     foreach (var line in newLines)
                     {
@@ -1900,9 +2332,12 @@ namespace RtCli.Modules.Function
 
             foreach (var entry in baseEntries)
             {
+                var regex = GetBaseEntryRegex(entry.Pattern);
+                if (regex == null)
+                    continue;
+
                 try
                 {
-                    var regex = new Regex(entry.Pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
                     var match = regex.Match(combinedError);
                     if (match.Success)
                     {
@@ -1910,13 +2345,15 @@ namespace RtCli.Modules.Function
                         matches.Add((entry, match, score));
                     }
                 }
-                catch (Exception ex)
+                catch (RegexMatchTimeoutException)
                 {
-                    Output.Log(I18n.Get("anz_regex_invalid_topic", entry.Topic, ex.Message), 2, ThisProgramName);
+                    Output.Log(I18n.Get("anz_regex_invalid_topic", entry.Topic, "匹配超时(疑似灾难性回溯)"), 2, ThisProgramName);
                 }
             }
 
-            matches = matches.OrderByDescending(m => m.Match.Value.Length).ThenByDescending(m => m.Score).ToList();
+            // 按命中长度与占比排序, 只展示最可能的前若干条, 避免宽泛规则刷屏
+            matches = matches.OrderByDescending(m => m.Match.Value.Length).ThenByDescending(m => m.Score)
+                             .Take(MaxBaseMatchResults).ToList();
 
             if (matches.Count == 0)
             {
@@ -1954,13 +2391,49 @@ namespace RtCli.Modules.Function
 
                 if (!string.IsNullOrEmpty(entry.Action))
                 {
-                    table.AddRow("Action", Markup.Escape(entry.Action));
-                    Scripts.ExecuteScriptByName(entry.Action);
+                    // 安全策略: 基础分析命中后不再自动执行脚本, 仅提示用户手动执行
+                    table.AddRow("Action", Markup.Escape(entry.Action) + "（不自动执行，请手动运行）");
                 }
 
                 AnsiConsole.Write(table);
                 AnsiConsole.WriteLine();
             }
+        }
+
+        /// <summary>
+        /// 获取基础错误库条目对应的已编译正则(带超时, 结果缓存); 无效表达式缓存为 null 并只记录一次
+        /// </summary>
+        private static Regex? GetBaseEntryRegex(string pattern)
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+                return null;
+
+            lock (_baseEntryRegexLock)
+            {
+                if (_baseEntryRegexCache.TryGetValue(pattern, out var cached))
+                    return cached;
+            }
+
+            Regex? regex = null;
+            try
+            {
+                regex = new Regex(pattern,
+                    RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant,
+                    DynamicRegexTimeout);
+            }
+            catch (Exception ex)
+            {
+                Output.Log(I18n.Get("anz_regex_invalid_topic", pattern, ex.Message), 2, ThisProgramName);
+            }
+
+            lock (_baseEntryRegexLock)
+            {
+                // 自定义+AI 生成的条目可能无上限, 超过阈值时整体清空重建
+                if (_baseEntryRegexCache.Count > 500)
+                    _baseEntryRegexCache.Clear();
+                _baseEntryRegexCache[pattern] = regex;
+            }
+            return regex;
         }
 
         private static List<int>? ParseRange(string rangeArg, List<int> availableKeys)
@@ -2631,78 +3104,147 @@ namespace RtCli.Modules.Function
 
         #endregion
 
-        private static void AddToLogBuffer(string line)
+        private static void AddToLogBuffer(InstanceRuntime rt, string line)
         {
-            Interlocked.Increment(ref _logActivityCounter);
-            lock (_logBufferLock)
+            Interlocked.Increment(ref rt.LogActivityCounter);
+            lock (rt.LogBufferLock)
             {
-                _logBuffer.Add(line);
-                while (_logBuffer.Count > MaxLogBufferSize)
-                {
-                    _logBuffer.RemoveAt(0);
-                }
+                rt.LogBuffer.Add(line);
             }
 
             // 同步写入全局日志流缓存(.fx get 可分析任意历史流,不受服务器停止影响)
-            if (!string.IsNullOrEmpty(_activeStreamKey))
-                LogStreamStore.Append(_activeStreamKey, line);
+            if (!string.IsNullOrEmpty(rt.StreamKey))
+                LogStreamStore.Append(rt.StreamKey, line);
         }
 
         /// <summary>
         /// 实时检测日志行中的服务器崩溃信号(精准关键字单行命中即判定)
-        /// 命中后通过 EventBus 发布事件，并触发 AI 崩溃检测任务(60秒去重)
+        /// 计划内关停不再判定为崩溃; 崩溃事件同一次运行内只发布一次, 并触发 AI 崩溃检测任务
         /// </summary>
-        private static void ProcessCrashDetectionLine(string line)
+        private static void ProcessCrashDetectionLine(InstanceRuntime rt, string line)
         {
             if (string.IsNullOrEmpty(line)) return;
 
-            // 精准崩溃标志(单行命中即判定，避免误报)
-            bool isCrashSignal =
-                line.Contains("---- Minecraft Crash Report ----", StringComparison.OrdinalIgnoreCase) ||
-                line.Contains("This crash report has been saved to", StringComparison.OrdinalIgnoreCase) ||
-                line.Contains("Shutting down the server", StringComparison.OrdinalIgnoreCase) ||
-                line.Contains("Server thread/FATAL", StringComparison.OrdinalIgnoreCase) ||
-                (line.Contains("Server thread/ERROR", StringComparison.OrdinalIgnoreCase) &&
-                 line.Contains("Crash", StringComparison.OrdinalIgnoreCase));
-
-            if (!isCrashSignal) return;
-
-            lock (_crashSignalLock)
+            // 计划内关停: 用户发起 stop, 或日志出现正常停服序列(Stopping server 等)。
+            // 一经确认, 后续保存/收尾日志(即使含 FATAL/Exception)都不再判定为崩溃
+            if (rt.UserInitiatedStop || MCConsole.IsNormalShutdownLine(line))
             {
-                // 去重：60 秒内不重复触发
-                if ((DateTime.Now - _lastCrashSignalTime).TotalSeconds < 60) return;
-                _lastCrashSignalTime = DateTime.Now;
+                rt.ShutdownInProgress = true;
+                return;
+            }
+            if (rt.ShutdownInProgress) return;
+
+            // 精准崩溃标志(单行命中即判定，避免误报) — 规则统一维护于 MCConsole
+            bool isCrashSignal = MCConsole.IsCrashLine(line);
+
+            // 非崩溃行: 累积"错误相关行", 供崩溃时生成错误签名(用于 AI 相似度判重)
+            if (!isCrashSignal)
+            {
+                TrackErrorSignatureLine(rt, line);
+                return;
             }
 
-            Output.Log(I18n.Get("anz_crash_signal_detected", line), 2, "Analyzer");
-            EventBus.Publish(new ServerCrashEvent(Config.App.CurrentServer, -1));
+            string errorSignature;
+            lock (rt.CrashSignalLock)
+            {
+                // 本次错误签名 = 崩溃前累积的错误行 + 崩溃行本身; 生成后重置, 避免跨崩溃累积稀释相似度
+                errorSignature = rt.RecentErrorLines.Count == 0
+                    ? line
+                    : string.Join("\n", rt.RecentErrorLines) + "\n" + line;
+                rt.RecentErrorLines.Clear();
+            }
+
+            // 崩溃事件只发布一次: 日志侧与进程退出侧都可能在检测, 由原子标记去重
+            if (!NotifyServerCrashOnce(-1, line, rt.Id)) return;
 
             // 触发 AI 崩溃检测任务(延迟2秒等待崩溃报告文件写入完成)
             if (Intelligence.AiAutoRunner.IsRunning)
             {
                 _ = Task.Run(async () =>
                 {
-                    try
+                    using (InstanceContext.Push(rt.Id))
                     {
-                        await Task.Delay(2000);
-                        await Intelligence.AiAutoRunner.TriggerTaskAsync("crash_detect");
-                    }
-                    catch (Exception ex)
-                    {
-                        Output.Log(I18n.Get("anz_crash_detect_task_failed", ex.Message), 2, "Analyzer");
+                        try
+                        {
+                            await Task.Delay(2000);
+                            // 事件触发: 传入错误签名(崩溃前错误行+崩溃行), 由 AiAutoRunner 做最小触发间隔与错误相似度判重
+                            await Intelligence.AiAutoRunner.TriggerByEventAsync("crash_detect", errorSignature);
+                        }
+                        catch (Exception ex)
+                        {
+                            Output.Log(I18n.Get("anz_crash_detect_task_failed", ex.Message), 2, "Analyzer");
+                        }
                     }
                 });
             }
         }
 
+        /// <summary>
+        /// 发布崩溃事件(同一次运行内只发布一次)。日志侧与进程退出侧都可能检测到崩溃,
+        /// 由原子标记保证不重复发布; 返回 true 表示本次是首个检测者。
+        /// </summary>
+        private static bool NotifyServerCrashOnce(int exitCode, string? detailLine, string? instanceId = null)
+        {
+            var rt = GetRuntime(instanceId);
+            if (Interlocked.Exchange(ref rt.CrashNotified, 1) == 1) return false;
+
+            if (!string.IsNullOrEmpty(detailLine))
+                Output.Log(I18n.Get("anz_crash_signal_detected", detailLine), 2, "Analyzer");
+            EventBus.Publish(new ServerCrashEvent(rt.Id, exitCode));
+            return true;
+        }
+
+        /// <summary>
+        /// 记录"错误相关"日志行(ERROR/WARN/异常/堆栈等), 崩溃时用于生成错误签名。
+        /// 仅保留最近 MaxErrorSignatureLines 行, 崩溃触发后重置。
+        /// </summary>
+        private static void TrackErrorSignatureLine(InstanceRuntime rt, string line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return;
+
+            bool worthy =
+                line.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("WARN", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Exception", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Caused by", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("FATAL", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Crash", StringComparison.OrdinalIgnoreCase) ||
+                line.TrimStart().StartsWith("at ", StringComparison.Ordinal);
+            if (!worthy) return;
+
+            lock (rt.CrashSignalLock)
+            {
+                rt.RecentErrorLines.Add(line);
+                while (rt.RecentErrorLines.Count > MaxErrorSignatureLines)
+                    rt.RecentErrorLines.RemoveAt(0);
+            }
+        }
+
         #region 玩家事件监听
 
-        private static void ProcessPlayerEventLine(string line)
+        private static void ProcessPlayerEventLine(InstanceRuntime rt, string line)
         {
+            // 玩家事件通知给面板/AI/调度器时需要知道归属实例
+            using var _ctx = InstanceContext.Push(rt.Id);
             try
             {
                 var pe = Config.App.PlayerEvent;
                 if (pe == null || !pe.Enabled) return;
+
+                // 预筛: 全部事件 pattern 合并为一条正则, 不命中则直接返回(避免逐事件逐 pattern 扫描)
+                var prefilter = GetPlayerEventPrefilter(pe);
+                if (prefilter != null)
+                {
+                    try
+                    {
+                        if (!prefilter.IsMatch(line)) return;
+                    }
+                    catch (RegexMatchTimeoutException)
+                    {
+                        // 预筛超时(异常表达式): 该行直接跳过, 不影响后续日志
+                        return;
+                    }
+                }
 
                 // player_join
                 TryMatchAndPublish(line, pe.PlayerJoin, (m) =>
@@ -2807,17 +3349,115 @@ namespace RtCli.Modules.Function
             foreach (var pattern in patterns)
             {
                 if (string.IsNullOrWhiteSpace(pattern)) continue;
+
+                var regex = GetPlayerEventRegex(pattern);
+                if (regex == null) continue;
+
                 try
                 {
-                    var match = Regex.Match(line, pattern);
+                    var match = regex.Match(line);
                     if (match.Success)
                     {
                         onMatch(match);
                         return; // 一个行只触发一次
                     }
                 }
-                catch { } // 忽略无效正则
+                catch (RegexMatchTimeoutException)
+                {
+                    // 超时的表达式已缓存, 不会在每行日志上反复触发灾难性回溯
+                    Output.Log($"玩家事件正则匹配超时, 已跳过: {pattern}", 3, "PlayerEvent");
+                }
             }
+        }
+
+        /// <summary>
+        /// 构建全部玩家事件 pattern 的合并预筛正则(配置对象变化时重建)。
+        /// 仅用于"这一行是否可能命中任何事件"的快速判断, 命中后再走逐事件精确匹配。
+        /// </summary>
+        private static Regex? GetPlayerEventPrefilter(PlayerEventConfig pe)
+        {
+            lock (_playerEventPrefilterLock)
+            {
+                if (ReferenceEquals(_playerEventPrefilterConfig, pe))
+                    return _playerEventPrefilter;
+            }
+
+            var parts = new List<string>();
+            void Collect(List<string>? patterns)
+            {
+                if (patterns == null) return;
+                foreach (var p in patterns)
+                {
+                    if (!string.IsNullOrWhiteSpace(p))
+                        parts.Add("(?:" + p + ")");
+                }
+            }
+
+            Collect(pe.PlayerJoin);
+            Collect(pe.Connect);
+            Collect(pe.Lost);
+            Collect(pe.Leaves);
+            Collect(pe.Command);
+            Collect(pe.Chat);
+            Collect(pe.Setmode);
+            if (pe.Customs != null)
+            {
+                foreach (var kvp in pe.Customs)
+                    Collect(kvp.Value?.Patterns);
+            }
+
+            Regex? regex = null;
+            if (parts.Count > 0)
+            {
+                try
+                {
+                    regex = new Regex(string.Join("|", parts),
+                        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+                        DynamicRegexTimeout);
+                }
+                catch (Exception ex)
+                {
+                    // 合并失败(单个表达式非法)时退化为无预筛, 由逐事件匹配各自报错
+                    Output.Log($"玩家事件预筛正则构建失败, 已跳过预筛: {ex.Message}", 2, "PlayerEvent");
+                }
+            }
+
+            lock (_playerEventPrefilterLock)
+            {
+                _playerEventPrefilterConfig = pe;
+                _playerEventPrefilter = regex;
+                return regex;
+            }
+        }
+
+        /// <summary>获取玩家事件正则(预编译 + 超时, 按 pattern 缓存; 无效表达式缓存为 null)</summary>
+        private static Regex? GetPlayerEventRegex(string pattern)
+        {
+            lock (_playerEventRegexLock)
+            {
+                if (_playerEventRegexCache.TryGetValue(pattern, out var cached))
+                    return cached;
+            }
+
+            Regex? regex = null;
+            try
+            {
+                regex = new Regex(pattern,
+                    RegexOptions.Compiled | RegexOptions.CultureInvariant,
+                    DynamicRegexTimeout);
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"玩家事件正则无效已忽略: {pattern} ({ex.Message})", 3, "PlayerEvent");
+            }
+
+            lock (_playerEventRegexLock)
+            {
+                if (_playerEventRegexCache.Count > 500)
+                    _playerEventRegexCache.Clear();
+                _playerEventRegexCache[pattern] = regex;
+            }
+            return regex;
         }
 
         private static string GetGroupValue(Match m, string name)
@@ -2827,30 +3467,32 @@ namespace RtCli.Modules.Function
 
         #endregion
 
-        private static void DetachCore()
+        private static void DetachCore(InstanceRuntime rt)
         {
-            _clientGuideCts?.Cancel();
-            Intelligence.StopAutoTips();
+            rt.ClientGuideCts?.Cancel();
+            Intelligence.StopAutoTips(rt.Id);
 
-            _outputCts?.Cancel();
-            _outputCts?.Dispose();
-            _outputCts = null;
+            rt.Cts?.Cancel();
+            rt.Cts?.Dispose();
+            rt.Cts = null;
 
-            if (_rconClient != null)
+            if (rt.Rcon != null)
             {
-                _rconClient.Disconnect();
-                _rconClient = null;
+                rt.Rcon.Disconnect();
+                rt.Rcon = null;
             }
 
-            _attachedProcessId = 0;
-            _attachedWindowTitle = "";
-            _connectedServerName = "";
-            Interlocked.Exchange(ref _logFilePosition, 0);
+            rt.Management?.Stop();
+            rt.Management = null;
 
-            if (!_isRunModeActive && NeedsRunServer)
-            {
-                Output.Log(I18n.Get("anz_detached"), 1, "Analyzer");
-            }
+            rt.AttachedProcessId = 0;
+            rt.AttachedWindowTitle = "";
+            rt.ConnectedServerName = "";
+            rt.Running = false;
+            if (!string.IsNullOrEmpty(rt.StreamKey))
+                LogStreamStore.SetLive(rt.StreamKey, false);
+
+            Output.Log(I18n.Get("anz_detached"), 1, "Analyzer");
         }
 
         private static string? ResolveServerDirectory(MinecraftServerInfo server)
@@ -3224,532 +3866,5 @@ namespace RtCli.Modules.Function
 
             return null;
         }
-    }
-
-    public class MinecraftServerInfo
-    {
-        public int ProcessId { get; set; }
-        public string ProcessName { get; set; } = "";
-        public string WindowTitle { get; set; } = "";
-        public string JarPath { get; set; } = "";
-        public string CommandLine { get; set; } = "";
-        /// <summary>Java 可执行文件实际路径(来自 WMI ExecutablePath 或 MainModule.FileName)</summary>
-        public string JavaExePath { get; set; } = "";
-        /// <summary>与配置 JavaPath 的匹配优先级(越高越优先, 100=完全匹配)</summary>
-        public int MatchScore { get; set; }
-    }
-
-    /// <summary>日志流类型</summary>
-    internal enum LogStreamType
-    {
-        /// <summary>MC 服务端实时数据流(服务器启动时开始缓存)</summary>
-        Server,
-        /// <summary>外部导入的日志文件流</summary>
-        External
-    }
-
-    /// <summary>
-    /// 单条日志流缓存条目。
-    /// 生命周期：服务器启动时创建，服务器停止后保留(供 .fx get 分析)，
-    /// 仅当数据流过多(单流/全局超限)或程序重启时清空。
-    /// </summary>
-    internal class LogStreamEntry
-    {
-        public string Key { get; set; } = "";
-        public string DisplayName { get; set; } = "";
-        public LogStreamType Type { get; set; } = LogStreamType.Server;
-        public List<string> Lines { get; } = new List<string>();
-        public DateTime CreatedAt { get; set; } = DateTime.Now;
-        public DateTime LastAppendedAt { get; set; } = DateTime.Now;
-        public bool IsLive { get; set; }
-        /// <summary>因数据量超限被清空的次数(重置计数)</summary>
-        public int ResetCount { get; set; }
-    }
-
-    /// <summary>
-    /// 全局日志流缓存仓库：按标识(服务器ID/外部流名)缓存各服务器的实时日志数据流。
-    /// 第一个服务器启动时开始缓存；程序重启自然清空(内存缓存)。
-    /// </summary>
-    internal static class LogStreamStore
-    {
-        /// <summary>单流最大行数，超出后清空该流(数据流过多时清空缓存)</summary>
-        private const int MaxLinesPerStream = 5000;
-        /// <summary>全部流合计最大行数，超出后按最久未追加顺序清空</summary>
-        private const int MaxTotalLines = 50000;
-
-        private static readonly object _lock = new object();
-        private static readonly Dictionary<string, LogStreamEntry> _streams = new Dictionary<string, LogStreamEntry>(StringComparer.OrdinalIgnoreCase);
-
-        /// <summary>确保流存在(已存在则复用并标记运行中)；重启场景在流中插入分段标记</summary>
-        public static LogStreamEntry BeginServerStream(string key, string displayName)
-        {
-            lock (_lock)
-            {
-                if (!_streams.TryGetValue(key, out var entry))
-                {
-                    entry = new LogStreamEntry
-                    {
-                        Key = key,
-                        DisplayName = string.IsNullOrWhiteSpace(displayName) ? key : displayName,
-                        Type = LogStreamType.Server,
-                        IsLive = true
-                    };
-                    _streams[key] = entry;
-                }
-                else
-                {
-                    // 服务器重启: 流保留,插入分段标记便于区分多次启动的日志
-                    if (entry.Lines.Count > 0)
-                        entry.Lines.Add($"===== [{key}] {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====");
-                    entry.IsLive = true;
-                    if (!string.IsNullOrWhiteSpace(displayName))
-                        entry.DisplayName = displayName;
-                }
-                return entry;
-            }
-        }
-
-        /// <summary>向指定流追加一行(容量控制: 单流超限清空该流; 全局超限清空最旧的流)</summary>
-        public static void Append(string key, string line)
-        {
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrEmpty(line)) return;
-
-            lock (_lock)
-            {
-                if (!_streams.TryGetValue(key, out var entry)) return;
-                entry.Lines.Add(line);
-                entry.LastAppendedAt = DateTime.Now;
-
-                // 同步流式错误识别: 自动检测错误块并按来源保存(服务器启动即自动记录)
-                ErrorStreamDetector.Feed(key, line, entry.Type == LogStreamType.External ? "external" : "server");
-
-                // 单流数据量过多: 清空该流并记录重置
-                if (entry.Lines.Count > MaxLinesPerStream)
-                {
-                    entry.Lines.Clear();
-                    entry.ResetCount++;
-                    entry.Lines.Add($"===== [{key}] {DateTime.Now:yyyy-MM-dd HH:mm:ss} =====");
-                    return;
-                }
-
-                // 全局数据量过多: 从最久未追加的流开始清空
-                TrimTotal();
-            }
-        }
-
-        private static void TrimTotal()
-        {
-            int total = _streams.Values.Sum(s => s.Lines.Count);
-            while (total > MaxTotalLines && _streams.Count > 1)
-            {
-                var oldest = _streams.Values
-                    .Where(s => !s.IsLive && s.Lines.Count > 0)
-                    .OrderBy(s => s.LastAppendedAt)
-                    .FirstOrDefault();
-                if (oldest == null) break;
-                total -= oldest.Lines.Count;
-                oldest.Lines.Clear();
-                oldest.ResetCount++;
-            }
-        }
-
-        /// <summary>标记服务器流停止(流保留,数据仍可分析)</summary>
-        public static void SetLive(string key, bool isLive)
-        {
-            lock (_lock)
-            {
-                if (_streams.TryGetValue(key, out var entry))
-                    entry.IsLive = isLive;
-            }
-        }
-
-        /// <summary>导入外部日志文件为流(同名覆盖旧导入),同时流式识别错误并按来源保存</summary>
-        public static LogStreamEntry ImportExternal(string name, List<string> lines)
-        {
-            lock (_lock)
-            {
-                if (_streams.TryGetValue(name, out var existing) && existing.Type == LogStreamType.External)
-                {
-                    existing.Lines.Clear();
-                    foreach (var l in lines) existing.Lines.Add(l);
-                    existing.LastAppendedAt = DateTime.Now;
-                    return existing;
-                }
-                var entry = new LogStreamEntry
-                {
-                    Key = name,
-                    DisplayName = name,
-                    Type = LogStreamType.External,
-                    IsLive = false
-                };
-                foreach (var l in lines) entry.Lines.Add(l);
-                _streams[name] = entry;
-                return entry;
-            }
-        }
-
-        public static bool Contains(string key)
-        {
-            lock (_lock) { return _streams.ContainsKey(key); }
-        }
-
-        public static LogStreamEntry? Get(string key)
-        {
-            lock (_lock)
-            {
-                return _streams.TryGetValue(key, out var e) ? e : null;
-            }
-        }
-
-        /// <summary>获取全部流的快照(按创建时间排序)</summary>
-        public static List<LogStreamEntry> GetAll()
-        {
-            lock (_lock)
-            {
-                return _streams.Values.OrderBy(s => s.CreatedAt).ToList();
-            }
-        }
-
-        /// <summary>合并全部流的日志行(流之间以空行分隔,供"全部同时分析")</summary>
-        public static List<string> GetMergedLines()
-        {
-            lock (_lock)
-            {
-                var result = new List<string>();
-                foreach (var s in _streams.Values.OrderBy(s => s.CreatedAt))
-                {
-                    if (result.Count > 0) result.Add("");
-                    result.AddRange(s.Lines);
-                }
-                return result;
-            }
-        }
-    }
-
-    /// <summary>
-    /// 流式错误识别器: 日志行流入时按错误正则自动识别错误块,
-    /// 记录数据来源(服务器标识/外部导入)并保存到错误分析结果。
-    /// 服务器启动后自动工作,无需手动触发;服务器异常关闭也不丢失已识别的错误。
-    /// </summary>
-    internal static class ErrorStreamDetector
-    {
-        private class StreamState
-        {
-            public StringBuilder Buffer = new StringBuilder();
-            public bool InError;
-        }
-
-        private static readonly object _lock = new();
-        private static readonly Dictionary<string, StreamState> _states = new(StringComparer.OrdinalIgnoreCase);
-        private static Regex? _handlerRegex;
-        private static int _limit = 500;
-        private static Dictionary<int, ErrorRecord> _records = new();
-        private static bool _loaded;
-
-        private static void EnsureInitialized()
-        {
-            if (_loaded) return;
-            ContentManager.Initialize();
-            string pattern = ContentManager.Regex.Console_Error.Handler;
-            _limit = ContentManager.Regex.Console_Error.Limit;
-            if (!string.IsNullOrWhiteSpace(pattern))
-            {
-                try { _handlerRegex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase); }
-                catch { _handlerRegex = null; }
-            }
-            _records = ContentManager.LoadErrorLog();
-            _loaded = true;
-        }
-
-        /// <summary>流式喂入一行日志,自动识别错误块并保存(带来源)</summary>
-        public static void Feed(string key, string line, string sourceType)
-        {
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrEmpty(line)) return;
-
-            // 过滤命令噪音: 监控发送的 tps/list 等命令在部分服务端(如Folia无tps)不存在,
-            // "Unknown or incomplete command...error" 会命中 Error 正则造成误记录
-            if (line.Contains("Unknown or incomplete command", StringComparison.OrdinalIgnoreCase))
-                return;
-
-            lock (_lock)
-            {
-                EnsureInitialized();
-                if (_handlerRegex == null) return;
-
-                if (!_states.TryGetValue(key, out var state))
-                {
-                    state = new StreamState();
-                    _states[key] = state;
-                }
-
-                if (_handlerRegex.IsMatch(line))
-                {
-                    // 新错误行: 先收尾上一块
-                    if (state.InError && state.Buffer.Length > 0)
-                        SaveBlock(key, sourceType, state);
-                    state.InError = true;
-                    state.Buffer.AppendLine(line);
-                }
-                else if (state.InError)
-                {
-                    bool isContinuation = line.TrimStart().StartsWith("at ")
-                        || line.TrimStart().StartsWith("Caused by")
-                        || line.TrimStart().StartsWith("...")
-                        || string.IsNullOrWhiteSpace(line)
-                        || line.Contains("Suppressed")
-                        || _handlerRegex.IsMatch(line);
-
-                    if (isContinuation)
-                    {
-                        state.Buffer.AppendLine(line);
-                    }
-                    else
-                    {
-                        SaveBlock(key, sourceType, state);
-                        state.InError = false;
-                    }
-                }
-            }
-        }
-
-        /// <summary>批量喂入并收尾(供 .fx add 外部导入)</summary>
-        public static int FeedLines(string key, IEnumerable<string> lines, string sourceType)
-        {
-            int before = TotalCount;
-            foreach (var line in lines)
-                Feed(key, line, sourceType);
-            Flush(key, sourceType);
-            return TotalCount - before;
-        }
-
-        /// <summary>收尾未闭合的错误块(流结束/导入完成时)</summary>
-        public static void Flush(string key, string sourceType)
-        {
-            lock (_lock)
-            {
-                EnsureInitialized();
-                if (_states.TryGetValue(key, out var state) && state.InError && state.Buffer.Length > 0)
-                {
-                    SaveBlock(key, sourceType, state);
-                    state.InError = false;
-                }
-            }
-        }
-
-        public static int TotalCount
-        {
-            get { lock (_lock) { EnsureInitialized(); return _records.Count; } }
-        }
-
-        /// <summary>重置内存副本(.fx del 删除记录后调用,防止旧记录复活)</summary>
-        public static void Reset()
-        {
-            lock (_lock)
-            {
-                _records = new Dictionary<int, ErrorRecord>();
-                _loaded = false;
-            }
-        }
-
-        private static void SaveBlock(string key, string sourceType, StreamState state)
-        {
-            string text = state.Buffer.ToString().Trim();
-            state.Buffer.Clear();
-            if (text.Length == 0) return;
-            if (text.Length > _limit) text = text.Substring(0, _limit) + "...";
-
-            // 全局内容去重(与手动分析行为一致)
-            if (_records.Values.Any(r => r.Content == text)) return;
-
-            int idx = _records.Count == 0 ? 1 : _records.Keys.Max() + 1;
-            _records[idx] = new ErrorRecord
-            {
-                Content = text,
-                Source = key,
-                SourceType = sourceType,
-                Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-            };
-            ContentManager.SaveErrorLog(_records, quiet: true);
-            Output.Log(I18n.Get("anz_fx_auto_saved", idx, key), 1, "Analyzer");
-        }
-    }
-
-    internal class RconClient
-    {
-        private TcpClient? _tcpClient;
-        private NetworkStream? _stream;
-        private int _requestId = 0;
-        private readonly object _sendLock = new object();
-
-        public bool IsConnected => _tcpClient?.Connected == true;
-
-        private const int PacketTypeLogin = 3;
-        private const int PacketTypeCommand = 2;
-
-        public bool Connect(string host, int port, string password)
-        {
-            try
-            {
-                _tcpClient = new TcpClient();
-                var result = _tcpClient.BeginConnect(host, port, null, null);
-                bool success = result.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5));
-
-                if (!success)
-                {
-                    _tcpClient.Dispose();
-                    _tcpClient = null;
-                    return false;
-                }
-
-                _tcpClient.EndConnect(result);
-                _stream = _tcpClient.GetStream();
-
-                SendPacket(PacketTypeLogin, password);
-                var response = ReadPacket();
-
-                if (response == null || response.Type == -1)
-                {
-                    Disconnect();
-                    return false;
-                }
-
-                return true;
-            }
-            catch
-            {
-                Disconnect();
-                return false;
-            }
-        }
-
-        public string SendCommand(string command)
-        {
-            lock (_sendLock)
-            {
-                if (!IsConnected || _stream == null)
-                    throw new InvalidOperationException("RCON 未连接");
-
-                _requestId++;
-                SendPacket(PacketTypeCommand, command);
-
-                var response = ReadPacket();
-                return response?.Body ?? "";
-            }
-        }
-
-        public void Disconnect()
-        {
-            try
-            {
-                _stream?.Close();
-                _stream = null;
-                _tcpClient?.Close();
-                _tcpClient = null;
-            }
-            catch { }
-        }
-
-        private void SendPacket(int type, string body)
-        {
-            if (_stream == null) return;
-
-            byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
-            int length = 4 + 4 + bodyBytes.Length + 2;
-
-            using var ms = new MemoryStream();
-            using var writer = new BinaryWriter(ms);
-
-            writer.Write(length);
-            writer.Write(_requestId);
-            writer.Write(type);
-            writer.Write(bodyBytes);
-            writer.Write((byte)0);
-            writer.Write((byte)0);
-
-            _stream.Write(ms.ToArray(), 0, (int)ms.Length);
-            _stream.Flush();
-        }
-
-        private RconPacket? ReadPacket()
-        {
-            if (_stream == null) return null;
-
-            try
-            {
-                var lengthBuffer = new byte[4];
-                int read = _stream.Read(lengthBuffer, 0, 4);
-                if (read < 4) return null;
-
-                int length = BitConverter.ToInt32(lengthBuffer, 0);
-                if (length <= 0 || length > 65536) return null;
-
-                var dataBuffer = new byte[length];
-                int totalRead = 0;
-                while (totalRead < length)
-                {
-                    int bytesRead = _stream.Read(dataBuffer, totalRead, length - totalRead);
-                    if (bytesRead == 0) return null;
-                    totalRead += bytesRead;
-                }
-
-                int requestId = BitConverter.ToInt32(dataBuffer, 0);
-                int type = BitConverter.ToInt32(dataBuffer, 4);
-
-                string body = "";
-                if (length > 8)
-                {
-                    int bodyLength = length - 8 - 2;
-                    if (bodyLength > 0)
-                    {
-                        body = Encoding.UTF8.GetString(dataBuffer, 8, bodyLength);
-                    }
-                }
-
-                return new RconPacket { RequestId = requestId, Type = type, Body = body };
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private class RconPacket
-        {
-            public int RequestId { get; set; }
-            public int Type { get; set; }
-            public string Body { get; set; } = "";
-        }
-    }
-
-    internal class ClientGuideMatch
-    {
-        public int Index { get; set; }
-        public ClientGuideEntry Entry { get; set; } = null!;
-        public double Similarity { get; set; }
-        public string MatchedMessage { get; set; } = "";
-    }
-
-    internal class ConfigDiffEntry
-    {
-        public int Index { get; set; }
-        public string RelativePath { get; set; } = "";
-        public string BackupPath { get; set; } = "";
-        public string CurrentPath { get; set; } = "";
-    }
-
-    internal class PluginEntry
-    {
-        public int Index { get; set; }
-        public string FileName { get; set; } = "";
-        public string FullPath { get; set; } = "";
-        public bool IsDisabled { get; set; }
-    }
-
-    internal class ModEntry
-    {
-        public int Index { get; set; }
-        public string FileName { get; set; } = "";
-        public string FullPath { get; set; } = "";
-        public bool IsDisabled { get; set; }
     }
 }

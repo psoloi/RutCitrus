@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -500,10 +501,19 @@ namespace RtCli.Modules
             {
                 string filePath = Path.Combine(workPath, "server.properties");
                 var lines = new List<string>();
+                string newline = "\n";
                 bool found = false;
 
                 if (File.Exists(filePath))
-                    lines = File.ReadAllLines(filePath, Encoding.UTF8).ToList();
+                {
+                    string raw = File.ReadAllText(filePath, Encoding.UTF8);
+                    newline = raw.Contains("\r\n") ? "\r\n" : "\n";
+                    lines = raw.TrimStart('\uFEFF')
+                        .Replace("\r\n", "\n").Replace('\r', '\n')
+                        .Split('\n').ToList();
+                    while (lines.Count > 0 && lines[^1].Length == 0)
+                        lines.RemoveAt(lines.Count - 1);
+                }
 
                 for (int i = 0; i < lines.Count; i++)
                 {
@@ -518,7 +528,8 @@ namespace RtCli.Modules
                 if (!found)
                     lines.Add($"{key}={value}");
 
-                Unit.AtomicFile.WriteAllText(filePath, string.Join("\n", lines), Encoding.UTF8);
+                // AtomicFile 使用 UTF-8 无 BOM, 避免 MC 解析异常
+                Unit.AtomicFile.WriteAllText(filePath, string.Join(newline, lines));
             }
             catch (Exception ex)
             {
@@ -526,42 +537,62 @@ namespace RtCli.Modules
             }
         }
 
-        /// <summary>生成 Velocity 的 velocity.toml 配置文件</summary>
+        /// <summary>生成 Velocity 的 velocity.toml 配置文件(官方模板, UTF-8 无 BOM)</summary>
         private static void GenerateVelocityConfig(string workPath, int proxyPort,
             Dictionary<string, int> serverPorts, string lobbyServer, bool onlineMode)
         {
             string configPath = Path.Combine(workPath, "velocity.toml");
-            var sb = new StringBuilder();
+            string secretPath = Path.Combine(workPath, "forwarding.secret");
 
+            // modern 转发要求代理与子服共享同一密钥: 首次生成并复用, 便于后续在子服填同一值
+            ReadOrCreateForwardingSecret(secretPath);
+
+            var sb = new StringBuilder();
             sb.AppendLine("# Velocity 配置文件 (由 RtCli 群组构建向导生成)");
             sb.AppendLine();
-
             sb.AppendLine("[config]");
             sb.AppendLine($"bind = \"0.0.0.0:{proxyPort}\"");
-            sb.AppendLine($"motd = \"<#09add3>RtCli 群组服务器\"");
+            sb.AppendLine($"motd = {TomlQuote("RtCli 群组服务器")}");
+            sb.AppendLine("show-max-players = 500");
+            sb.AppendLine($"online-mode = {onlineMode.ToString().ToLowerInvariant()}");
+            sb.AppendLine("player-info-forwarding-mode = \"modern\"");
+            sb.AppendLine("forwarding-secret-file = \"forwarding.secret\"");
             sb.AppendLine();
-
             sb.AppendLine("[servers]");
             foreach (var kv in serverPorts)
-            {
-                sb.AppendLine($"\"{kv.Key}\" = \"127.0.0.1:{kv.Value}\"");
-            }
-            sb.AppendLine();
-
+                sb.AppendLine($"{TomlQuote(kv.Key)} = \"127.0.0.1:{kv.Value}\"");
             if (!string.IsNullOrEmpty(lobbyServer))
-            {
-                sb.AppendLine("[try]");
-                sb.AppendLine($"\"{lobbyServer}\"");
-            }
-
+                sb.AppendLine($"try = [{TomlQuote(lobbyServer)}]");
+            sb.AppendLine();
+            sb.AppendLine("[forced-hosts]");
             sb.AppendLine();
             sb.AppendLine("[advanced]");
-            sb.AppendLine($"online-mode = {onlineMode.ToString().ToLowerInvariant()}");
+            sb.AppendLine("compression-threshold = 256");
+            sb.AppendLine("connection-timeout = 5000");
+            sb.AppendLine("read-timeout = 30000");
 
-            File.WriteAllText(configPath, sb.ToString(), Encoding.UTF8);
+            Unit.AtomicFile.WriteAllText(configPath, sb.ToString(), new UTF8Encoding(false));
         }
 
-        /// <summary>生成 BungeeCord 的 config.yml 配置文件</summary>
+        /// <summary>读取或生成 Velocity modern 转发的共享密钥文件</summary>
+        private static string ReadOrCreateForwardingSecret(string secretPath)
+        {
+            try
+            {
+                if (File.Exists(secretPath))
+                {
+                    string existing = File.ReadAllText(secretPath).Trim();
+                    if (existing.Length >= 12) return existing;
+                }
+            }
+            catch { }
+
+            string secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(18));
+            Unit.AtomicFile.WriteAllText(secretPath, secret, new UTF8Encoding(false));
+            return secret;
+        }
+
+        /// <summary>生成 BungeeCord 的 config.yml 配置文件(官方模板, UTF-8 无 BOM)</summary>
         private static void GenerateBungeeCordConfig(string workPath, int proxyPort,
             Dictionary<string, int> serverPorts, string lobbyServer, bool onlineMode)
         {
@@ -570,1075 +601,36 @@ namespace RtCli.Modules
 
             sb.AppendLine("# BungeeCord 配置文件 (由 RtCli 群组构建向导生成)");
             sb.AppendLine($"online_mode: {onlineMode.ToString().ToLowerInvariant()}");
-            sb.AppendLine($"listeners:");
-            sb.AppendLine($"- query_port: {proxyPort}");
-            sb.AppendLine($"  priorities:");
+            sb.AppendLine("ip_forward: true");
+            sb.AppendLine("server_connect_timeout: 5000");
+            sb.AppendLine("listeners:");
+            sb.AppendLine($"- host: 0.0.0.0:{proxyPort}");
+            sb.AppendLine($"  motd: {YamlQuote("RtCli 群组服务器")}");
+            sb.AppendLine("  max_players: 500");
+            sb.AppendLine("  priorities:");
             if (!string.IsNullOrEmpty(lobbyServer))
-                sb.AppendLine($"  - {lobbyServer}");
-            sb.AppendLine();
-            sb.AppendLine($"servers:");
-
+                sb.AppendLine($"  - {YamlQuote(lobbyServer)}");
+            sb.AppendLine($"  query_port: {proxyPort}");
+            sb.AppendLine("  ping_passthrough: false");
+            sb.AppendLine("servers:");
             foreach (var kv in serverPorts)
             {
-                sb.AppendLine($"  {kv.Key}:");
-                sb.AppendLine($"    motd: '{kv.Key}'");
+                sb.AppendLine($"  {YamlQuote(kv.Key)}:");
+                sb.AppendLine($"    motd: {YamlQuote(kv.Key)}");
                 sb.AppendLine($"    address: 127.0.0.1:{kv.Value}");
-                sb.AppendLine($"    restricted: false");
+                sb.AppendLine("    restricted: false");
             }
 
-            File.WriteAllText(configPath, sb.ToString(), Encoding.UTF8);
+            Unit.AtomicFile.WriteAllText(configPath, sb.ToString(), new UTF8Encoding(false));
         }
+
+        /// <summary>TOML 字符串转义</summary>
+        private static string TomlQuote(string value)
+            => "\"" + (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+
+        /// <summary>YAML 单引号字符串转义(单引号自身用两个单引号表示)</summary>
+        private static string YamlQuote(string value)
+            => "'" + (value ?? "").Replace("'", "''") + "'";
     }
 
-    // ===== 实例管理数据模型 =====
-    // server_data.json 存储实例扩展元数据(分组、顺序、备份历史、创建时间等),
-    // 实际服务器配置仍由 config.yml 的 server_list 管理。
-    // 创建/删除实例时由 ServerDataManager 同步修改 config.yml。
-
-    /// <summary>实例扩展元数据(存储在 server_data.json)</summary>
-    public class ServerInstance
-    {
-        /// <summary>实例 ID, 等同于 config.yml server_list 的 key 和 identifier</summary>
-        public string Id { get; set; } = "";
-        /// <summary>所属群组 ID(空 = 独立实例)</summary>
-        public string GroupId { get; set; } = "";
-        /// <summary>显示顺序(独立实例间排序, 群组内按加入顺序)</summary>
-        public int SortOrder { get; set; } = 0;
-        /// <summary>创建时间(ISO 8601)</summary>
-        public string CreatedAt { get; set; } = "";
-        /// <summary>最后启动时间</summary>
-        public string LastStartedAt { get; set; } = "";
-        /// <summary>备注/描述</summary>
-        public string Description { get; set; } = "";
-    }
-
-    /// <summary>服务器群组</summary>
-    public class ServerGroup
-    {
-        public string Id { get; set; } = "";
-        public string Name { get; set; } = "";
-        /// <summary>群组成员实例 ID 列表(顺序即显示顺序)</summary>
-        public List<string> MemberIds { get; set; } = new List<string>();
-        public string CreatedAt { get; set; } = "";
-    }
-
-    /// <summary>server_data.json 根结构</summary>
-    public class ServerData
-    {
-        public List<ServerInstance> Instances { get; set; } = new List<ServerInstance>();
-        public List<ServerGroup> Groups { get; set; } = new List<ServerGroup>();
-        /// <summary>下一个群组序号(用于生成群组 ID)</summary>
-        public int NextGroupSeq { get; set; } = 1;
-    }
-
-    /// <summary>
-    /// 实例数据管理器: 负责加载/保存 server_data.json,
-    /// 并在创建/删除实例时同步 config.yml 的 server_list。
-    /// 所有操作线程安全。
-    /// </summary>
-    public static class ServerDataManager
-    {
-        private static readonly object _lock = new object();
-        private static ServerData? _data;
-        private static readonly string DataFileName = "server_data.json";
-
-        private static string DataFilePath => Path.Combine(Unit.Config.DataPath, DataFileName);
-
-        /// <summary>获取当前数据(懒加载, 首次调用时从文件读取)</summary>
-        public static ServerData Data
-        {
-            get
-            {
-                lock (_lock)
-                {
-                    if (_data == null) Load();
-                    return _data!;
-                }
-            }
-        }
-
-        /// <summary>从磁盘加载 server_data.json</summary>
-        public static void Load()
-        {
-            lock (_lock)
-            {
-                try
-                {
-                    if (File.Exists(DataFilePath))
-                    {
-                        var json = File.ReadAllText(DataFilePath, Encoding.UTF8);
-                        _data = JsonSerializer.Deserialize<ServerData>(json) ?? new ServerData();
-                    }
-                    else
-                    {
-                        _data = new ServerData();
-                        Save();
-                    }
-
-                    // 同步: 确保每个 server_list 条目都有对应的实例元数据
-                    SyncWithServerList();
-                }
-                catch (Exception ex)
-                {
-                    Output.Log(Unit.I18n.Get("hub_load_server_data_failed", ex.Message), 3, "Hub");
-                    _data = new ServerData();
-                }
-            }
-        }
-
-        /// <summary>保存到磁盘</summary>
-        public static void Save()
-        {
-            lock (_lock)
-            {
-                try
-                {
-                    var options = new JsonSerializerOptions
-                    {
-                        WriteIndented = true,
-                        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-                    };
-                    var json = JsonSerializer.Serialize(_data, options);
-                    Unit.AtomicFile.WriteAllText(DataFilePath, json, Encoding.UTF8);
-                }
-                catch (Exception ex)
-                {
-                    Output.Log(Unit.I18n.Get("hub_save_server_data_failed", ex.Message), 3, "Hub");
-                }
-            }
-        }
-
-        /// <summary>
-        /// 同步实例元数据与 config.yml server_list:
-        /// - server_list 中有但 server_data.json 没有的 → 创建元数据
-        /// - server_data.json 中有但 server_list 没有的 → 删除元数据(及群组成员引用)
-        /// </summary>
-        private static void SyncWithServerList()
-        {
-            if (_data == null) return;
-
-            var serverKeys = Unit.Config.App.ServerList.Keys.ToHashSet();
-
-            // 添加缺失的实例元数据
-            foreach (var key in serverKeys)
-            {
-                if (!_data.Instances.Any(i => i.Id == key))
-                {
-                    _data.Instances.Add(new ServerInstance
-                    {
-                        Id = key,
-                        CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                        SortOrder = _data.Instances.Count
-                    });
-                }
-            }
-
-            // 移除多余的实例元数据 + 清理群组引用
-            var toRemove = _data.Instances.Where(i => !serverKeys.Contains(i.Id)).ToList();
-            foreach (var inst in toRemove)
-            {
-                _data.Instances.Remove(inst);
-                foreach (var g in _data.Groups)
-                    g.MemberIds.Remove(inst.Id);
-            }
-
-            // 清理空群组(可选: 保留空群组让用户手动解散)
-            // 不自动清理, 由用户显式解散
-
-            Save();
-        }
-
-        // ===== 实例 CRUD =====
-
-        /// <summary>创建实例: 同步在 config.yml server_list 和 server_data.json 中添加</summary>
-        public static (bool Success, string Message) CreateInstance(string identifier, string name,
-            string workPath, string javaPath, string runFlags, string analyzerMode, string groupId)
-        {
-            lock (_lock)
-            {
-                Load();
-
-                // 校验: identifier 不能为空且不能重复
-                identifier = identifier?.Trim() ?? "";
-                if (string.IsNullOrEmpty(identifier))
-                    return (false, "实例标识不能为空");
-                if (Unit.Config.App.ServerList.ContainsKey(identifier))
-                    return (false, $"标识 '{identifier}' 已存在");
-                if (_data!.Instances.Any(i => i.Id == identifier))
-                    return (false, $"实例 '{identifier}' 已存在");
-
-                // 校验群组
-                if (!string.IsNullOrEmpty(groupId) && !_data.Groups.Any(g => g.Id == groupId))
-                    return (false, $"群组 '{groupId}' 不存在");
-
-                // 添加到 config.yml server_list
-                var entry = new Unit.ServerEntry
-                {
-                    ServerName = string.IsNullOrEmpty(name) ? identifier : name,
-                    WorkPath = workPath ?? "",
-                    JavaPath = javaPath ?? "",
-                    RunServerFlags = string.IsNullOrEmpty(runFlags)
-                        ? "-Xms1024M -Xmx1024M -jar server.jar --nogui"
-                        : runFlags,
-                    AnalyzerMode = string.IsNullOrEmpty(analyzerMode) ? "RM" : analyzerMode,
-                    AutoRestart = false
-                };
-                Unit.Config.App.ServerList[identifier] = entry;
-
-                // 工作目录不存在时自动创建(相对路径基于 RtCli 运行目录)
-                if (!string.IsNullOrEmpty(workPath))
-                {
-                    try
-                    {
-                        var fullWorkPath = Path.GetFullPath(workPath);
-                        if (!Directory.Exists(fullWorkPath))
-                            Directory.CreateDirectory(fullWorkPath);
-                    }
-                    catch
-                    {
-                        // 路径非法时不阻断实例创建, 后续操作会给出明确错误
-                    }
-                }
-
-                // 添加到 server_data.json
-                var instance = new ServerInstance
-                {
-                    Id = identifier,
-                    GroupId = groupId ?? "",
-                    SortOrder = _data.Instances.Count,
-                    CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                };
-                _data.Instances.Add(instance);
-
-                // 添加到群组成员
-                if (!string.IsNullOrEmpty(groupId))
-                {
-                    var group = _data.Groups.First(g => g.Id == groupId);
-                    if (!group.MemberIds.Contains(identifier))
-                        group.MemberIds.Add(identifier);
-                }
-
-                Unit.Config.SaveCurrentConfig();
-                Save();
-
-                Output.Log(Unit.I18n.Get("hub_instance_created", identifier, entry.ServerName), 1, "Hub");
-                return (true, $"实例 '{identifier}' 创建成功");
-            }
-        }
-
-        /// <summary>删除实例: 同步从 config.yml 和 server_data.json 中移除</summary>
-        public static (bool Success, string Message) DeleteInstance(string id, bool deleteFiles)
-        {
-            lock (_lock)
-            {
-                Load();
-
-                if (!Unit.Config.App.ServerList.ContainsKey(id))
-                    return (false, $"实例 '{id}' 不存在");
-
-                // 从 config.yml 移除
-                var entry = Unit.Config.App.ServerList[id];
-                var workPath = entry.WorkPath;
-                Unit.Config.App.ServerList.Remove(id);
-
-                // 从 hide_console_servers 移除
-                Unit.Config.App.HideConsoleServers.Remove(id);
-
-                // 如果是当前服务器, 切换到第一个可用的
-                if (Unit.Config.App.CurrentServer == id)
-                {
-                    Unit.Config.App.CurrentServer = Unit.Config.App.ServerList.Keys.FirstOrDefault() ?? "";
-                }
-
-                // 从 server_data.json 移除
-                _data!.Instances.RemoveAll(i => i.Id == id);
-                foreach (var g in _data.Groups)
-                    g.MemberIds.Remove(id);
-
-                Unit.Config.SaveCurrentConfig();
-                Save();
-
-                // 可选: 删除服务器文件
-                if (deleteFiles && !string.IsNullOrEmpty(workPath) && Directory.Exists(workPath))
-                {
-                    try
-                    {
-                        Directory.Delete(workPath, true);
-                        Output.Log(Unit.I18n.Get("hub_instance_files_deleted", workPath), 1, "Hub");
-                    }
-                    catch (Exception ex)
-                    {
-                        Output.Log(Unit.I18n.Get("hub_delete_instance_files_failed", ex.Message), 2, "Hub");
-                    }
-                }
-
-                Output.Log(Unit.I18n.Get("hub_instance_deleted", id), 1, "Hub");
-                return (true, $"实例 '{id}' 已删除");
-            }
-        }
-
-        /// <summary>更新实例配置(同步到 config.yml)</summary>
-        public static (bool Success, string Message) UpdateInstance(string id, string name,
-            string groupId, bool hidden, bool autoRestart,
-            string workPath, string javaPath, string runFlags, string analyzerMode)
-        {
-            lock (_lock)
-            {
-                Load();
-
-                if (!Unit.Config.App.ServerList.ContainsKey(id))
-                    return (false, $"实例 '{id}' 不存在");
-
-                var entry = Unit.Config.App.ServerList[id];
-
-                // 更新 config.yml 字段
-                if (name != null) entry.ServerName = name;
-                if (workPath != null) entry.WorkPath = workPath;
-                if (javaPath != null) entry.JavaPath = javaPath;
-                if (runFlags != null) entry.RunServerFlags = runFlags;
-                if (analyzerMode != null) entry.AnalyzerMode = analyzerMode;
-                entry.AutoRestart = autoRestart;
-                Unit.Config.App.ServerList[id] = entry;
-
-                // 同步 hidden 到 hide_console_servers
-                if (hidden)
-                {
-                    if (!Unit.Config.App.HideConsoleServers.Contains(id))
-                        Unit.Config.App.HideConsoleServers.Add(id);
-                }
-                else
-                {
-                    Unit.Config.App.HideConsoleServers.Remove(id);
-                }
-
-                // 更新群组归属
-                var instance = _data!.Instances.FirstOrDefault(i => i.Id == id);
-                if (instance != null)
-                {
-                    // 从旧群组移除
-                    if (!string.IsNullOrEmpty(instance.GroupId))
-                    {
-                        var oldGroup = _data.Groups.FirstOrDefault(g => g.Id == instance.GroupId);
-                        oldGroup?.MemberIds.Remove(id);
-                    }
-
-                    // 添加到新群组
-                    instance.GroupId = groupId ?? "";
-                    if (!string.IsNullOrEmpty(groupId))
-                    {
-                        var newGroup = _data.Groups.FirstOrDefault(g => g.Id == groupId);
-                        if (newGroup == null)
-                            return (false, $"群组 '{groupId}' 不存在");
-                        if (!newGroup.MemberIds.Contains(id))
-                            newGroup.MemberIds.Add(id);
-                    }
-                }
-
-                Unit.Config.SaveCurrentConfig();
-                Save();
-
-                Output.Log(Unit.I18n.Get("hub_instance_updated", id), 1, "Hub");
-                return (true, $"实例 '{id}' 更新成功");
-            }
-        }
-
-        // ===== 群组管理 =====
-
-        public static (bool Success, string Message, string GroupId) CreateGroup(string name, List<string> memberIds)
-        {
-            lock (_lock)
-            {
-                Load();
-
-                name = name?.Trim() ?? "";
-                if (string.IsNullOrEmpty(name))
-                    return (false, "群组名称不能为空", "");
-
-                if (_data!.Groups.Any(g => g.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                    return (false, $"群组 '{name}' 已存在", "");
-
-                var group = new ServerGroup
-                {
-                    Id = $"g{_data.NextGroupSeq++}",
-                    Name = name,
-                    CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                };
-
-                // 校验并添加成员
-                foreach (var memberId in memberIds)
-                {
-                    if (_data.Instances.Any(i => i.Id == memberId))
-                    {
-                        // 从旧群组移除
-                        var inst = _data.Instances.First(i => i.Id == memberId);
-                        if (!string.IsNullOrEmpty(inst.GroupId))
-                        {
-                            var oldGroup = _data.Groups.FirstOrDefault(g => g.Id == inst.GroupId);
-                            oldGroup?.MemberIds.Remove(memberId);
-                        }
-                        inst.GroupId = group.Id;
-                        group.MemberIds.Add(memberId);
-                    }
-                }
-
-                _data.Groups.Add(group);
-                Save();
-
-                Output.Log(Unit.I18n.Get("hub_group_created_log", name, group.Id, group.MemberIds.Count), 1, "Hub");
-                return (true, $"群组 '{name}' 创建成功", group.Id);
-            }
-        }
-
-        public static (bool Success, string Message) DeleteGroup(string groupId)
-        {
-            lock (_lock)
-            {
-                Load();
-
-                var group = _data!.Groups.FirstOrDefault(g => g.Id == groupId);
-                if (group == null)
-                    return (false, $"群组 '{groupId}' 不存在");
-
-                // 解除成员的群组归属
-                foreach (var memberId in group.MemberIds)
-                {
-                    var inst = _data.Instances.FirstOrDefault(i => i.Id == memberId);
-                    if (inst != null) inst.GroupId = "";
-                }
-
-                _data.Groups.Remove(group);
-                Save();
-
-                Output.Log(Unit.I18n.Get("hub_group_disbanded", group.Name, groupId), 1, "Hub");
-                return (true, $"群组 '{group.Name}' 已解散");
-            }
-        }
-
-        public static (bool Success, string Message) UpdateGroup(string operation, string groupId,
-            string? name, List<string> memberIds)
-        {
-            lock (_lock)
-            {
-                Load();
-
-                var group = _data!.Groups.FirstOrDefault(g => g.Id == groupId);
-                if (group == null)
-                    return (false, $"群组 '{groupId}' 不存在");
-
-                switch (operation?.ToLowerInvariant())
-                {
-                    case "rename":
-                        name = name?.Trim() ?? "";
-                        if (string.IsNullOrEmpty(name))
-                            return (false, "群组名称不能为空");
-                        group.Name = name;
-                        break;
-
-                    case "add":
-                        foreach (var memberId in memberIds)
-                        {
-                            if (!group.MemberIds.Contains(memberId) &&
-                                _data.Instances.Any(i => i.Id == memberId))
-                            {
-                                // 从旧群组移除
-                                var inst = _data.Instances.First(i => i.Id == memberId);
-                                if (!string.IsNullOrEmpty(inst.GroupId))
-                                {
-                                    var oldGroup = _data.Groups.FirstOrDefault(g => g.Id == inst.GroupId);
-                                    oldGroup?.MemberIds.Remove(memberId);
-                                }
-                                inst.GroupId = group.Id;
-                                group.MemberIds.Add(memberId);
-                            }
-                        }
-                        break;
-
-                    case "remove":
-                        foreach (var memberId in memberIds)
-                        {
-                            if (group.MemberIds.Remove(memberId))
-                            {
-                                var inst = _data.Instances.FirstOrDefault(i => i.Id == memberId);
-                                if (inst != null) inst.GroupId = "";
-                            }
-                        }
-                        break;
-
-                    default:
-                        return (false, $"未知操作: {operation}");
-                }
-
-                Save();
-                Output.Log(Unit.I18n.Get("hub_group_updated", group.Name, operation), 1, "Hub");
-                return (true, $"群组 '{group.Name}' 更新成功");
-            }
-        }
-
-        // ===== 备份管理 =====
-
-        /// <summary>获取实例备份目录</summary>
-        public static string GetBackupDir(string instanceId)
-        {
-            var dir = Path.Combine(Unit.Config.DataPath, "instance_backup", instanceId);
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            return dir;
-        }
-
-        /// <summary>列出实例的所有备份</summary>
-        public static List<(string FileName, string CreatedAt, long SizeBytes)> ListBackups(string instanceId)
-        {
-            var result = new List<(string, string, long)>();
-            try
-            {
-                var dir = GetBackupDir(instanceId);
-                foreach (var file in Directory.GetFiles(dir, "*.zip").OrderByDescending(f => f))
-                {
-                    var fi = new FileInfo(file);
-                    result.Add((fi.Name, fi.CreationTime.ToString("yyyy-MM-dd HH:mm:ss"), fi.Length));
-                }
-            }
-            catch { }
-            return result;
-        }
-
-        /// <summary>创建备份(将 WorkPath 打包为 zip)</summary>
-        public static (bool Success, string Message) CreateBackup(string instanceId)
-        {
-            try
-            {
-                if (!Unit.Config.App.ServerList.TryGetValue(instanceId, out var entry))
-                    return (false, $"实例 '{instanceId}' 不存在");
-
-                if (string.IsNullOrEmpty(entry.WorkPath) || !Directory.Exists(entry.WorkPath))
-                    return (false, "服务器工作目录不存在");
-
-                var backupDir = GetBackupDir(instanceId);
-                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                var backupFile = Path.Combine(backupDir, $"{timestamp}.zip");
-
-                // 使用 System.IO.Compression 打包
-                System.IO.Compression.ZipFile.CreateFromDirectory(entry.WorkPath, backupFile,
-                    System.IO.Compression.CompressionLevel.Optimal, false);
-
-                Output.Log(Unit.I18n.Get("hub_backup_created", instanceId, backupFile), 1, "Hub");
-                return (true, $"备份成功: {Path.GetFileName(backupFile)}");
-            }
-            catch (Exception ex)
-            {
-                return (false, $"备份失败: {ex.Message}");
-            }
-        }
-
-        /// <summary>从备份恢复</summary>
-        public static (bool Success, string Message) RestoreBackup(string instanceId, string fileName)
-        {
-            try
-            {
-                if (!Unit.Config.App.ServerList.TryGetValue(instanceId, out var entry))
-                    return (false, $"实例 '{instanceId}' 不存在");
-
-                var backupFile = Path.Combine(GetBackupDir(instanceId), fileName);
-                if (!File.Exists(backupFile))
-                    return (false, $"备份文件不存在: {fileName}");
-
-                if (string.IsNullOrEmpty(entry.WorkPath))
-                    return (false, "工作目录未配置");
-
-                // 恢复前先备份当前状态(如果目录存在且非空)
-                if (Directory.Exists(entry.WorkPath) && Directory.EnumerateFileSystemEntries(entry.WorkPath).Any())
-                {
-                    var preRestoreDir = Path.Combine(GetBackupDir(instanceId), "pre_restore");
-                    if (!Directory.Exists(preRestoreDir)) Directory.CreateDirectory(preRestoreDir);
-                    var preRestoreFile = Path.Combine(preRestoreDir,
-                        $"pre_restore_{DateTime.Now:yyyyMMdd_HHmmss}.zip");
-                    System.IO.Compression.ZipFile.CreateFromDirectory(entry.WorkPath, preRestoreFile,
-                        System.IO.Compression.CompressionLevel.Optimal, false);
-                }
-
-                // 清空工作目录并解压备份
-                if (Directory.Exists(entry.WorkPath))
-                    Directory.Delete(entry.WorkPath, true);
-                Directory.CreateDirectory(entry.WorkPath);
-                System.IO.Compression.ZipFile.ExtractToDirectory(backupFile, entry.WorkPath);
-
-                Output.Log(Unit.I18n.Get("hub_backup_restored", instanceId, fileName), 1, "Hub");
-                return (true, $"恢复成功: {fileName}");
-            }
-            catch (Exception ex)
-            {
-                return (false, $"恢复失败: {ex.Message}");
-            }
-        }
-
-        /// <summary>删除备份文件</summary>
-        public static (bool Success, string Message) DeleteBackup(string instanceId, string fileName)
-        {
-            try
-            {
-                var backupFile = Path.Combine(GetBackupDir(instanceId), fileName);
-                if (!File.Exists(backupFile))
-                    return (false, $"备份文件不存在: {fileName}");
-
-                File.Delete(backupFile);
-                Output.Log(Unit.I18n.Get("hub_backup_deleted", instanceId, fileName), 1, "Hub");
-                return (true, $"备份 {fileName} 已删除");
-            }
-            catch (Exception ex)
-            {
-                return (false, $"删除备份失败: {ex.Message}");
-            }
-        }
-    }
-
-    /// <summary>
-    /// 面板设置管理器: 负责加载/保存 panel_data.json
-    /// 存储在 server_data.json 同目录(Config.DataPath)
-    /// 同时管理玩家事件日志(按实例ID分组, 保存在 playerEvents 字段下)
-    /// </summary>
-    internal static class PanelDataManager
-    {
-        private static readonly string FileName = "panel_data.json";
-        private static string FilePath => Path.Combine(Unit.Config.DataPath, FileName);
-        private static readonly object _lock = new();
-
-        /// <summary>每个实例最多保留的玩家事件条数</summary>
-        private const int MaxEventsPerInstance = 1000;
-
-        /// <summary>加载面板设置(JSON 字符串)</summary>
-        public static string Load()
-        {
-            lock (_lock)
-            {
-                try
-                {
-                    if (!File.Exists(FilePath))
-                        return "{}";
-                    return File.ReadAllText(FilePath);
-                }
-                catch (Exception ex)
-                {
-                    Output.Log(Unit.I18n.Get("hub_load_panel_data_failed", ex.Message), 3, "Hub");
-                    return "{}";
-                }
-            }
-        }
-
-        /// <summary>保存面板设置(JSON 字符串)</summary>
-        public static (bool Success, string Message) Save(string jsonData)
-        {
-            lock (_lock)
-            {
-                try
-                {
-                    Unit.AtomicFile.WriteAllText(FilePath, jsonData);
-                    return (true, "保存成功");
-                }
-                catch (Exception ex)
-                {
-                    return (false, $"保存失败: {ex.Message}");
-                }
-            }
-        }
-
-        /// <summary>追加一条玩家事件到指定实例的事件列表</summary>
-        public static void AppendPlayerEvent(string instanceId, PlayerEventEntry entry)
-        {
-            if (string.IsNullOrEmpty(instanceId) || entry == null) return;
-            lock (_lock)
-            {
-                try
-                {
-                    var json = File.Exists(FilePath) ? File.ReadAllText(FilePath) : "{}";
-                    using var doc = JsonDocument.Parse(json);
-                    using var ms = new MemoryStream();
-                    using (var writer = new Utf8JsonWriter(ms))
-                    {
-                        writer.WriteStartObject();
-                        bool hasPlayerEvents = false;
-                        foreach (var prop in doc.RootElement.EnumerateObject())
-                        {
-                            if (prop.Name == "playerEvents")
-                            {
-                                hasPlayerEvents = true;
-                                writer.WritePropertyName("playerEvents");
-                                writer.WriteStartObject();
-                                // 复制已有实例的事件
-                                bool foundInstance = false;
-                                foreach (var instProp in prop.Value.EnumerateObject())
-                                {
-                                    if (instProp.Name == instanceId)
-                                    {
-                                        foundInstance = true;
-                                        writer.WritePropertyName(instanceId);
-                                        WriteEventArrayWithAppend(writer, instProp.Value, entry);
-                                    }
-                                    else
-                                    {
-                                        instProp.WriteTo(writer);
-                                    }
-                                }
-                                if (!foundInstance)
-                                {
-                                    writer.WritePropertyName(instanceId);
-                                    writer.WriteStartArray();
-                                    WriteEventEntry(writer, entry);
-                                    writer.WriteEndArray();
-                                }
-                                writer.WriteEndObject();
-                            }
-                            else
-                            {
-                                prop.WriteTo(writer);
-                            }
-                        }
-                        if (!hasPlayerEvents)
-                        {
-                            writer.WritePropertyName("playerEvents");
-                            writer.WriteStartObject();
-                            writer.WritePropertyName(instanceId);
-                            writer.WriteStartArray();
-                            WriteEventEntry(writer, entry);
-                            writer.WriteEndArray();
-                            writer.WriteEndObject();
-                        }
-                        writer.WriteEndObject();
-                    }
-                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
-                }
-                catch (Exception ex)
-                {
-                    Output.Log(Unit.I18n.Get("hub_append_player_event_failed", ex.Message), 3, "Hub");
-                }
-            }
-        }
-
-        /// <summary>事件板最大保留条数</summary>
-        private const int MaxBoardEvents = 500;
-
-        /// <summary>追加一条事件板事件(自动分配自增 id, 返回分配的 id, 失败返回 0)</summary>
-        public static long AppendBoardEvent(BoardEventEntry entry)
-        {
-            if (entry == null) return 0;
-            lock (_lock)
-            {
-                try
-                {
-                    var json = File.Exists(FilePath) ? File.ReadAllText(FilePath) : "{}";
-                    using var doc = JsonDocument.Parse(json);
-                    long nextId = 1;
-                    if (doc.RootElement.TryGetProperty("boardNextId", out var nid) && nid.TryGetInt64(out var n))
-                        nextId = n;
-                    entry.Id = nextId;
-                    using var ms = new MemoryStream();
-                    using (var writer = new Utf8JsonWriter(ms))
-                    {
-                        writer.WriteStartObject();
-                        bool hasBoard = false;
-                        foreach (var prop in doc.RootElement.EnumerateObject())
-                        {
-                            if (prop.Name == "boardEvents")
-                            {
-                                hasBoard = true;
-                                writer.WritePropertyName("boardEvents");
-                                WriteBoardEventArrayWithAppend(writer, prop.Value, entry);
-                            }
-                            else if (prop.Name == "boardNextId")
-                            {
-                                // 跳过旧值, 末尾统一重新写入
-                            }
-                            else
-                            {
-                                prop.WriteTo(writer);
-                            }
-                        }
-                        if (!hasBoard)
-                        {
-                            writer.WritePropertyName("boardEvents");
-                            writer.WriteStartArray();
-                            WriteBoardEventEntry(writer, entry);
-                            writer.WriteEndArray();
-                        }
-                        writer.WriteNumber("boardNextId", nextId + 1);
-                        writer.WriteEndObject();
-                    }
-                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
-                    return nextId;
-                }
-                catch (Exception ex)
-                {
-                    Output.Log(Unit.I18n.Get("hub_append_board_event_failed", ex.Message), 3, "Hub");
-                    return 0;
-                }
-            }
-        }
-
-        /// <summary>获取事件板事件列表(按时间正序)与已读水位</summary>
-        public static (List<BoardEventEntry> Events, long LastReadId) GetBoardEvents(int limit = 0)
-        {
-            var result = new List<BoardEventEntry>();
-            long lastReadId = 0;
-            lock (_lock)
-            {
-                try
-                {
-                    if (!File.Exists(FilePath)) return (result, 0);
-                    var json = File.ReadAllText(FilePath);
-                    using var doc = JsonDocument.Parse(json);
-                    if (doc.RootElement.TryGetProperty("boardLastReadId", out var lr) && lr.TryGetInt64(out var lrid))
-                        lastReadId = lrid;
-                    if (!doc.RootElement.TryGetProperty("boardEvents", out var arr))
-                        return (result, lastReadId);
-                    foreach (var item in arr.EnumerateArray())
-                    {
-                        result.Add(new BoardEventEntry
-                        {
-                            Id = item.TryGetProperty("id", out var idEl) && idEl.TryGetInt64(out var idv) ? idv : 0,
-                            EventType = item.TryGetProperty("eventType", out var t) ? t.GetString() ?? "" : "",
-                            InstanceId = item.TryGetProperty("instanceId", out var iid) ? iid.GetString() ?? "" : "",
-                            InstanceName = item.TryGetProperty("instanceName", out var inm) ? inm.GetString() ?? "" : "",
-                            Title = item.TryGetProperty("title", out var ti) ? ti.GetString() ?? "" : "",
-                            Detail = item.TryGetProperty("detail", out var d) ? d.GetString() ?? "" : "",
-                            RecordedAt = item.TryGetProperty("recordedAt", out var r) ? r.GetString() ?? "" : ""
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Output.Log(Unit.I18n.Get("hub_read_board_events_failed", ex.Message), 3, "Hub");
-                }
-            }
-            if (limit > 0 && result.Count > limit)
-                result = result.Skip(result.Count - limit).ToList();
-            return (result, lastReadId);
-        }
-
-        /// <summary>标记事件板已读水位(只前进不后退)</summary>
-        public static (bool Success, string Message) MarkBoardRead(long id)
-        {
-            lock (_lock)
-            {
-                try
-                {
-                    var json = File.Exists(FilePath) ? File.ReadAllText(FilePath) : "{}";
-                    using var doc = JsonDocument.Parse(json);
-                    long current = 0;
-                    if (doc.RootElement.TryGetProperty("boardLastReadId", out var lr) && lr.TryGetInt64(out var lv))
-                        current = lv;
-                    if (id <= current) return (true, "无新事件");
-                    using var ms = new MemoryStream();
-                    using (var writer = new Utf8JsonWriter(ms))
-                    {
-                        writer.WriteStartObject();
-                        foreach (var prop in doc.RootElement.EnumerateObject())
-                        {
-                            if (prop.Name == "boardLastReadId") continue; // 末尾统一写入新水位
-                            prop.WriteTo(writer);
-                        }
-                        writer.WriteNumber("boardLastReadId", id);
-                        writer.WriteEndObject();
-                    }
-                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
-                    return (true, "已标记");
-                }
-                catch (Exception ex)
-                {
-                    return (false, $"标记失败: {ex.Message}");
-                }
-            }
-        }
-
-        /// <summary>清空事件板(自增 id 水位保留, 避免旧事件复活为未读)</summary>
-        public static (bool Success, string Message) ClearBoardEvents()
-        {
-            lock (_lock)
-            {
-                try
-                {
-                    if (!File.Exists(FilePath)) return (true, "无数据");
-                    var json = File.ReadAllText(FilePath);
-                    using var doc = JsonDocument.Parse(json);
-                    long nextId = 0;
-                    if (doc.RootElement.TryGetProperty("boardNextId", out var nid) && nid.TryGetInt64(out var nv))
-                        nextId = nv;
-                    using var ms = new MemoryStream();
-                    using (var writer = new Utf8JsonWriter(ms))
-                    {
-                        writer.WriteStartObject();
-                        foreach (var prop in doc.RootElement.EnumerateObject())
-                        {
-                            if (prop.Name == "boardEvents") continue;
-                            prop.WriteTo(writer);
-                        }
-                        if (nextId > 0)
-                            writer.WriteNumber("boardLastReadId", nextId - 1);
-                        writer.WriteEndObject();
-                    }
-                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
-                    return (true, Unit.I18n.Get("hub_board_cleared"));
-                }
-                catch (Exception ex)
-                {
-                    return (false, $"清空失败: {ex.Message}");
-                }
-            }
-        }
-
-        private static void WriteBoardEventArrayWithAppend(Utf8JsonWriter writer, JsonElement existing, BoardEventEntry newEntry)
-        {
-            writer.WriteStartArray();
-            var items = existing.EnumerateArray().ToList();
-            // 超过上限则丢弃最旧的, 保持不超过 MaxBoardEvents
-            int skip = 0;
-            if (items.Count >= MaxBoardEvents)
-                skip = items.Count - MaxBoardEvents + 1;
-            for (int i = skip; i < items.Count; i++)
-            {
-                items[i].WriteTo(writer);
-            }
-            WriteBoardEventEntry(writer, newEntry);
-            writer.WriteEndArray();
-        }
-
-        private static void WriteBoardEventEntry(Utf8JsonWriter writer, BoardEventEntry entry)
-        {
-            writer.WriteStartObject();
-            writer.WriteNumber("id", entry.Id);
-            writer.WriteString("eventType", entry.EventType);
-            writer.WriteString("instanceId", entry.InstanceId);
-            writer.WriteString("instanceName", entry.InstanceName);
-            writer.WriteString("title", entry.Title);
-            writer.WriteString("detail", entry.Detail);
-            writer.WriteString("recordedAt", entry.RecordedAt);
-            writer.WriteEndObject();
-        }
-
-        /// <summary>获取指定实例的玩家事件列表</summary>
-        public static List<PlayerEventEntry> GetPlayerEvents(string instanceId, int limit = 0)
-        {
-            var result = new List<PlayerEventEntry>();
-            if (string.IsNullOrEmpty(instanceId)) return result;
-            lock (_lock)
-            {
-                try
-                {
-                    if (!File.Exists(FilePath)) return result;
-                    var json = File.ReadAllText(FilePath);
-                    using var doc = JsonDocument.Parse(json);
-                    if (!doc.RootElement.TryGetProperty("playerEvents", out var eventsObj)) return result;
-                    if (!eventsObj.TryGetProperty(instanceId, out var arr)) return result;
-                    foreach (var item in arr.EnumerateArray())
-                    {
-                        result.Add(new PlayerEventEntry
-                        {
-                            EventType = item.TryGetProperty("eventType", out var t) ? t.GetString() ?? "" : "",
-                            PlayerName = item.TryGetProperty("playerName", out var n) ? n.GetString() ?? "" : "",
-                            TriggerTime = item.TryGetProperty("triggerTime", out var tt) ? tt.GetString() ?? "" : "",
-                            RecordedAt = item.TryGetProperty("recordedAt", out var r) ? r.GetString() ?? "" : "",
-                            Detail = item.TryGetProperty("detail", out var d) ? d.GetString() ?? "" : ""
-                        });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Output.Log(Unit.I18n.Get("hub_read_player_events_failed", ex.Message), 3, "Hub");
-                }
-            }
-            if (limit > 0 && result.Count > limit)
-                result = result.Skip(result.Count - limit).ToList();
-            return result;
-        }
-
-        /// <summary>清空指定实例的玩家事件</summary>
-        public static (bool Success, string Message) ClearPlayerEvents(string instanceId)
-        {
-            lock (_lock)
-            {
-                try
-                {
-                    if (!File.Exists(FilePath)) return (true, "无数据");
-                    var json = File.ReadAllText(FilePath);
-                    using var doc = JsonDocument.Parse(json);
-                    using var ms = new MemoryStream();
-                    using (var writer = new Utf8JsonWriter(ms))
-                    {
-                        writer.WriteStartObject();
-                        foreach (var prop in doc.RootElement.EnumerateObject())
-                        {
-                            if (prop.Name == "playerEvents")
-                            {
-                                writer.WritePropertyName("playerEvents");
-                                writer.WriteStartObject();
-                                foreach (var instProp in prop.Value.EnumerateObject())
-                                {
-                                    if (instProp.Name != instanceId)
-                                        instProp.WriteTo(writer);
-                                }
-                                writer.WriteEndObject();
-                            }
-                            else
-                            {
-                                prop.WriteTo(writer);
-                            }
-                        }
-                        writer.WriteEndObject();
-                    }
-                    Unit.AtomicFile.WriteAllText(FilePath, Encoding.UTF8.GetString(ms.ToArray()));
-                    return (true, "已清空");
-                }
-                catch (Exception ex)
-                {
-                    return (false, $"清空失败: {ex.Message}");
-                }
-            }
-        }
-
-        private static void WriteEventArrayWithAppend(Utf8JsonWriter writer, JsonElement existing, PlayerEventEntry newEntry)
-        {
-            writer.WriteStartArray();
-            var items = existing.EnumerateArray().ToList();
-            // 超过上限则丢弃最旧的, 保持不超过 MaxEventsPerInstance
-            int skip = 0;
-            if (items.Count >= MaxEventsPerInstance)
-                skip = items.Count - MaxEventsPerInstance + 1;
-            for (int i = skip; i < items.Count; i++)
-            {
-                items[i].WriteTo(writer);
-            }
-            WriteEventEntry(writer, newEntry);
-            writer.WriteEndArray();
-        }
-
-        private static void WriteEventEntry(Utf8JsonWriter writer, PlayerEventEntry entry)
-        {
-            writer.WriteStartObject();
-            writer.WriteString("eventType", entry.EventType);
-            writer.WriteString("playerName", entry.PlayerName);
-            writer.WriteString("triggerTime", entry.TriggerTime);
-            writer.WriteString("recordedAt", entry.RecordedAt);
-            writer.WriteString("detail", entry.Detail);
-            writer.WriteEndObject();
-        }
-    }
-
-    /// <summary>玩家事件记录条目</summary>
-    public class PlayerEventEntry
-    {
-        public string EventType { get; set; } = "";
-        public string PlayerName { get; set; } = "";
-        public string TriggerTime { get; set; } = "";
-        public string RecordedAt { get; set; } = "";
-        public string Detail { get; set; } = "";
-    }
-
-    /// <summary>事件板事件条目(实例生命周期)</summary>
-    public class BoardEventEntry
-    {
-        public long Id { get; set; }
-        public string EventType { get; set; } = "";
-        public string InstanceId { get; set; } = "";
-        public string InstanceName { get; set; } = "";
-        public string Title { get; set; } = "";
-        public string Detail { get; set; } = "";
-        public string RecordedAt { get; set; } = "";
-    }
 }

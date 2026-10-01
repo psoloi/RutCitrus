@@ -11,10 +11,12 @@ namespace RtPanel.Controllers
     public class SystemController : ControllerBase
     {
         private readonly RtCliClientService _client;
+        private readonly StatsHistoryService _history;
 
-        public SystemController(RtCliClientService client)
+        public SystemController(RtCliClientService client, StatsHistoryService history)
         {
             _client = client;
+            _history = history;
         }
 
         /// <summary>
@@ -59,6 +61,15 @@ namespace RtPanel.Controllers
                 schedulerRunning = response.SchedulerRunning,
                 servers
             });
+        }
+
+        /// <summary>
+        /// 获取面板服务端持续采集的系统历史点(供首页图表使用, 与浏览器状态无关)。
+        /// </summary>
+        [HttpGet("history")]
+        public IActionResult GetHistory()
+        {
+            return Ok(new { success = true, points = _history.Snapshot() });
         }
 
         /// <summary>获取任务列表(AI任务或计划任务)</summary>
@@ -118,7 +129,9 @@ namespace RtPanel.Controllers
                 mcConnected = resp.McConnected,
                 autoTipsRunning = resp.AutoTipsRunning,
                 aiRunning = resp.AiRunning,
-                schedulerRunning = resp.SchedulerRunning
+                schedulerRunning = resp.SchedulerRunning,
+                mcVersion = resp.McVersion,
+                serverJar = resp.ServerJar
             });
         }
 

@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using RtCli.Modules;
+using RtCli.Modules.Function;
 
 namespace RtCli.Modules.Extension
 {
@@ -17,11 +18,13 @@ namespace RtCli.Modules.Extension
     {
         private const string ThisName = "RtEM";
         private static readonly string ExtensionsDirectory = "Extensions";
-        private static readonly string absoluteExtensionsPath = Path.GetFullPath(ExtensionsDirectory);
+        // 扩展目录锚定程序根目录, 所有扩展及其依赖的加载路径均限制在程序根目录内(安全校验要求)
+        private static readonly string absoluteExtensionsPath =
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ExtensionsDirectory));
         private static readonly Dictionary<string, ExtensionContext> _loadedExtensions = new Dictionary<string, ExtensionContext>();
         private static bool _isInitialized = false;
         private static IReadOnlyDictionary<string, ExtensionInfo>? _cachedLoadedExtensions;
-        private static readonly List<Task> _runningTasks = new List<Task>();
+        private static readonly Dictionary<string, Task> _runningTasks = new(StringComparer.OrdinalIgnoreCase);
         private static readonly object _taskLock = new object();
         private static readonly object _extensionsLock = new object();
 
@@ -124,6 +127,13 @@ namespace RtCli.Modules.Extension
                     return false;
                 }
 
+                // 加载前安全校验: 路径归属程序根目录、签名认证、程序集名称、deps.json 可执行文件拦截
+                if (!Validator.ValidateExtension(normalizedPath, out string reason))
+                {
+                    Output.Log($"扩展安全校验未通过，已取消加载 {Path.GetFileName(normalizedPath)}: {reason}", 3, ThisName);
+                    return false;
+                }
+
                 var context = new ExtensionLoadContext(normalizedPath);
                 Assembly assembly = context.LoadFromAssemblyPath(normalizedPath);
 
@@ -194,7 +204,8 @@ namespace RtCli.Modules.Extension
                     }
                     catch (Exception ex)
                     {
-                        Output.Log($"创建扩展实例失败 {type.FullName}: {ex.Message}", 2, ThisName);
+                        Output.Log($"创建扩展实例失败 {type.FullName}: {DescribeException(ex)}", 2, ThisName);
+                        Output.Debug(ex, $"创建扩展实例异常堆栈: {type.FullName}", ThisName);
                     }
                 }
 
@@ -205,7 +216,8 @@ namespace RtCli.Modules.Extension
             }
             catch (Exception ex)
             {
-                Output.Log($"加载扩展程序集失败 {Path.GetFileName(assemblyPath)}: {ex.Message}", 2, ThisName);
+                Output.Log($"加载扩展程序集失败 {Path.GetFileName(assemblyPath)}: {DescribeException(ex)}", 2, ThisName);
+                Output.Debug(ex, $"加载扩展程序集异常堆栈: {assemblyPath}", ThisName);
                 return false;
             }
         }
@@ -215,10 +227,10 @@ namespace RtCli.Modules.Extension
         /// </summary>
         public static void Run()
         {
-            List<ExtensionContext> extensions;
+            List<KeyValuePair<string, ExtensionContext>> extensions;
             lock (_extensionsLock)
             {
-                extensions = _loadedExtensions.Values.ToList();
+                extensions = _loadedExtensions.ToList();
             }
 
             if (extensions.Count == 0)
@@ -229,10 +241,21 @@ namespace RtCli.Modules.Extension
 
             Output.Log($"开始运行 {extensions.Count} 个扩展...", 1, ThisName);
 
-            foreach (var context in extensions)
+            // 内存守护: 扩展占用超过 256MB 且持续 2 秒即强制卸载(阈值与语义见 Validator)
+            ExtensionMemoryGuard.Start();
+
+            foreach (var kv in extensions)
             {
+                string extensionKey = kv.Key;
+                var context = kv.Value;
+                // 登记为"已启动扩展": 守护器据此冻结堆基线并持续计它的内存账, 直到卸载。
+                // (扩展的 Run() 常常只做初始化就返回, 真正耗内存的是它自起的后台线程与事件回调)
+                ExtensionMemoryGuard.RegisterActive(extensionKey);
+
                 var task = Task.Run(() =>
                 {
+                    // MarkExecuting/MarkIdle 只在多扩展并发时用于归属
+                    ExtensionMemoryGuard.MarkExecuting(extensionKey);
                     try
                     {
                         Output.Log($"》 运行扩展: {context.Info.Name}", 0, ThisName);
@@ -242,10 +265,14 @@ namespace RtCli.Modules.Extension
                     {
                         Output.Log($"× 运行扩展失败 {context.Info.Name}: {ex.Message}", 0, ThisName);
                     }
+                    finally
+                    {
+                        ExtensionMemoryGuard.MarkIdle(extensionKey);
+                    }
                 });
                 lock (_taskLock)
                 {
-                    _runningTasks.Add(task);
+                    _runningTasks[extensionKey] = task;
                 }
             }
 
@@ -257,15 +284,18 @@ namespace RtCli.Modules.Extension
         /// </summary>
         public static void UnloadAll()
         {
+            // 卸载期间停止内存守护, 避免把卸载过程当成扩展内存增长
+            ExtensionMemoryGuard.Stop();
+
             lock (_taskLock)
             {
                 if (_runningTasks.Count > 0)
                 {
                     try
                     {
-                        Task.WaitAll(_runningTasks.ToArray(), TimeSpan.FromSeconds(5));
+                        Task.WaitAll(_runningTasks.Values.ToArray(), TimeSpan.FromSeconds(5));
                     }
-                    catch { }
+                    catch (Exception ex) { Output.Debug(ex, "等待扩展任务退出超时或失败", "RtEM"); }
                     _runningTasks.Clear();
                 }
             }
@@ -316,15 +346,62 @@ namespace RtCli.Modules.Extension
                     return false;
             }
 
+            string extensionName = context.Info.Name ?? "";
+            string typeName = context.Info.TypeName ?? "";
+
+            // 可选生命周期: 扩展实现 IStoppableExtension 时先请求停止自建线程/定时器
+            if (context.Extension is IStoppableExtension stoppable)
+            {
+                try { stoppable.RequestStop(); }
+                catch (Exception ex) { Output.Debug(ex, $"请求扩展停止失败: {extensionName}", ThisName); }
+            }
+
+            // 每一步独立兜底: 某一步抛异常不能导致后续 Unload/Context.Unload 被跳过
+            try { EventBus.Publish(new ExtensionUnloadEvent(extensionName)); }
+            catch (Exception ex) { Output.Debug(ex, $"发布扩展卸载事件失败: {extensionName}", ThisName); }
+
+            // 清理该扩展的事件订阅(按名称前缀与类型名, 避免静态处理器残留持有程序集)
+            try { EventBus.UnsubscribeAll(extensionName); }
+            catch (Exception ex) { Output.Debug(ex, $"退订扩展事件失败: {extensionName}", ThisName); }
+            if (!string.IsNullOrEmpty(typeName))
+            {
+                try { EventBus.UnsubscribeAll(typeName); }
+                catch (Exception ex) { Output.Debug(ex, $"退订扩展事件失败: {typeName}", ThisName); }
+            }
+
             try
             {
-                EventBus.Publish(new ExtensionUnloadEvent(context.Info.Name ?? ""));
-
-                EventBus.UnsubscribeAll(context.Info.Name ?? "");
-
                 context.Extension.Unload();
+            }
+            catch (Exception ex)
+            {
+                Output.Log($"× 扩展 Unload() 失败 {extensionName}: {DescribeException(ex)}", 3, ThisName);
+                Output.Debug(ex, $"扩展 Unload() 异常堆栈: {extensionName}", ThisName);
+            }
 
-                // 卸载加载上下文
+            // 等待该扩展的 Run() 任务退出(最多 2 秒), 避免卸载程序集时它仍在执行
+            Task? runTask = null;
+            lock (_taskLock)
+            {
+                if (_runningTasks.TryGetValue(extensionKey, out var task))
+                {
+                    runTask = task;
+                    _runningTasks.Remove(extensionKey);
+                }
+            }
+            if (runTask != null && !runTask.IsCompleted)
+            {
+                try
+                {
+                    if (!runTask.Wait(TimeSpan.FromSeconds(2)))
+                        Output.Log($"扩展 {extensionName} 的 Run() 任务未在 2 秒内退出(可能仍持有自建线程)", 2, ThisName);
+                }
+                catch (Exception ex) { Output.Debug(ex, $"等待扩展任务退出失败: {extensionName}", ThisName); }
+            }
+
+            try
+            {
+                // 卸载加载上下文(对持有静态引用的扩展无效, 但能释放多数程序集)
                 context.Context.Unload();
 
                 lock (_extensionsLock)
@@ -333,14 +410,23 @@ namespace RtCli.Modules.Extension
                     InvalidateLoadedExtensionsCache();
                 }
 
-                Output.Log($"- 卸载扩展成功: {context.Info.Name}", 1, ThisName);
+                Output.Log($"- 卸载扩展成功: {extensionName}", 1, ThisName);
                 return true;
             }
             catch (Exception ex)
             {
-                Output.Log($"× 卸载扩展失败 {context.Info.Name}: {ex.Message}", 1, ThisName);
+                Output.Log($"× 卸载扩展失败 {extensionName}: {DescribeException(ex)}", 1, ThisName);
+                Output.Debug(ex, $"卸载扩展异常堆栈: {extensionName}", ThisName);
                 return false;
             }
+        }
+
+        /// <summary>展开 TargetInvocationException 等包装异常, 取到真正的内层异常信息</summary>
+        private static string DescribeException(Exception ex)
+        {
+            while (ex is System.Reflection.TargetInvocationException && ex.InnerException != null)
+                ex = ex.InnerException;
+            return $"{ex.GetType().Name}: {ex.Message}";
         }
 
         /// <summary>
@@ -534,7 +620,7 @@ namespace RtCli.Modules.Extension
                             return asm;
                     }
                 }
-                catch { }
+                catch (Exception ex) { Output.Debug(ex, $"扫描已加载程序集失败: {name}", "RtEM"); }
 
                 // 2. 从运行时目录加载对应DLL(版本兼容，CLR会统一)
                 try
@@ -547,7 +633,7 @@ namespace RtCli.Modules.Extension
                             return LoadFromAssemblyPath(dllPath);
                     }
                 }
-                catch { }
+                catch (Exception ex) { Output.Debug(ex, $"从运行时目录加载程序集失败: {name}", "RtEM"); }
 
                 return null;
             }
@@ -555,7 +641,10 @@ namespace RtCli.Modules.Extension
             string? assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
             if (assemblyPath != null)
             {
-                return LoadFromAssemblyPath(assemblyPath);
+                // 强制依赖程序集加载路径位于程序根目录内, 阻止从任意路径加载
+                if (Validator.IsWithinProgramRoot(assemblyPath))
+                    return LoadFromAssemblyPath(assemblyPath);
+                Output.Log($"拒绝加载程序根目录外的扩展依赖: {System.IO.Path.GetFileName(assemblyPath)}", 3, "RtEM");
             }
 
             try
@@ -568,9 +657,7 @@ namespace RtCli.Modules.Extension
                     }
                 }
             }
-            catch
-            {
-            }
+            catch (Exception ex) { Output.Debug(ex, $"匹配已加载程序集失败: {assemblyName.Name}", "RtEM"); }
 
             return null;
         }
@@ -580,7 +667,10 @@ namespace RtCli.Modules.Extension
             string? libraryPath = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
             if (libraryPath != null)
             {
-                return LoadUnmanagedDllFromPath(libraryPath);
+                // 原生库同样限制在程序根目录内
+                if (Validator.IsWithinProgramRoot(libraryPath))
+                    return LoadUnmanagedDllFromPath(libraryPath);
+                Output.Log($"拒绝加载程序根目录外的原生库: {System.IO.Path.GetFileName(libraryPath)}", 3, "RtEM");
             }
 
             // 可回收上下文中返回 IntPtr.Zero 的默认回退可能无法解析系统目录中的原生库
@@ -601,7 +691,7 @@ namespace RtCli.Modules.Extension
                     if (System.IO.File.Exists(full))
                         return LoadUnmanagedDllFromPath(full);
                 }
-                catch { }
+                catch (Exception ex) { Output.Debug(ex, $"从系统目录加载原生库失败: {full}", "RtEM"); }
             }
 
             return IntPtr.Zero;

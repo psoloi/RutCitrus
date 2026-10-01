@@ -234,8 +234,8 @@ namespace RtCli.Modules.Function
             return result;
         }
 
-        /// <summary>构建 MySQL 连接字符串</summary>
-        private static string BuildConnectionString(LuckPermsMysqlConfig mysql)
+        /// <summary>构建 MySQL 连接字符串(供 .status 复用同一套连接参数)</summary>
+        internal static string BuildConnectionString(LuckPermsMysqlConfig mysql)
         {
             // 兼容 "host:port" 与 "host" 两种格式，避免 MySqlConnector 不识别冒号端口
             string host = mysql.Address ?? "";

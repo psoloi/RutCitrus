@@ -21,6 +21,9 @@
             <button class="nav-link" data-tab="playerMgr" onclick="switchTab('playerMgr')">玩家管理</button>
         </li>
         <li class="nav-item">
+            <button class="nav-link" data-tab="serverCfg" onclick="switchTab('serverCfg')">全服配置</button>
+        </li>
+        <li class="nav-item">
             <button class="nav-link" data-tab="fileMgr" onclick="switchTab('fileMgr')">文件管理</button>
         </li>
         <li class="nav-item">
@@ -61,8 +64,12 @@
                     <div class="col-md-4">
                         <label class="form-label small">服务端文件 <span class="text-muted">(工作目录第一层 .jar)</span></label>
                         <div class="d-flex gap-1 align-items-center">
-                        <input type="text" class="form-control form-control-sm" id="mg_inst_serverJar" list="mg_jarList" placeholder="如 server.jar" onchange="syncRunFlags()" />
-                        <datalist id="mg_jarList"></datalist>
+                        <div class="jar-select">
+                            <input type="text" class="form-control form-control-sm" id="mg_inst_serverJar" placeholder="如 server.jar"
+                                   onchange="syncRunFlags()" onfocus="showJarDropdown()" oninput="filterJarDropdown()"
+                                   autocomplete="off" />
+                            <div class="jar-dropdown" id="mg_jarDropdown" hidden></div>
+                        </div>
                         <button class="btn btn-sm btn-outline-info flex-shrink-0" onclick="scanServerJars(this)" title="扫描工作目录第一层的 jar 文件">扫描</button>
                     </div>
                     </div>
@@ -168,6 +175,8 @@
                     <button class="btn btn-sm btn-outline-danger" onclick="playerAction('ban_ip')">封禁IP</button>
                     <button class="btn btn-sm btn-outline-success" onclick="playerAction('pardon_ip')">解封IP</button>
                     <button class="btn btn-sm btn-warning" onclick="playerAction('kick')">踢出玩家</button>
+                    <button class="btn btn-sm btn-outline-info" onclick="playerAction('op')">设为OP</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="playerAction('deop')">移除OP</button>
                 </div>
                 <hr class="border-secondary" />
                 <!-- 自定义命令 -->
@@ -311,6 +320,12 @@
                         <option value="command">命令</option>
                         <option value="chat">聊天</option>
                         <option value="setmode">模式切换</option>
+                        <option value="op">OP 授予</option>
+                        <option value="deop">OP 移除</option>
+                        <option value="ban">封禁</option>
+                        <option value="unban">解封</option>
+                        <option value="ip_ban">IP 封禁</option>
+                        <option value="ip_unban">IP 解封</option>
                     </select>
                     <input type="text" class="form-control form-control-sm" id="playerEventSearch" placeholder="搜索玩家名/内容" oninput="renderPlayerEvents()" style="width:180px;" />
                     <button class="btn btn-sm btn-outline-info" onclick="loadPlayerEvents()">刷新</button>
@@ -350,6 +365,104 @@
             </div>
         </div>
     </div>
+
+    <!-- 全服配置 (RM 管理协议 serversettings) -->
+    <div class="tab-pane-content" id="tab-serverCfg" style="display:none;">
+        <div class="alert alert-secondary small mb-3">
+            通过服务端管理协议读写全服配置(serversettings)、游戏规则、名单与服务器控制。仅支持 <strong style="color:#ff6a3d;">MC 1.21.9+</strong> 且在实例中开启了管理协议、当前实例为运行中的 RM 模式实例；非 RM 实例的部分增删操作会自动降级为命令通道，读取类操作不可用。
+        </div>
+
+        <div class="card bg-dark text-light border-secondary mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>全服配置</span>
+                <div class="d-flex gap-1 align-items-center">
+                    <button class="btn btn-sm btn-outline-info" onclick="loadServerSettings()">刷新</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="saveServerSettings()">保存</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="serverSettingsBody">
+                    <div class="text-muted text-center py-4">点击「刷新」加载全服配置...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 服务器控制 -->
+        <div class="card bg-dark text-light border-secondary mb-3">
+            <div class="card-header"><span>服务器控制</span></div>
+            <div class="card-body">
+                <div class="d-flex gap-2 flex-wrap mb-3">
+                    <button class="btn btn-sm btn-outline-info" onclick="rmServerAction('status')">查询状态</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="rmServerAction('save')">保存世界</button>
+                    <button class="btn btn-sm btn-danger" onclick="rmServerAction('stop')">停止服务器</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="rmDiscover()">能力发现 (discover)</button>
+                </div>
+                <div class="row g-2 align-items-center">
+                    <div class="col-md-7">
+                        <input type="text" class="form-control form-control-sm" id="rm_msg_text" placeholder="系统消息内容" />
+                    </div>
+                    <div class="col-md-3">
+                        <label class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-1 mb-0">
+                            <input type="checkbox" id="rm_msg_overlay" /> 标题叠加显示
+                        </label>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-sm btn-outline-primary w-100" onclick="rmServerAction('system_message')">发送系统消息</button>
+                    </div>
+                </div>
+                <pre id="rm_raw" class="small mt-3 mb-0 p-2 border rounded" style="display:none;max-height:260px;overflow:auto;white-space:pre-wrap;"></pre>
+            </div>
+        </div>
+
+        <!-- 游戏规则 -->
+        <div class="card bg-dark text-light border-secondary mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>游戏规则 (gamerules)</span>
+                <div class="d-flex gap-1">
+                    <button class="btn btn-sm btn-outline-info" onclick="loadGamerules()">刷新</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="saveGamerules()">保存全部</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="gamerulesBody">
+                    <div class="text-muted text-center py-4">点击「刷新」加载游戏规则...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 名单管理 -->
+        <div class="card bg-dark text-light border-secondary">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>名单管理</span>
+                <div class="d-flex gap-1 align-items-center">
+                    <select class="form-select form-select-sm" id="rm_list_type" style="width:180px;" onchange="loadRmList()">
+                        <option value="allowlist">白名单 (allowlist)</option>
+                        <option value="operators">OP 名单 (operators)</option>
+                        <option value="bans">封禁名单 (bans)</option>
+                        <option value="ip_bans">IP 封禁 (ip_bans)</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-info" onclick="loadRmList()">刷新</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="row g-2 mb-3">
+                    <div class="col-md-4">
+                        <input type="text" class="form-control form-control-sm" id="rm_list_target" placeholder="名称 / IP" />
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text" class="form-control form-control-sm" id="rm_list_reason" placeholder="原因(封禁时可选)" />
+                    </div>
+                    <div class="col-md-4 d-flex gap-1">
+                        <button class="btn btn-sm btn-outline-primary" onclick="rmListAction('add')">添加</button>
+                        <button class="btn btn-sm btn-danger" onclick="rmListAction('clear')">清空(仅白名单)</button>
+                    </div>
+                </div>
+                <div id="rmListBody" class="border rounded" style="max-height:360px;overflow-y:auto;">
+                    <div class="text-muted small p-2">选择名单类型并点击「刷新」加载...</div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 @section Scripts {
@@ -378,6 +491,11 @@
         document.getElementById(`tab-${tab}`).style.display = '';
         if (tab === 'players' && allPlayerEvents.length === 0) loadPlayerEvents();
         if (tab === 'playerMgr') loadCustomCommands();
+        if (tab === 'serverCfg') {
+            loadServerSettings();
+            if (gameruleCache.length === 0) loadGamerules();
+            if (rmListCache.length === 0) loadRmList();
+        }
         if (tab === 'plugins') loadJarFiles('plugin');
         if (tab === 'mods') loadJarFiles('mod');
         if (tab === 'fileMgr') FileMgr.ensureInit();
@@ -400,7 +518,7 @@
         document.getElementById('mg_inst_name').value = inst.name;
         // 与 RtCli Analyzer 模式规范一致: 旧名自动映射到 RM/RUN/RR/RCON
         document.getElementById('mg_inst_mode').value = ({
-            MANAGEMENT: 'RM', RUN: 'RUN', RCON: 'RR', ONLYRCON: 'RCON',
+            MANAGEMENT: 'RM', RUN: 'RUN', RCON: 'RCON', ONLYRCON: 'RCON',
             RM: 'RM', RR: 'RR'
         })[(inst.analyzerMode || 'RM').toUpperCase()] || 'RM';
         document.getElementById('mg_inst_workPath').value = inst.workPath;
@@ -530,22 +648,72 @@
         document.getElementById('mg_inst_runFlags').value = rebuildRunFlags(p);
     }
 
+    // === 服务端文件(jar)自定义下拉框(替代浏览器原生 datalist) ===
+    let scannedJars = [];
+
+    function renderJarDropdown(filter) {
+        const dd = document.getElementById('mg_jarDropdown');
+        if (!dd) return;
+        const kw = (filter || '').toLowerCase();
+        const items = scannedJars.filter(j => j.toLowerCase().includes(kw));
+        if (items.length === 0) {
+            dd.innerHTML = `<div class="jar-dropdown-empty">${scannedJars.length ? '无匹配的 jar' : '请先点击"扫描"'}</div>`;
+            return;
+        }
+        dd.innerHTML = items.map(j => `<div class="jar-dropdown-item" data-jar="${escapeHtml(j)}">${escapeHtml(j)}</div>`).join('');
+        dd.querySelectorAll('.jar-dropdown-item').forEach(el => {
+            // 用 mousedown 在输入框 blur 之前完成选择
+            el.addEventListener('mousedown', (ev) => { ev.preventDefault(); pickJar(el.dataset.jar); });
+        });
+    }
+
+    function showJarDropdown() {
+        const dd = document.getElementById('mg_jarDropdown');
+        if (!dd) return;
+        renderJarDropdown(document.getElementById('mg_inst_serverJar').value.trim());
+        dd.hidden = false;
+    }
+
+    function filterJarDropdown() {
+        const dd = document.getElementById('mg_jarDropdown');
+        if (!dd || dd.hidden) return;
+        renderJarDropdown(document.getElementById('mg_inst_serverJar').value.trim());
+    }
+
+    function pickJar(name) {
+        document.getElementById('mg_inst_serverJar').value = name;
+        document.getElementById('mg_jarDropdown').hidden = true;
+        syncRunFlags();
+    }
+
+    // 点击下拉框/输入框之外时收起
+    document.addEventListener('click', (e) => {
+        const dd = document.getElementById('mg_jarDropdown');
+        if (!dd || dd.hidden) return;
+        const box = e.target.closest ? e.target.closest('.jar-select') : null;
+        if (!box) dd.hidden = true;
+    });
+
     // 扫描工作目录第一层 jar 文件(不深入子目录, 避免扫描到插件/模组)
     async function scanServerJars(btn) {
         btn.disabled = true; btn.textContent = '扫描中';
         try {
             const resp = await fetch(`/api/instances/file/list?id=${encodeURIComponent(INSTANCE_ID)}&path=`).then(r => r.json());
             if (!resp.success) { showStatus(resp.message || '扫描失败', 'danger'); return; }
-            const jars = (resp.entries || []).filter(e => !e.isDir && e.name.toLowerCase().endsWith('.jar')).map(e => e.name);
-            const dl = document.getElementById('mg_jarList');
-            dl.innerHTML = jars.map(j => `<option value="${escapeHtml(j)}"></option>`).join('');
-            if (jars.length === 0) { showStatus('工作目录第一层未找到 .jar 文件', 'warning'); return; }
+            scannedJars = (resp.entries || []).filter(e => !e.isDir && e.name.toLowerCase().endsWith('.jar')).map(e => e.name);
+            if (scannedJars.length === 0) {
+                document.getElementById('mg_jarDropdown').hidden = true;
+                showStatus('工作目录第一层未找到 .jar 文件', 'warning');
+                return;
+            }
             const cur = document.getElementById('mg_inst_serverJar').value.trim();
-            if (!cur && jars.length === 1) { // 只有一个 jar 时自动填入
-                document.getElementById('mg_inst_serverJar').value = jars[0];
+            if (!cur && scannedJars.length === 1) { // 只有一个 jar 时自动填入
+                document.getElementById('mg_inst_serverJar').value = scannedJars[0];
                 syncRunFlags();
             }
-            showStatus(`扫描到 ${jars.length} 个 jar: ${jars.slice(0, 5).join(', ')}${jars.length > 5 ? ' ...' : ''}`, 'success');
+            renderJarDropdown(document.getElementById('mg_inst_serverJar').value.trim());
+            document.getElementById('mg_jarDropdown').hidden = false;
+            showStatus(`扫描到 ${scannedJars.length} 个 jar: ${scannedJars.slice(0, 5).join(', ')}${scannedJars.length > 5 ? ' ...' : ''}`, 'success');
         } catch { showStatus('扫描请求失败', 'danger'); }
         finally { btn.disabled = false; btn.textContent = '扫描'; }
     }
@@ -680,7 +848,7 @@
         if (resp.success) loadDetail();
     }
     async function deleteBackup(fileName) {
-        if (!confirm(`确定删除备份「${fileName}」?此操作不可恢复。`)) return;
+        if (!await RtPanel.showConfirm('删除备份', `确定删除备份「${fileName}」?此操作不可恢复。`)) return;
         const resp = await fetch('/api/instances/backup/delete', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ id: INSTANCE_ID, fileName })
@@ -697,13 +865,13 @@
         const resp = await fetch(`/api/instances/log?id=${encodeURIComponent(INSTANCE_ID)}&maxLines=500`).then(r => r.json());
         if (!resp.success) { area.innerHTML = `<div class="text-danger p-2">${escapeHtml(resp.message || '加载失败')}</div>`; return; }
         const lines = (resp.content || '').split('\n');
-        area.innerHTML = lines.map(line => {
-            let cls = 'text-light';
-            if (/ERROR|SEVERE|FATAL/i.test(line)) cls = 'text-danger';
-            else if (/WARN/i.test(line)) cls = 'text-warning';
-            else if (/<\/?INFO/i.test(line)) cls = 'text-info';
-            return `<div class="${cls}">${escapeHtml(line) || '&nbsp;'}</div>`;
-        }).join('');
+        // 交给共享渲染器: 级别着色 + 多行错误合并。
+        // 原先逐行正则着色有两处问题:
+        //   1) 堆栈续行(at ... / Caused by: / ... N more)不含级别关键字, 被渲染成普通行, 错误被拆散;
+        //   2) /<\/?INFO/i 匹配的是字面量 "<INFO", 而实际是 "[Server thread/INFO]", 所以 INFO 从未着色。
+        area.innerHTML = window.RtLog
+            ? RtLog.render(lines)
+            : lines.map(line => `<div class="text-light">${escapeHtml(line) || '&nbsp;'}</div>`).join('');
         area.scrollTop = area.scrollHeight;
     }
 
@@ -720,16 +888,53 @@
         if (errors.length === 0) { errArea.innerHTML = '<div class="text-success p-2">未检测到错误</div>'; return; }
         errArea.innerHTML = `
             <div class="d-flex justify-content-between align-items-center mb-1">
-                <small class="text-muted">检测到 ${errors.length} 条错误</small>
+                <small class="text-muted">错误列表 · 检测到 ${errors.length} 条错误(按错误块聚合, 含堆栈)</small>
                 <div class="d-flex gap-1">
                     <input type="text" class="form-control form-control-sm" id="aiRangeInput" placeholder="如 1 或 1-3(空=全部)" style="width:140px;" />
+                    <button class="btn btn-sm btn-outline-info" onclick="baseAnalyzeErrors()">基础分析</button>
                     <button class="btn btn-sm btn-primary" onclick="aiAnalyzeErrors()">AI分析</button>
                 </div>
             </div>
             <div class="border rounded" style="max-height:250px;overflow-y:auto;">
                 ${errors.map(e => `<div class="border-bottom p-2">
                     <span class="badge bg-danger">#${e.index}</span>
-                    <pre class="small text-muted mb-0 mt-1" style="white-space:pre-wrap;">${escapeHtml(e.content)}</pre>
+                    <div class="small mt-1">${window.RtLog ? RtLog.render((e.content || '').split('\n')) : escapeHtml(e.content)}</div>
+                </div>`).join('')}
+            </div>`;
+    }
+
+    async function baseAnalyzeErrors() {
+        const range = document.getElementById('aiRangeInput')?.value?.trim() || '';
+        const area = document.getElementById('instanceAiArea');
+        area.style.display = '';
+        area.innerHTML = '<div class="text-muted p-2">基础分析中...</div>';
+        const resp = await fetch('/api/instances/errors/base', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ id: INSTANCE_ID, range })
+        }).then(r => r.json());
+        if (!resp.success) { area.innerHTML = `<div class="text-danger p-2">${escapeHtml(resp.message || '基础分析失败')}</div>`; return; }
+        const matches = resp.matches || [];
+        if (matches.length === 0) {
+            area.innerHTML = `
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <small class="text-info">基础分析结果</small>
+                </div>
+                <div class="border rounded p-2 small text-muted">${escapeHtml(resp.message || '未匹配到基础规则')}，可尝试 AI 分析。</div>`;
+            return;
+        }
+        area.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <small class="text-info">基础分析结果 · 命中 ${matches.length} 条规则</small>
+                <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="navigator.clipboard.writeText(document.getElementById('baseResultText').textContent)">复制</button>
+            </div>
+            <div class="border rounded p-2" id="baseResultText" style="background:rgba(56,189,248,0.05);max-height:320px;overflow-y:auto;">
+                ${matches.map(m => `<div class="border-bottom pb-2 mb-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <strong class="text-info">${escapeHtml(m.topic || '未知问题')}</strong>
+                        ${m.action ? `<span class="badge bg-secondary">修复脚本: ${escapeHtml(m.action)}</span>` : ''}
+                    </div>
+                    <div class="small mt-1">${escapeHtml(m.solution || '')}</div>
+                    ${m.matched ? `<pre class="small text-muted mb-0 mt-1" style="white-space:pre-wrap;">${escapeHtml(m.matched)}</pre>` : ''}
                 </div>`).join('')}
             </div>`;
     }
@@ -784,11 +989,199 @@
             showStatus('请输入玩家名或IP', 'warning');
             return;
         }
+        // 授予 OP 为高危操作, 需二次确认
+        if (action === 'op') {
+            if (!await RtPanel.showConfirm('设为 OP', `确定将 ${target} 设为 OP 吗？\nOP 将拥有服务器全部管理权限。`)) return;
+        }
         const resp = await fetch('/api/instances/player/manage', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ id: INSTANCE_ID, action, target, reason, command: '' })
         }).then(r => r.json());
         showStatus(resp.message || (resp.success ? '操作成功' : '操作失败'), resp.success ? 'success' : 'danger');
+    }
+
+    // === 全服配置 (RM 管理协议 serversettings) ===
+    let serverSettingsCache = [];
+    async function loadServerSettings() {
+        const body = document.getElementById('serverSettingsBody');
+        body.innerHTML = '<div class="text-muted text-center py-4">正在加载全服配置...</div>';
+        const resp = await fetch(`/api/instances/serversettings?serverKey=${encodeURIComponent(INSTANCE_ID)}`).then(r => r.json());
+        if (!resp.success) {
+            body.innerHTML = `<div class="alert alert-warning small mb-0">${escapeHtml(resp.message || '加载失败')}</div>`;
+            return;
+        }
+        serverSettingsCache = resp.settings || [];
+        renderServerSettings();
+    }
+    function renderServerSettings() {
+        const body = document.getElementById('serverSettingsBody');
+        if (serverSettingsCache.length === 0) {
+            body.innerHTML = '<div class="text-muted text-center py-4">该实例没有可用的全服配置项</div>';
+            return;
+        }
+        body.innerHTML = `<div class="row g-3">` + serverSettingsCache.map((s, i) => {
+            const label = escapeHtml(s.label || s.key);
+            const key = escapeHtml(s.key);
+            let input;
+            if (s.type === 'bool') {
+                input = `<div class="form-check form-switch">
+                            <input type="checkbox" class="form-check-input" id="ss_${i}" ${(s.value === 'true' || s.value === '1') ? 'checked' : ''} />
+                        </div>`;
+            } else if (s.type === 'enum') {
+                const opts = (s.options || []).map(o =>
+                    `<option value="${escapeHtml(o)}" ${o === s.value ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('');
+                input = `<select class="form-select form-select-sm" id="ss_${i}">${opts}</select>`;
+            } else if (s.type === 'int') {
+                input = `<input type="number" class="form-control form-control-sm" id="ss_${i}" value="${escapeHtml(s.value)}" />`;
+            } else {
+                input = `<input type="text" class="form-control form-control-sm" id="ss_${i}" value="${escapeHtml(s.value)}" />`;
+            }
+            return `<div class="col-md-6">
+                        <div class="border rounded p-2">
+                            <label class="form-label small mb-1 d-block">${label}
+                                <code class="text-muted small">${key}</code></label>
+                            ${input}
+                        </div>
+                    </div>`;
+        }).join('') + `</div>`;
+    }
+    async function saveServerSettings() {
+        const values = serverSettingsCache.map((s, i) => {
+            const el = document.getElementById(`ss_${i}`);
+            let val;
+            if (s.type === 'bool') val = el.checked ? 'true' : 'false';
+            else val = el.value;
+            return { key: s.key, value: val };
+        });
+        const resp = await fetch('/api/instances/serversettings/save', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ serverKey: INSTANCE_ID, values })
+        }).then(r => r.json());
+        showStatus(resp.message || (resp.success ? '已保存' : '保存失败'), resp.success ? 'success' : 'danger');
+        if (resp.success) loadServerSettings();
+    }
+
+    // === RM 工具 (管理协议: 游戏规则/名单/服务器控制/能力发现) ===
+    async function rmManage(category, action, target, value, flag) {
+        return await fetch('/api/instances/rm/manage', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                instanceId: INSTANCE_ID, category, action,
+                target: target || '', value: value || '', flag: !!flag
+            })
+        }).then(r => r.json());
+    }
+    function showRmRaw(raw) {
+        const el = document.getElementById('rm_raw');
+        try { el.textContent = JSON.stringify(JSON.parse(raw), null, 2); }
+        catch { el.textContent = raw; }
+        el.style.display = '';
+    }
+
+    // --- 服务器控制 ---
+    async function rmServerAction(action) {
+        let value = '', flag = false;
+        if (action === 'system_message') {
+            value = document.getElementById('rm_msg_text').value.trim();
+            flag = document.getElementById('rm_msg_overlay').checked;
+            if (!value) { showStatus('请输入系统消息内容', 'warning'); return; }
+        }
+        if (action === 'stop' && !confirm('确定要停止该实例的服务端吗？')) return;
+        const resp = await rmManage('server', action, '', value, flag);
+        showStatus(resp.message || (resp.success ? '已执行' : '操作失败'), resp.success ? 'success' : 'danger');
+        if (resp.raw) showRmRaw(resp.raw);
+    }
+    async function rmDiscover() {
+        const resp = await rmManage('discover', 'discover', '', '', false);
+        if (!resp.success) { showStatus(resp.message || '能力发现失败', 'danger'); return; }
+        showStatus('已获取管理协议能力', 'success');
+        showRmRaw(resp.raw || '(无返回)');
+    }
+
+    // --- 游戏规则 ---
+    let gameruleCache = [];
+    async function loadGamerules() {
+        const body = document.getElementById('gamerulesBody');
+        body.innerHTML = '<div class="text-muted text-center py-4">正在加载游戏规则...</div>';
+        const resp = await rmManage('gamerules', 'get', '', '', false);
+        if (!resp.success) {
+            body.innerHTML = `<div class="alert alert-warning small mb-0">${escapeHtml(resp.message || '加载失败')}</div>`;
+            return;
+        }
+        gameruleCache = resp.entries || [];
+        renderGamerules();
+    }
+    function renderGamerules() {
+        const body = document.getElementById('gamerulesBody');
+        if (!gameruleCache.length) { body.innerHTML = '<div class="text-muted text-center py-4">没有可用的游戏规则</div>'; return; }
+        body.innerHTML = '<div class="row g-2">' + gameruleCache.map((g, i) => {
+            const v = (g.value ?? '').toString();
+            let input;
+            if (v === 'true' || v === 'false') {
+                input = `<select class="form-select form-select-sm" id="gr_${i}">
+                            <option value="true"${v === 'true' ? ' selected' : ''}>true</option>
+                            <option value="false"${v === 'false' ? ' selected' : ''}>false</option>
+                         </select>`;
+            } else {
+                input = `<input type="text" class="form-control form-control-sm" id="gr_${i}" value="${escapeHtml(v)}" />`;
+            }
+            return `<div class="col-md-6"><div class="border rounded p-2">
+                        <label class="form-label small mb-1 d-block">${escapeHtml(g.name)}</label>${input}
+                    </div></div>`;
+        }).join('') + '</div>';
+    }
+    async function saveGamerules() {
+        if (!gameruleCache.length) { showStatus('请先刷新游戏规则', 'warning'); return; }
+        let ok = 0, fail = 0;
+        for (let i = 0; i < gameruleCache.length; i++) {
+            const el = document.getElementById(`gr_${i}`);
+            if (!el) continue;
+            const resp = await rmManage('gamerules', 'set', gameruleCache[i].name, el.value, false);
+            if (resp.success) ok++; else fail++;
+        }
+        showStatus(`游戏规则已应用: 成功 ${ok} 项${fail ? `，失败 ${fail} 项` : ''}`, fail ? 'warning' : 'success');
+    }
+
+    // --- 名单管理 ---
+    let rmListCache = [];
+    async function loadRmList() {
+        const type = document.getElementById('rm_list_type').value;
+        const body = document.getElementById('rmListBody');
+        body.innerHTML = '<div class="text-muted small p-2">正在加载...</div>';
+        const resp = await rmManage(type, 'get', '', '', false);
+        if (!resp.success) {
+            body.innerHTML = `<div class="text-muted small p-2">${escapeHtml(resp.message || '加载失败(非 RM 实例不支持读取名单)')}</div>`;
+            return;
+        }
+        rmListCache = resp.entries || [];
+        renderRmList();
+    }
+    function renderRmList() {
+        const body = document.getElementById('rmListBody');
+        if (!rmListCache.length) { body.innerHTML = '<div class="text-muted small p-2">名单为空</div>'; return; }
+        body.innerHTML = rmListCache.map(e => `<div class="d-flex justify-content-between align-items-center border-bottom px-2 py-1">
+            <span class="small">${escapeHtml(e.name)}
+                ${e.value ? `<span class="text-muted">(${escapeHtml(e.value)})</span>` : ''}
+                ${e.extra ? `<code class="text-muted small">${escapeHtml(e.extra)}</code>` : ''}
+            </span>
+            <button class="btn btn-sm btn-outline-danger py-0 px-2" data-name="${escapeHtml(e.name)}" onclick="rmListRemove(this.dataset.name)">移除</button>
+        </div>`).join('');
+    }
+    async function rmListAction(action) {
+        const type = document.getElementById('rm_list_type').value;
+        const target = document.getElementById('rm_list_target').value.trim();
+        const reason = document.getElementById('rm_list_reason').value.trim();
+        if (action !== 'clear' && !target) { showStatus('请输入名称/IP', 'warning'); return; }
+        if (action === 'clear' && !confirm('确定清空该名单吗？')) return;
+        const resp = await rmManage(type, action, target, reason, false);
+        showStatus(resp.message || (resp.success ? '已执行' : '操作失败'), resp.success ? 'success' : 'danger');
+        if (resp.success) loadRmList();
+    }
+    async function rmListRemove(name) {
+        const type = document.getElementById('rm_list_type').value;
+        const resp = await rmManage(type, 'remove', name, '', false);
+        showStatus(resp.message || (resp.success ? '已移除' : '操作失败'), resp.success ? 'success' : 'danger');
+        if (resp.success) loadRmList();
     }
 
     // === 自定义命令 ===
@@ -864,43 +1257,56 @@
         }
         container.innerHTML = files.map(f => {
             const badge = `<span class="badge ${f.isDisabled ? 'bg-danger' : 'bg-success'}">${f.isDisabled ? '已禁用' : '启用'}</span>`;
-            const btns = `<div class="btn-group btn-group-sm">
-                <button class="btn btn-outline-warning" onclick="toggleJar('${type}','${escapeHtml(f.fileName)}')" title="${f.isDisabled ? '启用' : '禁用'}">${f.isDisabled ? '启用' : '禁用'}</button>
-                <button class="btn btn-outline-danger" onclick="deleteJar('${type}','${escapeHtml(f.fileName)}')" title="删除">删</button>
+
+            // 插件才有"更新"(走 Modrinth), 位置在 禁用/启用 的左侧
+            const updateBtn = type === 'plugin'
+                ? '<button class="btn btn-sm jar-item-btn btn-outline-info" onclick="updatePlugin(\'' + escapeHtml(f.fileName) + '\', this)" title="从 Modrinth 检查并更新">更新</button>'
+                : '';
+
+            // 右侧: 文件大小紧靠按钮; 启用/禁用按状态取色, 删除固定危险色; 按钮等宽以便各行对齐
+            const actions = `<div class="d-flex align-items-center gap-2 flex-shrink-0">
+                <span class="jar-item-size" title="文件大小">${formatBytes(f.sizeBytes)}</span>
+                ${updateBtn}
+                <button class="btn btn-sm jar-item-btn ${f.isDisabled ? 'btn-outline-success' : 'btn-outline-warning'}"
+                        onclick="toggleJar('${type}','${escapeHtml(f.fileName)}')"
+                        title="${f.isDisabled ? '启用' : '禁用'}">${f.isDisabled ? '启用' : '禁用'}</button>
+                <button class="btn btn-sm jar-item-btn btn-outline-danger"
+                        onclick="deleteJar('${type}','${escapeHtml(f.fileName)}')" title="删除">删除</button>
             </div>`;
-            if (type === 'plugin') {
-                if (f.metaParsed) {
-                    // 已从 jar 内解析出插件元数据(plugin.yml/bungee.yml/velocity-plugin.json 等)
-                    const ver = f.version ? `<span class="badge text-bg-info" title="版本">v${escapeHtml(f.version)}</span>` : '';
-                    const desc = f.description ? `<small class="text-muted text-truncate d-inline-block" style="max-width:320px;" title="${escapeHtml(f.description)}">${escapeHtml(f.description)}</small>` : '';
-                    return `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
-                        <div class="d-flex align-items-center gap-2 flex-grow-1 flex-wrap" style="min-width:0;">
-                            ${badge}
-                            <strong class="small text-truncate" title="${escapeHtml(f.fileName)}">${escapeHtml(f.name || f.fileName)}</strong>
-                            ${ver}
-                            ${desc}
-                            <small class="text-muted text-nowrap">${escapeHtml(f.fileName)} · ${formatBytes(f.sizeBytes)}</small>
-                        </div>
-                        ${btns}
-                    </div>`;
-                }
-                // 无法解析元数据: 标黄提示可能无法加载, 名称回退为文件名
-                return `<div class="d-flex justify-content-between align-items-center border-bottom p-2" style="background:rgba(255,193,7,.08);border-left:3px solid #ffc107;" title="无法从插件 jar 内解析插件信息(plugin.yml 等), 该插件可能无法加载">
+
+            const fileName = escapeHtml(f.fileName);
+            // 版本改用正文字体与正文字号: 徽章是像素字体且偏小, 版本号难以辨认
+            const ver = f.version ? `<span class="jar-item-ver" title="版本">v${escapeHtml(f.version)}</span>` : '';
+            const desc = f.description
+                ? `<small class="jar-item-desc text-truncate" title="${escapeHtml(f.description)}">${escapeHtml(f.description)}</small>`
+                : '';
+
+            if (f.metaParsed) {
+                return `<div class="d-flex justify-content-between align-items-center border-bottom p-2 gap-2">
                     <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width:0;">
-                        <span class="badge bg-warning text-dark">⚠ 未识别</span>
-                        <span class="small text-truncate">${escapeHtml(f.fileName)}</span>
-                        <small class="text-muted text-nowrap">${formatBytes(f.sizeBytes)}</small>
+                        ${badge}
+                        <strong class="small text-truncate" title="${fileName}">${escapeHtml(f.name || f.fileName)}</strong>
+                        ${ver}
+                        ${desc}
+                        <small class="text-muted text-nowrap">${fileName}</small>
                     </div>
-                    ${btns}
+                    ${actions}
                 </div>`;
             }
-            return `<div class="d-flex justify-content-between align-items-center border-bottom p-2">
+
+            // 未解析出元数据: 插件标黄提示可能无法加载; 模组没有统一元数据格式, 只按文件名显示且不报警
+            const isPlugin = type === 'plugin';
+            const rowAttr = isPlugin
+                ? ' style="background:rgba(255,193,7,.08);border-left:3px solid #ffc107;" title="无法从插件 jar 内解析插件信息(plugin.yml 等), 该插件可能无法加载"'
+                : '';
+            const warnBadge = isPlugin ? '<span class="badge bg-warning text-dark">⚠ 未识别</span>' : '';
+            return `<div class="d-flex justify-content-between align-items-center border-bottom p-2 gap-2"${rowAttr}>
                 <div class="d-flex align-items-center gap-2 flex-grow-1" style="min-width:0;">
                     ${badge}
-                    <span class="small text-truncate">${escapeHtml(f.fileName)}</span>
-                    <small class="text-muted text-nowrap">${formatBytes(f.sizeBytes)}</small>
+                    ${warnBadge}
+                    <span class="small text-truncate" title="${fileName}">${fileName}</span>
                 </div>
-                ${btns}
+                ${actions}
             </div>`;
         }).join('');
     }
@@ -912,8 +1318,44 @@
         showStatus(resp.message, resp.success ? 'success' : 'danger');
         if (resp.success) loadJarFiles(type);
     }
+    // 插件更新: 先查 Modrinth 版本, 确认后再下载替换; 旧版本自动改名 .disjar(禁用)
+    async function updatePlugin(fileName, btn) {
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '检查中';
+        try {
+            let r = await fetch('/api/instances/jar/update', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ id: INSTANCE_ID, fileName: fileName, apply: false })
+            }).then(x => x.json());
+
+            if (!r.success) { showStatus(r.message || '检查更新失败', 'danger'); return; }
+            if (!r.hasUpdate) { showStatus(r.message || '已是最新版本', 'success'); return; }
+
+            const ok = await RtPanel.showConfirm('更新插件',
+                r.message + '\n\n是否下载并替换? 旧版本会被改名为 .disjar(禁用)。' +
+                '\n提示: 服务端运行中时 jar 可能被占用, 建议先停止服务端。');
+            if (!ok) return;
+
+            btn.textContent = '下载中';
+            r = await fetch('/api/instances/jar/update', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ id: INSTANCE_ID, fileName: fileName, apply: true })
+            }).then(x => x.json());
+
+            showStatus(r.message || (r.success ? '更新完成' : '更新失败'), r.success ? 'success' : 'danger');
+            if (r.success) loadJarFiles('plugin');
+        } catch (e) {
+            showStatus('更新失败: ' + e.message, 'danger');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+
     async function deleteJar(type, fileName) {
-        if (!confirm(`确定删除「${fileName}」?此操作不可恢复。`)) return;
+        const label = type === 'plugin' ? '插件' : '模组';
+        if (!await RtPanel.showConfirm(`删除${label}`, `确定删除「${fileName}」?此操作不可恢复。`)) return;
         const resp = await fetch('/api/instances/jar/delete', {
             method: 'POST', headers: {'Content-Type':'application/json'},
             body: JSON.stringify({ id: INSTANCE_ID, fileName, type })
@@ -1321,7 +1763,13 @@
         lost:    { label: '掉线',   color: '#f97316', icon: '✕', cls: 'text-warning' },
         command: { label: '命令',   color: '#f59e0b', icon: '>', cls: 'text-warning' },
         chat:    { label: '聊天',   color: '#3b82f6', icon: '✉', cls: 'text-info' },
-        setmode: { label: '模式',   color: '#8b5cf6', icon: '⚙', cls: 'text-info' }
+        setmode: { label: '模式',   color: '#8b5cf6', icon: '⚙', cls: 'text-info' },
+        op:      { label: 'OP 授予', color: '#22d3ee', icon: '🛡', cls: 'text-info' },
+        deop:    { label: 'OP 移除', color: '#94a3b8', icon: '🛡', cls: 'text-muted' },
+        ban:     { label: '封禁',   color: '#ef4444', icon: '🚫', cls: 'text-danger' },
+        unban:   { label: '解封',   color: '#10b981', icon: '✓', cls: 'text-success' },
+        ip_ban:  { label: 'IP 封禁', color: '#dc2626', icon: '🚫', cls: 'text-danger' },
+        ip_unban:{ label: 'IP 解封', color: '#059669', icon: '✓', cls: 'text-success' }
     };
 
     async function loadPlayerEvents() {
@@ -1383,7 +1831,7 @@
     }
 
     async function clearPlayerEvents() {
-        if (!confirm('确定清空该实例的所有玩家事件记录?')) return;
+        if (!await RtPanel.showConfirm('清空玩家事件', '确定清空该实例的所有玩家事件记录吗？')) return;
         // 通过 panel_data API 清空(前端直接操作 playerEvents 字段)
         try {
             const dataResp = await fetch('/api/system/paneldata').then(r => r.json());

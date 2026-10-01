@@ -1,0 +1,2306 @@
+@page
+@model RtPanel.Pages.FeaturesModel
+@{
+    ViewData["Title"] = "功能";
+}
+
+<script>
+    // 功能页内容较多, 让外层 container 更宽(其它页面不受影响)
+    document.addEventListener('DOMContentLoaded', function () {
+        var el = document.querySelector('.feature-explorer');
+        var c = el && el.closest ? el.closest('.container') : null;
+        if (c) c.classList.add('container-wide');
+    });
+</script>
+
+<div class="feature-explorer">
+    <!-- 左侧：汉堡侧栏 -->
+    <aside class="feature-sidebar" id="featureSidebar">
+        <div class="feature-sidebar-head">
+            <button type="button" class="feature-hamburger" id="featureHamburger"
+                    title="折叠/展开侧栏" aria-label="折叠/展开侧栏" onclick="toggleFeatureSidebar()">☰</button>
+            <span class="feature-sidebar-title">功能</span>
+        </div>
+        <nav class="feature-menu" id="featureMenu">
+            <button type="button" class="feature-menu-item active" data-view="skills" onclick="switchFeature('skills', this)">
+                <span class="feature-menu-icon" aria-hidden="true">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l2.3 7.2 7.2 2.3-7.2 2.3L12 21.5l-2.3-7.2-7.2-2.3 7.2-2.3z"/></svg>
+                </span>
+                <span class="feature-menu-label">AI 技能管理</span>
+            </button>
+            <button type="button" class="feature-menu-item" data-view="memory" onclick="switchFeature('memory', this)">
+                <span class="feature-menu-icon" aria-hidden="true">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
+                </span>
+                <span class="feature-menu-label">AI 记忆</span>
+            </button>
+            <button type="button" class="feature-menu-item" data-view="automation" onclick="switchFeature('automation', this)">
+                <span class="feature-menu-icon" aria-hidden="true">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>
+                </span>
+                <span class="feature-menu-label">AI 自动化</span>
+            </button>
+            <button type="button" class="feature-menu-item" data-view="rules" onclick="switchFeature('rules', this)">
+                <span class="feature-menu-icon" aria-hidden="true">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                </span>
+                <span class="feature-menu-label">AI 规则</span>
+            </button>
+            <button type="button" class="feature-menu-item" data-view="blueprint" onclick="switchFeature('blueprint', this)">
+                <span class="feature-menu-icon" aria-hidden="true">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="9" width="6" height="6" rx="1"/><rect x="16" y="3" width="6" height="6" rx="1"/><rect x="16" y="15" width="6" height="6" rx="1"/><path d="M8 12h4M12 6v12M12 6h4M12 18h4"/></svg>
+                </span>
+                <span class="feature-menu-label">调度器蓝图</span>
+            </button>
+        </nav>
+    </aside>
+
+    <!-- 右侧：功能主区 -->
+    <section class="feature-main">
+        <div id="featureSkills" class="feature-view">
+            <header class="feature-header">
+                <div class="feature-title-wrap">
+                    <div class="feature-title">AI 技能管理</div>
+                    <small class="text-muted">创建或导入技能，写入 RtCli 的 ai_settings.yml（ServerAutoAi.skills）</small>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-info" onclick="loadSkills()">刷新</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="openImportModal()">导入技能</button>
+                    <button class="btn btn-sm btn-primary" onclick="openSkillModal()">新建技能</button>
+                </div>
+            </header>
+
+            <div id="skillStatus" class="alert mx-3 mt-3 mb-0" style="display:none;"></div>
+            <div id="skillList" class="feature-body">
+                <div class="text-muted p-3">加载中…</div>
+            </div>
+        </div>
+
+        <div id="featureMemory" class="feature-view" style="display:none;">
+            <header class="feature-header">
+                <div class="feature-title-wrap">
+                    <div class="feature-title">AI 记忆</div>
+                    <small class="text-muted">AI 自动化调用后生成的记忆（memory.json），以及 token 使用限制等设置</small>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-info" onclick="loadMemory()">刷新</button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="clearMemories()">清空记忆</button>
+                </div>
+            </header>
+
+            <div id="memoryStatus" class="alert mx-3 mt-3 mb-0" style="display:none;"></div>
+
+            <div class="feature-body">
+                <div class="memory-settings">
+                    <div class="memory-settings-title">记忆设置</div>
+                    <div class="memory-grid">
+                        <label class="memory-check"><input type="checkbox" id="memEnabled" /><span>启用 AI 记忆</span></label>
+                        <label class="memory-check"><input type="checkbox" id="memUseAi" /><span>用 AI 提炼（消耗 token）</span></label>
+                        <label class="memory-field">
+                            <span class="memory-label">Token 使用限制</span>
+                            <input type="number" id="memMaxTokens" class="form-control form-control-sm" min="1" />
+                        </label>
+                        <label class="memory-field">
+                            <span class="memory-label">单条内容最大字符</span>
+                            <input type="number" id="memMaxContentLength" class="form-control form-control-sm" min="1" />
+                        </label>
+                        <label class="memory-field">
+                            <span class="memory-label">最大记忆条数</span>
+                            <input type="number" id="memMaxEntries" class="form-control form-control-sm" min="1" />
+                        </label>
+                    </div>
+                    <div class="memory-grid">
+                        <label class="memory-check"><input type="checkbox" id="memCaptureServerInfo" /><span>记录服务器基本信息</span></label>
+                        <label class="memory-check"><input type="checkbox" id="memCapturePlayerCount" /><span>记录服务器玩家数量</span></label>
+                        <label class="memory-check"><input type="checkbox" id="memCaptureCommonErrors" /><span>记录服务器常见错误</span></label>
+                    </div>
+                    <label class="memory-field memory-field-full">
+                        <span class="memory-label">AI 提炼提示词</span>
+                        <textarea id="memPrompt" rows="3"></textarea>
+                    </label>
+                    <div class="memory-settings-actions">
+                        <button class="btn btn-sm btn-primary" id="memSaveBtn" onclick="saveMemorySettings()">保存设置</button>
+                        <button class="btn btn-sm btn-outline-warning" id="memGenPatternBtn" onclick="generateErrorPatterns()"
+                                title="从 AI 记忆里的错误样本生成错误识别表达式, 去重后自动写入 regex_settings.yml 的 custom_base_entries">
+                            生成错误识别表达式
+                        </button>
+                    </div>
+                </div>
+
+                <div class="memory-list-head">
+                    <span class="fw-bold">记忆列表</span>
+                    <span id="memoryCount" class="text-muted small"></span>
+                </div>
+                <div id="memoryList"><div class="text-muted p-3">加载中…</div></div>
+            </div>
+        </div>
+        <div id="featureAutomation" class="feature-view" style="display:none;">
+            <header class="feature-header">
+                <div class="feature-title-wrap">
+                    <div class="feature-title">AI 自动化</div>
+                    <small class="text-muted">任务与触发条件、运行参数、工具调用审计与历史结论（ai_settings.yml 的 ServerAutoAi）。实时工具日志可在「控制台」页按来源 AiTools 过滤查看</small>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-info" onclick="refreshAutomation()">刷新</button>
+                </div>
+            </header>
+
+            <div id="automationStatus" class="alert mx-3 mt-3 mb-0" style="display:none;"></div>
+
+            <div class="feature-subtabs" id="automationTabs">
+                <button type="button" class="feature-subtab active" data-sub="tasks" onclick="switchAutomationTab('tasks', this)">任务与参数</button>
+                <button type="button" class="feature-subtab" data-sub="monitor" onclick="switchAutomationTab('monitor', this)">运行监控</button>
+                <button type="button" class="feature-subtab" data-sub="history" onclick="switchAutomationTab('history', this)">历史结论</button>
+            </div>
+
+            <div class="feature-body">
+            <!-- 任务与参数 -->
+            <div id="autoPaneTasks" class="auto-pane">
+            <div class="wf-runtime">
+                <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+                    <span class="fw-bold">运行参数</span>
+                    <span id="wfRunner" class="badge bg-secondary">-</span>
+                    <span id="wfFilePath" class="text-muted small"></span>
+                    <span class="ms-auto d-flex gap-2">
+                        <button class="btn btn-sm btn-outline-success" onclick="openTaskModal()">+ 新建任务</button>
+                        <button class="btn btn-sm btn-primary" id="wfRuntimeSaveBtn" onclick="saveWorkflowRuntime()">保存运行参数</button>
+                    </span>
+                </div>
+                <div class="wf-grid">
+                    <label class="wf-field">
+                        <span class="wf-label">模型名称</span>
+                        <input type="text" id="wfModel" class="form-control form-control-sm" placeholder="留空复用 Console_Error 配置" />
+                    </label>
+                    <label class="wf-field">
+                        <span class="wf-label">API 地址</span>
+                        <input type="text" id="wfApiEndpoint" class="form-control form-control-sm" placeholder="留空复用 Console_Error 配置" />
+                    </label>
+                    <label class="wf-field">
+                        <span class="wf-label">API 密钥</span>
+                        <input type="password" id="wfApiKey" class="form-control form-control-sm" placeholder="留空不修改" autocomplete="new-password" />
+                    </label>
+                    <label class="wf-field">
+                        <span class="wf-label">输出最大 token</span>
+                        <input type="number" id="wfMaxTokens" class="form-control form-control-sm" min="1" />
+                    </label>
+                    <label class="wf-field">
+                        <span class="wf-label">生成温度</span>
+                        <input type="number" id="wfTemperature" class="form-control form-control-sm" step="0.1" min="0" max="2" />
+                    </label>
+                    <label class="wf-field">
+                        <span class="wf-label">请求超时（秒）</span>
+                        <input type="number" id="wfTimeout" class="form-control form-control-sm" min="1" />
+                    </label>
+                    <label class="wf-field">
+                        <span class="wf-label">最大重试次数</span>
+                        <input type="number" id="wfRetryCount" class="form-control form-control-sm" min="0" />
+                    </label>
+                    <label class="wf-field">
+                        <span class="wf-label">上下文缓存条数</span>
+                        <input type="number" id="wfContextCacheSize" class="form-control form-control-sm" min="0" />
+                    </label>
+                    <label class="wf-field">
+                        <span class="wf-label">工具调用最大轮次</span>
+                        <input type="number" id="wfMaxToolRounds" class="form-control form-control-sm" min="1" />
+                    </label>
+                    <label class="wf-check"><input type="checkbox" id="wfRetryOnError" /><span>异常时自动重连</span></label>
+                    <label class="wf-check"><input type="checkbox" id="wfSaveResponse" /><span>保存 AI 回复（上下文缓存）</span></label>
+                </div>
+                <label class="wf-field wf-field-full">
+                    <span class="wf-label">系统总提示词</span>
+                    <textarea id="wfPrompt" rows="4" class="form-control form-control-sm"></textarea>
+                </label>
+            </div>
+
+            <div class="wf-list-head">
+                <span class="fw-bold">任务列表</span>
+                <span id="wfTaskCount" class="text-muted small"></span>
+                <span id="wfKeyHint" class="text-muted small">任务标识仅支持小写字母、数字与下划线</span>
+            </div>
+            <div id="wfTaskList" class="wf-list">
+                <div class="text-muted p-3">加载中…</div>
+            </div>
+
+            <div class="mt-4">
+                <div class="text-muted small mb-1">触发条件合法值</div>
+                <div id="wfTriggerHelp" class="d-flex flex-wrap gap-1"></div>
+            </div>
+            </div>
+
+            <!-- 运行监控 -->
+            <div id="autoPaneMonitor" class="auto-pane" style="display:none;">
+            <div>
+                <div class="d-flex align-items-center gap-3 flex-wrap mb-2">
+                    <span class="fw-bold">运行概览</span>
+                    <span id="autoRunner" class="badge bg-secondary">-</span>
+                    <span class="text-muted small" id="autoMemory"></span>
+                    <span class="text-muted small" id="autoAudit"></span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-dark table-borderless align-middle mb-4">
+                        <thead><tr>
+                            <th>任务</th><th>状态</th><th>触发条件</th><th>Cron</th>
+                            <th>最小间隔</th><th>执行次数</th><th>上次运行</th><th>动作</th>
+                        </tr></thead>
+                        <tbody id="autoTaskBody"><tr><td colspan="8" class="text-muted">加载中…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div>
+                <div class="d-flex align-items-center gap-3 flex-wrap mb-2">
+                    <span class="fw-bold">工具调用审计</span>
+                    <span class="text-muted small" id="autoAuditPath"></span>
+                </div>
+                <div class="table-responsive" style="max-height:420px;overflow-y:auto;">
+                    <table class="table table-sm table-dark table-borderless align-middle mb-4">
+                        <thead><tr><th>时间</th><th>任务</th><th>工具</th><th>参数</th><th>结果</th></tr></thead>
+                        <tbody id="autoToolBody"><tr><td colspan="5" class="text-muted">加载中…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+            </div>
+
+            <!-- 历史结论 -->
+            <div id="autoPaneHistory" class="auto-pane" style="display:none;">
+            <div>
+                <div class="d-flex align-items-center gap-3 flex-wrap mb-2">
+                    <span class="fw-bold">历史结论</span>
+                    <span class="text-muted small" id="autoRespCount"></span>
+                </div>
+                <div id="autoRespList" class="d-flex flex-column gap-2" style="max-height:520px;overflow-y:auto;">
+                    <div class="text-muted small">加载中…</div>
+                </div>
+            </div>
+            </div>
+            </div>
+        </div>
+        <div id="featureRules" class="feature-view" style="display:none;">
+            <header class="feature-header">
+                <div class="feature-title-wrap">
+                    <div class="feature-title">AI 自动化规则</div>
+                    <small class="text-muted">逐条注入 AI 系统提示的「必须遵守的规则」, 保存后下次 AI 分析即生效</small>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-info" onclick="loadRules()">刷新</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="addRule()">+ 新增规则</button>
+                    <button class="btn btn-sm btn-primary" id="ruleSaveBtn" onclick="saveRules()">保存</button>
+                </div>
+            </header>
+
+            <div id="ruleStatus" class="alert mx-3 mt-3 mb-0" style="display:none;"></div>
+
+            <div class="feature-body">
+            <div>
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <span id="ruleRunner" class="badge bg-secondary">-</span>
+                    <span id="ruleCount" class="text-muted small"></span>
+                </div>
+                <div id="ruleList" class="rule-list-box">
+                    <div class="text-muted small">加载中…</div>
+                </div>
+
+                <div class="mt-4">
+                    <div class="text-muted small mb-1">系统总提示词(只读; 可在 ai_settings.yml 的 prompt 中修改)</div>
+                    <pre id="rulePrompt" class="bp-pre small text-muted"></pre>
+                </div>
+            </div>
+            </div>
+        </div>
+
+        <div id="featureBlueprint" class="feature-view" style="display:none;">
+            <header class="feature-header">
+                <div class="feature-title-wrap">
+                    <div class="feature-title">调度器蓝图</div>
+                    <small class="text-muted">节点图编辑计划任务: 触发 → 条件 → 执行。拖动节点排版, 点击节点在右侧改属性; 滚轮缩放, 拖空白平移</small>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-info" onclick="BP.refresh()">刷新</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="BP.addFlow()">+ 新建流程</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="BP.autoLayout()">自动布局</button>
+                    <button class="btn btn-sm btn-primary" onclick="BP.save()">保存</button>
+                </div>
+            </header>
+
+            <div id="bpStatus" class="alert mx-3 mt-3 mb-0" style="display:none;"></div>
+
+            <div class="feature-body bp-body">
+            <div class="bp-wrap">
+                <div class="bp-canvas-outer" id="bpOuter">
+                    <div class="bp-canvas" id="bpCanvas">
+                        <svg class="bp-edges" id="bpEdges"></svg>
+                        <div class="bp-nodes" id="bpNodes"></div>
+                    </div>
+                    <div class="bp-zoom">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="BP.zoomBy(1.2)" title="放大">＋</button>
+                        <span id="bpZoomLabel" class="bp-zoom-label">100%</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="BP.zoomBy(0.8)" title="缩小">－</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="BP.resetView()" title="重置视图">⟲</button>
+                    </div>
+                    <div class="bp-hint" id="bpHint">滚轮缩放 · 拖动空白平移 · 拖动节点移动</div>
+                </div>
+                <div class="bp-splitter" id="bpSplitter" title="拖动调整两侧宽度"></div>
+                <aside class="bp-inspector" id="bpInspector">
+                    <div class="text-muted small p-3">点击左侧节点开始编辑</div>
+                </aside>
+            </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- 新建/编辑技能弹窗 -->
+<div class="modal-overlay" id="skillModal" style="display:none;">
+    <div class="modal-box">
+        <h5 id="skillModalTitle">新建技能</h5>
+        <label class="form-label small text-muted mb-1" for="skillName">名称</label>
+        <input type="text" id="skillName" placeholder="技能名称，例如：性能诊断" />
+        <label class="form-label small text-muted mb-1" for="skillDesc">描述</label>
+        <input type="text" id="skillDesc" placeholder="一句话说明该技能的用途" />
+        <label class="form-label small text-muted mb-1" for="skillBehavior">行为</label>
+        <textarea id="skillBehavior" rows="5" placeholder="详细说明该技能的行为/做事方式"></textarea>
+        <div class="modal-actions">
+            <button class="btn btn-secondary btn-sm" onclick="closeSkillModal()">取消</button>
+            <button class="btn btn-primary btn-sm" id="skillSaveBtn" onclick="saveSkill()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 导入技能弹窗 -->
+<div class="modal-overlay" id="importModal" style="display:none;">
+    <div class="modal-box">
+        <h5>导入技能</h5>
+        <div class="import-head">
+            <p class="mb-0">粘贴 JSON / YAML 内容，或选择一个技能文件。支持技能数组、含 <code>skills</code> 的对象或单个技能对象。</p>
+            <label class="btn btn-sm btn-outline-secondary import-file-btn" title="选择一个技能文件">
+                <input type="file" id="importFile" accept=".json,.yaml,.yml,.txt" class="d-none" onchange="onImportFileChange(this)" />
+                选择文件
+            </label>
+        </div>
+        <div id="importFileName" class="import-file-name" hidden></div>
+        <textarea id="importContent" rows="8" placeholder='[{"name":"技能名","description":"描述","behavior":"行为"}]'></textarea>
+        <div class="form-check mt-2 mb-1">
+            <input type="checkbox" id="importOverwrite" class="form-check-input" />
+            <label class="form-check-label small" for="importOverwrite">同名技能覆盖（不勾选则跳过同名）</label>
+        </div>
+        <div class="modal-actions mt-2">
+            <button class="btn btn-secondary btn-sm" onclick="closeImportModal()">取消</button>
+            <button class="btn btn-primary btn-sm" id="importSaveBtn" onclick="importSkills()">导入</button>
+        </div>
+    </div>
+</div>
+
+<!-- 新建/编辑 AI 工作流任务弹窗 -->
+<div class="modal-overlay" id="taskModal" style="display:none;">
+    <div class="modal-box modal-box-lg">
+        <h5 id="taskModalTitle">新建任务</h5>
+
+        <div class="wf-modal-grid">
+            <label class="wf-field">
+                <span class="wf-label">任务标识 key</span>
+                <input type="text" id="taskKey" class="form-control form-control-sm" placeholder="如 tps_monitor" />
+            </label>
+            <label class="wf-field">
+                <span class="wf-label">任务名称</span>
+                <input type="text" id="taskName" class="form-control form-control-sm" placeholder="如 TPS 监控" />
+            </label>
+        </div>
+        <label class="wf-check mt-2"><input type="checkbox" id="taskEnabled" /><span>启用该任务</span></label>
+
+        <div class="wf-field wf-field-full mt-2">
+            <span class="wf-label">触发条件（可下拉选择或自定义输入）</span>
+            <div class="jar-select">
+                <input type="text" id="taskTrigger" class="form-control form-control-sm" placeholder="如 {rt.tps} &lt; 18 或 event: PlayerJoinEvent and {rt.player_name} == &quot;Steve&quot;"
+                       onfocus="showTriggerDropdown()" oninput="filterTriggerDropdown()" autocomplete="off" />
+                <div class="jar-dropdown" id="taskTriggerDropdown" hidden></div>
+            </div>
+        </div>
+
+        <div class="wf-field wf-field-full mt-2">
+            <span class="wf-label">数据源（分析哪些数据）</span>
+            <div id="taskInputBox" class="wf-chk-box"></div>
+        </div>
+
+        <div class="wf-field wf-field-full mt-2">
+            <span class="wf-label">执行动作</span>
+            <div class="wf-chk-box">
+                <label class="wf-check"><input type="checkbox" id="taskActionAi" /><span>ai（调用 AI 分析并给出结论）</span></label>
+            </div>
+            <div class="wf-label mt-1">可调用的工具（选择的工具会以 tools: 形式追加）</div>
+            <div id="taskToolsBox" class="wf-chk-box"></div>
+        </div>
+
+        <div class="wf-modal-grid mt-2">
+            <div class="wf-field">
+                <span class="wf-label">Cron（6 段：秒 分 时 日 月 周）</span>
+                <div class="jar-select">
+                    <input type="text" id="taskInterval" class="form-control form-control-sm" placeholder="0 0 0/1 * * ?"
+                           onfocus="showIntervalDropdown()" oninput="filterIntervalDropdown()" autocomplete="off" />
+                    <div class="jar-dropdown" id="taskIntervalDropdown" hidden></div>
+                </div>
+            </div>
+            <label class="wf-field">
+                <span class="wf-label">最小触发间隔（分钟）</span>
+                <input type="number" id="taskMinInterval" class="form-control form-control-sm" min="0" />
+            </label>
+            <label class="wf-field">
+                <span class="wf-label">生效实例（留空=全部，多个用英文逗号分隔）</span>
+                <input type="text" id="taskServerKeys" class="form-control form-control-sm" placeholder="留空=全部实例" autocomplete="off" />
+            </label>
+            <label class="wf-field">
+                <span class="wf-label">提示词+输入最大 token</span>
+                <input type="number" id="taskLimit" class="form-control form-control-sm" min="0" />
+            </label>
+            <label class="wf-field">
+                <span class="wf-label">错误相似度阈值（%）</span>
+                <input type="number" id="taskSimThreshold" class="form-control form-control-sm" min="0" max="100" />
+            </label>
+            <label class="wf-field">
+                <span class="wf-label">错误缓存时长（分钟）</span>
+                <input type="number" id="taskErrCache" class="form-control form-control-sm" min="0" />
+            </label>
+        </div>
+
+        <label class="wf-field wf-field-full mt-2">
+            <span class="wf-label">任务提示词</span>
+            <textarea id="taskPrompt" rows="3" class="form-control form-control-sm"></textarea>
+        </label>
+
+        <div class="modal-actions">
+            <button class="btn btn-secondary btn-sm" onclick="closeTaskModal()">取消</button>
+            <button class="btn btn-primary btn-sm" id="taskSaveBtn" onclick="saveWorkflowTask()">保存</button>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    let currentSkills = [];
+    let editingOriginalName = '';
+
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // === 侧栏折叠 / 视图切换 ===
+    function toggleFeatureSidebar() {
+        document.getElementById('featureSidebar').classList.toggle('collapsed');
+    }
+
+    function switchFeature(view, btn) {
+        // 切页前先收掉状态提示并恢复被顶替的介绍文字
+        if (typeof hideFeatureHint === 'function') hideFeatureHint();
+        document.querySelectorAll('.feature-menu-item').forEach(el => el.classList.remove('active'));
+        if (btn) btn.classList.add('active');
+        document.querySelectorAll('.feature-view').forEach(el => el.style.display = 'none');
+        const target = document.getElementById('feature' + view.charAt(0).toUpperCase() + view.slice(1));
+        if (target) target.style.display = '';
+        if (view === 'memory') loadMemory();
+        if (view === 'automation') { if (automationSub === 'tasks') loadWorkflow(); else loadAutomation(); }
+        if (view === 'rules') loadRules();
+        if (view === 'blueprint') BP.refresh();
+    }
+
+    // 自动化页内部分区: tasks(任务与参数) / monitor(运行监控) / history(历史结论)
+    var automationSub = 'tasks';
+    function switchAutomationTab(sub, btn) {
+        automationSub = sub;
+        document.querySelectorAll('#automationTabs .feature-subtab').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.sub === sub);
+        });
+        ['tasks', 'monitor', 'history'].forEach(function (k) {
+            var pane = document.getElementById('autoPane' + k.charAt(0).toUpperCase() + k.slice(1));
+            if (pane) pane.style.display = (k === sub ? '' : 'none');
+        });
+        hideFeatureHint();
+        if (sub === 'tasks') loadWorkflow();
+        if (sub === 'monitor' || sub === 'history') loadAutomation();
+    }
+
+    function refreshAutomation() {
+        if (automationSub === 'tasks') loadWorkflow();
+        else loadAutomation();
+    }
+
+    // === 状态提示 ===
+    function showSkillStatus(message, type) {
+        const el = document.getElementById('skillStatus');
+        el.className = 'alert mx-3 mt-3 mb-0 alert-' + type;
+        el.textContent = message;
+        el.style.display = '';
+    }
+
+    // === 技能列表 ===
+    async function loadSkills() {
+        const list = document.getElementById('skillList');
+        list.innerHTML = '<div class="text-muted p-3">加载中…</div>';
+        try {
+            const r = await fetch('/api/features/skills');
+            const data = await r.json();
+            if (!data.success) {
+                list.innerHTML = '<div class="text-muted p-3">' + esc(data.message || '获取失败') + '</div>';
+                showSkillStatus(data.message || '获取失败', 'warning');
+                return;
+            }
+            currentSkills = data.skills || [];
+            renderSkills(currentSkills);
+        } catch {
+            list.innerHTML = '<div class="text-muted p-3">请求失败</div>';
+        }
+    }
+
+    function renderSkills(skills) {
+        const list = document.getElementById('skillList');
+        if (!skills.length) {
+            list.innerHTML = '<div class="text-muted p-3">暂无技能，点击右上角「新建技能」或「导入技能」添加。</div>';
+            return;
+        }
+        list.innerHTML = skills.map(s => `
+            <div class="skill-card">
+                <div class="skill-card-main">
+                    <div class="skill-card-name">${esc(s.name)}</div>
+                    <div class="skill-card-desc">${esc(s.description) || '<span class="text-muted">无描述</span>'}</div>
+                    ${s.behavior ? `<div class="skill-card-behavior">${esc(s.behavior)}</div>` : ''}
+                </div>
+                <div class="skill-card-actions">
+                    <button class="btn btn-sm btn-outline-info" data-action="edit" data-name="${esc(s.name)}">编辑</button>
+                    <button class="btn btn-sm btn-outline-danger" data-action="delete" data-name="${esc(s.name)}">删除</button>
+                </div>
+            </div>`).join('');
+
+        // 事件委托: 通过 data-name 读取原始名称, 避免把名称拼进 onclick 造成转义问题
+        list.querySelectorAll('button[data-action]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const name = btn.getAttribute('data-name');
+                if (btn.getAttribute('data-action') === 'edit') openSkillModal(name);
+                else deleteSkill(name);
+            });
+        });
+    }
+
+    // === 新建 / 编辑 ===
+    function openSkillModal(name) {
+        editingOriginalName = name || '';
+        const skill = name ? currentSkills.find(s => s.name === name) : null;
+        document.getElementById('skillModalTitle').textContent = skill ? '编辑技能' : '新建技能';
+        document.getElementById('skillName').value = skill ? skill.name : '';
+        document.getElementById('skillDesc').value = skill ? skill.description : '';
+        document.getElementById('skillBehavior').value = skill ? skill.behavior : '';
+        document.getElementById('skillModal').style.display = 'flex';
+        document.getElementById('skillName').focus();
+    }
+
+    function closeSkillModal() {
+        document.getElementById('skillModal').style.display = 'none';
+    }
+
+    async function saveSkill() {
+        const name = document.getElementById('skillName').value.trim();
+        if (!name) { RtPanel.showToast('技能名称不能为空', 'warning'); return; }
+
+        const btn = document.getElementById('skillSaveBtn');
+        btn.disabled = true;
+        try {
+            const r = await fetch('/api/features/skills/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    originalName: editingOriginalName,
+                    name: name,
+                    description: document.getElementById('skillDesc').value,
+                    behavior: document.getElementById('skillBehavior').value
+                })
+            });
+            const data = await r.json();
+            if (data.success) {
+                RtPanel.showToast(data.message || '保存成功', 'success');
+                closeSkillModal();
+                showSkillStatus(data.message || '保存成功', 'success');
+                loadSkills();
+            } else {
+                RtPanel.showToast(data.message || '保存失败', 'error');
+            }
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function deleteSkill(name) {
+        if (!await RtPanel.showConfirm('删除技能', `确定删除技能 "${esc(name)}" 吗？`)) return;
+        try {
+            const r = await fetch('/api/features/skills/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name })
+            });
+            const data = await r.json();
+            RtPanel.showToast(data.message || (data.success ? '删除成功' : '删除失败'), data.success ? 'success' : 'error');
+            if (data.success) { showSkillStatus(data.message || '删除成功', 'success'); loadSkills(); }
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        }
+    }
+
+    // === 导入 ===
+    function openImportModal() {
+        document.getElementById('importContent').value = '';
+        document.getElementById('importFile').value = '';
+        document.getElementById('importOverwrite').checked = false;
+        const nameEl = document.getElementById('importFileName');
+        nameEl.textContent = '';
+        nameEl.hidden = true;
+        document.getElementById('importModal').style.display = 'flex';
+    }
+
+    function closeImportModal() {
+        document.getElementById('importModal').style.display = 'none';
+    }
+
+    function onImportFileChange(input) {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        const nameEl = document.getElementById('importFileName');
+        nameEl.textContent = '已选择: ' + file.name;
+        nameEl.hidden = false;
+        const reader = new FileReader();
+        reader.onload = e => { document.getElementById('importContent').value = e.target.result; };
+        reader.readAsText(file);
+    }
+
+    async function importSkills() {
+        const content = document.getElementById('importContent').value;
+        if (!content.trim()) { RtPanel.showToast('请粘贴内容或选择文件', 'warning'); return; }
+
+        const btn = document.getElementById('importSaveBtn');
+        btn.disabled = true;
+        try {
+            const r = await fetch('/api/features/skills/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: content, overwrite: document.getElementById('importOverwrite').checked })
+            });
+            const data = await r.json();
+            if (data.success) {
+                RtPanel.showToast(data.message || '导入成功', 'success');
+                closeImportModal();
+                showSkillStatus(data.message || '导入成功', 'success');
+                loadSkills();
+            } else {
+                RtPanel.showToast(data.message || '导入失败', 'error');
+            }
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    loadSkills();
+
+    // ==================== AI 记忆 ====================
+    function showMemoryStatus(message, type) {
+        const el = document.getElementById('memoryStatus');
+        el.className = 'alert mx-3 mt-3 mb-0 alert-' + type;
+        el.textContent = message;
+        el.style.display = '';
+    }
+
+    async function loadMemory() {
+        const list = document.getElementById('memoryList');
+        list.innerHTML = '<div class="text-muted p-3">加载中…</div>';
+        try {
+            const r = await fetch('/api/features/memory');
+            const data = await r.json();
+            if (!data.success) {
+                list.innerHTML = '<div class="text-muted p-3">' + esc(data.message || '获取失败') + '</div>';
+                showMemoryStatus(data.message || '获取失败', 'warning');
+                return;
+            }
+            applyMemorySettings(data.settings);
+            renderMemories(data.memories || []);
+        } catch {
+            list.innerHTML = '<div class="text-muted p-3">请求失败</div>';
+        }
+    }
+
+    function applyMemorySettings(s) {
+        if (!s) return;
+        document.getElementById('memEnabled').checked = !!s.enabled;
+        document.getElementById('memUseAi').checked = !!s.useAi;
+        document.getElementById('memMaxTokens').value = s.maxTokens;
+        document.getElementById('memMaxContentLength').value = s.maxContentLength;
+        document.getElementById('memMaxEntries').value = s.maxEntries;
+        document.getElementById('memCaptureServerInfo').checked = !!s.captureServerInfo;
+        document.getElementById('memCapturePlayerCount').checked = !!s.capturePlayerCount;
+        document.getElementById('memCaptureCommonErrors').checked = !!s.captureCommonErrors;
+        document.getElementById('memPrompt').value = s.prompt || '';
+    }
+
+    function renderMemories(memories) {
+        const list = document.getElementById('memoryList');
+        document.getElementById('memoryCount').textContent = memories.length ? ('共 ' + memories.length + ' 条') : '';
+        if (!memories.length) {
+            list.innerHTML = '<div class="text-muted p-3">暂无记忆。AI 自动化调用后会按设置自动生成。</div>';
+            return;
+        }
+        list.innerHTML = memories.map(m => `
+            <div class="memory-card">
+                <div class="memory-card-head">
+                    <span class="memory-topic">${esc(m.topic)}</span>
+                    <span class="memory-time">${esc(m.time)}</span>
+                </div>
+                <div class="memory-content">${esc(m.content)}</div>
+            </div>`).join('');
+    }
+
+    async function saveMemorySettings() {
+        const btn = document.getElementById('memSaveBtn');
+        btn.disabled = true;
+        try {
+            const r = await fetch('/api/features/memory/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: document.getElementById('memEnabled').checked,
+                    useAi: document.getElementById('memUseAi').checked,
+                    maxTokens: parseInt(document.getElementById('memMaxTokens').value) || 512,
+                    maxContentLength: parseInt(document.getElementById('memMaxContentLength').value) || 500,
+                    maxEntries: parseInt(document.getElementById('memMaxEntries').value) || 1000,
+                    captureServerInfo: document.getElementById('memCaptureServerInfo').checked,
+                    capturePlayerCount: document.getElementById('memCapturePlayerCount').checked,
+                    captureCommonErrors: document.getElementById('memCaptureCommonErrors').checked,
+                    prompt: document.getElementById('memPrompt').value
+                })
+            });
+            const data = await r.json();
+            RtPanel.showToast(data.message || (data.success ? '保存成功' : '保存失败'), data.success ? 'success' : 'error');
+            if (data.success) showMemoryStatus(data.message || '保存成功', 'success');
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // 从 AI 记忆生成「不重复」的错误识别表达式, 自动写入 regex_settings.yml 的 custom_base_entries
+    async function generateErrorPatterns() {
+        if (!await RtPanel.showConfirm('生成错误识别表达式',
+            '将读取 AI 记忆中的错误样本, 调用 AI 生成与现有表达式不重复的错误识别表达式, ' +
+            '并追加到 regex_settings.yml 的 custom_base_entries。' +
+            '该过程会调用 AI 接口, 可能耗时数十秒并产生 token 费用, 是否继续?')) return;
+
+        const btn = document.getElementById('memGenPatternBtn');
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '生成中…';
+        showMemoryStatus('正在调用 AI 生成, 请稍候…', 'info');
+
+        try {
+            const r = await fetch('/api/console/execute', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: '.fx genpattern' })
+            });
+            const data = await r.json();
+            const ok = !!data.success;
+            const text = data.result || data.message || (ok ? '已完成' : '生成失败');
+            RtPanel.showToast(ok ? '已生成错误识别表达式' : '生成失败', ok ? 'success' : 'error');
+            showMemoryStatus(text, ok ? 'success' : 'warning');
+        } catch (e) {
+            showMemoryStatus('生成失败: ' + e.message, 'warning');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = original;
+        }
+    }
+    async function clearMemories() {
+        if (!await RtPanel.showConfirm('清空记忆', '确定清空所有 AI 记忆吗？该操作不可撤销。')) return;
+        try {
+            const r = await fetch('/api/features/memory/clear', { method: 'POST' });
+            const data = await r.json();
+            RtPanel.showToast(data.message || (data.success ? '已清空' : '清空失败'), data.success ? 'success' : 'error');
+            if (data.success) { showMemoryStatus(data.message || '已清空', 'success'); loadMemory(); }
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        }
+    }
+    // ==================== AI 自动化 ====================
+    function fmtMB(bytes) {
+        const n = Number(bytes) || 0;
+        return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1024).toFixed(1) + ' KB';
+    }
+
+    function showAutomationStatus(message, type) {
+        const el = document.getElementById('automationStatus');
+        el.className = 'alert mx-3 mt-3 mb-0 alert-' + type;
+        el.textContent = message;
+        el.style.display = '';
+    }
+
+    async function loadAutomation() {
+        await Promise.all([loadAutoTasks(), loadAutoTools(), loadAutoResponses()]);
+    }
+
+    async function loadAutoTasks() {
+        const body = document.getElementById('autoTaskBody');
+        showFeatureHint('刷新中…', 'info', true);
+        try {
+            const r = await fetch('/api/features/ai/status');
+            const d = await r.json();
+            if (!d.success) {
+                body.innerHTML = `<tr><td colspan="8" class="text-warning">${esc(d.message || '获取失败')}</td></tr>`;
+                return;
+            }
+
+            const runner = document.getElementById('autoRunner');
+            runner.textContent = d.runnerRunning ? '自动化运行中' : '自动化已停止';
+            runner.className = 'badge ' + (d.runnerRunning ? 'bg-success' : 'bg-secondary');
+            document.getElementById('autoMemory').textContent =
+                `记忆 ${d.memoryCount} 条 / ${fmtMB(d.memoryBytes)}`;
+            document.getElementById('autoAudit').textContent = `工具调用 ${d.auditCount} 次`;
+            showFeatureHint('已刷新', 'success');
+
+            const tasks = d.tasks || [];
+            if (tasks.length === 0) {
+                body.innerHTML = '<tr><td colspan="8" class="text-muted">未配置 AI 任务</td></tr>';
+                return;
+            }
+
+            body.innerHTML = tasks.map(t => {
+                const state = !t.enabled
+                    ? '<span class="badge bg-secondary">已禁用</span>'
+                    : (t.running ? '<span class="badge bg-info">执行中</span>' : '<span class="badge bg-success">启用</span>');
+                return `<tr>
+                    <td><div class="fw-bold">${esc(t.name)}</div><div class="text-muted small">${esc(t.key)}</div></td>
+                    <td>${state}</td>
+                    <td><code class="small">${esc(t.trigger)}</code></td>
+                    <td><code class="small">${esc(t.interval)}</code></td>
+                    <td>${t.minTrigger > 0 ? t.minTrigger + ' 分' : '-'}</td>
+                    <td>${t.runCount}</td>
+                    <td>${t.lastRun ? esc(t.lastRun) : '-'}</td>
+                    <td class="small text-muted">${esc(t.actions || '')}</td>
+                </tr>`;
+            }).join('');
+        } catch (e) {
+            body.innerHTML = `<tr><td colspan="8" class="text-danger">加载失败: ${esc(e.message)}</td></tr>`;
+        }
+    }
+
+    async function loadAutoTools() {
+        const body = document.getElementById('autoToolBody');
+        try {
+            const r = await fetch('/api/features/ai/tools?limit=200');
+            const d = await r.json();
+            if (!d.success) {
+                body.innerHTML = `<tr><td colspan="5" class="text-warning">${esc(d.message || '获取失败')}</td></tr>`;
+                return;
+            }
+            document.getElementById('autoAuditPath').textContent = d.filePath ? ('审计文件: ' + d.filePath) : '';
+
+            const list = d.entries || [];
+            if (list.length === 0) {
+                body.innerHTML = '<tr><td colspan="5" class="text-muted">暂无工具调用记录</td></tr>';
+                return;
+            }
+            body.innerHTML = list.map(e => `<tr>
+                <td class="small text-nowrap">${esc(e.time)}</td>
+                <td class="small">${esc(e.task)}</td>
+                <td><span class="badge ${e.ok ? 'bg-info' : 'bg-danger'}">${esc(e.tool)}</span></td>
+                <td class="small text-muted" style="max-width:280px;overflow-wrap:anywhere;">${esc(e.args)}</td>
+                <td class="small" style="max-width:360px;overflow-wrap:anywhere;">${esc(e.result)}</td>
+            </tr>`).join('');
+        } catch (e) {
+            body.innerHTML = `<tr><td colspan="5" class="text-danger">加载失败: ${esc(e.message)}</td></tr>`;
+        }
+    }
+
+    async function loadAutoResponses() {
+        const box = document.getElementById('autoRespList');
+        try {
+            const r = await fetch('/api/features/ai/responses?limit=50');
+            const d = await r.json();
+            if (!d.success) { box.innerHTML = `<div class="text-warning small">${esc(d.message || '获取失败')}</div>`; return; }
+
+            document.getElementById('autoRespCount').textContent =
+                d.total ? `共 ${d.total} 条, 显示最近 ${(d.responses || []).length} 条` : '';
+
+            const list = d.responses || [];
+            if (list.length === 0) {
+                box.innerHTML = '<div class="text-muted small">暂无历史结论(ai_settings.yml 中 save_response 开启后才会保存)</div>';
+                return;
+            }
+            box.innerHTML = list.map(x => `<div class="border rounded p-2">
+                <div class="d-flex justify-content-between align-items-center gap-2">
+                    <span class="fw-bold small">${esc(x.taskName || x.taskKey)}</span>
+                    <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                        <span class="text-muted small">${esc(x.timestamp)}</span>
+                        <button class="btn btn-sm btn-outline-danger py-0 px-2 ai-resp-del"
+                                data-ts="${encodeURIComponent(x.timestamp || '')}"
+                                data-key="${encodeURIComponent(x.taskKey || '')}">删除</button>
+                    </div>
+                </div>
+                <div class="text-muted small mb-1">输入摘要: ${esc((x.inputSummary || '').slice(0, 160))}</div>
+                <div class="small" style="white-space:pre-wrap;overflow-wrap:anywhere;">${esc(x.aiResponse)}</div>
+            </div>`).join('');
+
+            box.querySelectorAll('.ai-resp-del').forEach(btn => {
+                btn.onclick = () => deleteAutoResponse(
+                    decodeURIComponent(btn.dataset.ts), decodeURIComponent(btn.dataset.key));
+            });
+        } catch (e) {
+            box.innerHTML = `<div class="text-danger small">加载失败: ${esc(e.message)}</div>`;
+        }
+    }
+
+    // 删除一条历史结论(同时作用于 ai_save.yml)
+    async function deleteAutoResponse(timestamp, taskKey) {
+        if (!await RtPanel.showConfirm('删除历史结论', '确定删除这条历史结论？删除后不可恢复。')) return;
+        try {
+            const r = await fetch('/api/features/ai/responses/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ timestamp: timestamp || '', taskKey: taskKey || '' })
+            }).then(x => x.json());
+            if (!r.success) {
+                alert(r.message || '删除失败');
+                return;
+            }
+            loadAutoResponses();
+        } catch (e) {
+            alert('删除失败: ' + e);
+        }
+    }
+
+    // ==================== 标题旁状态提示(旋转指示 + 小方框, 自动消失) ====================
+    var featureHintTimer = null;
+    var featureHintDesc = null;   // 被状态提示临时顶替的"功能介绍"文字
+
+    function activeFeatureView() {
+        var active = null;
+        document.querySelectorAll('.feature-view').forEach(function (v) {
+            if (v.offsetParent !== null) active = v;
+        });
+        return active;
+    }
+
+    // 功能说明文字临时让位: 状态提示期间隐藏, 状态消失后恢复
+    function hideFeatureDesc() {
+        if (featureHintDesc) return;
+        var active = activeFeatureView();
+        if (!active) return;
+        var wrap = active.querySelector('.feature-title-wrap');
+        var desc = wrap ? wrap.querySelector('small') : null;
+        if (desc && !desc.hidden) { desc.hidden = true; featureHintDesc = desc; }
+    }
+
+    function restoreFeatureDesc() {
+        if (!featureHintDesc) return;
+        featureHintDesc.hidden = false;
+        featureHintDesc = null;
+    }
+
+    function ensureFeatureHint() {
+        var active = activeFeatureView();
+        if (!active) return null;
+        var wrap = active.querySelector('.feature-title-wrap');
+        if (!wrap) return null;
+        var el = wrap.querySelector('.feature-hint');
+        if (!el) {
+            el = document.createElement('span');
+            el.className = 'feature-hint';
+            el.innerHTML = '<span class="feature-spinner" hidden></span><span class="feature-hint-text"></span>';
+            wrap.appendChild(el);
+        }
+        return el;
+    }
+
+    // kind: info/success/warning/danger; spinning=true 时显示旋转指示且不自动消失
+    function showFeatureHint(text, kind, spinning, autoHideMs) {
+        var el = ensureFeatureHint();
+        if (!el) return;
+        var spin = el.querySelector('.feature-spinner');
+        var txt = el.querySelector('.feature-hint-text');
+        el.className = 'feature-hint feature-hint-' + (kind || 'info');
+        el.hidden = false;
+        spin.hidden = !spinning;
+        txt.textContent = text || '';
+        // 状态提示顶替功能介绍的位置, 避免两者挤在一行
+        hideFeatureDesc();
+        if (featureHintTimer) { clearTimeout(featureHintTimer); featureHintTimer = null; }
+        if (!spinning && text) {
+            var ms = autoHideMs || 1200;
+            featureHintTimer = setTimeout(function () {
+                el.hidden = true;
+                restoreFeatureDesc();
+                featureHintTimer = null;
+            }, ms);
+        }
+    }
+
+    function hideFeatureHint() {
+        var el = ensureFeatureHint();
+        if (el) el.hidden = true;
+        restoreFeatureDesc();
+        if (featureHintTimer) { clearTimeout(featureHintTimer); featureHintTimer = null; }
+    }
+
+    // ==================== AI 自动化规则 ====================
+    var ruleItems = [];
+
+    function showRuleStatus(message, type) {
+        // 统一改为标题右侧的小提示(旋转指示/提示框), 自动消失
+        showFeatureHint(message, type);
+    }
+
+    async function loadRules() {
+        const box = document.getElementById('ruleList');
+        showFeatureHint('刷新中…', 'info', true);
+        try {
+            const r = await fetch('/api/features/ai/rules');
+            const d = await r.json();
+            if (!d.success) { box.innerHTML = '<div class="text-warning small">' + esc(d.message || '获取失败') + '</div>'; return; }
+            ruleItems = (d.rules || []).slice();
+            renderRules();
+            document.getElementById('rulePrompt').textContent = d.systemPrompt || '(空)';
+            showFeatureHint('已刷新', 'success');
+            const badge = document.getElementById('ruleRunner');
+            badge.textContent = d.runnerRunning ? 'AI 自动化运行中' : 'AI 自动化已停止';
+            badge.className = 'badge ' + (d.runnerRunning ? 'bg-success' : 'bg-secondary');
+        } catch (e) {
+            box.innerHTML = '<div class="text-danger small">加载失败: ' + esc(e.message) + '</div>';
+        }
+    }
+
+    function renderRules() {
+        const box = document.getElementById('ruleList');
+        document.getElementById('ruleCount').textContent = ruleItems.length ? ('共 ' + ruleItems.length + ' 条') : '';
+        if (ruleItems.length === 0) {
+            box.innerHTML = '<div class="text-muted small p-2">暂无规则, 点「+ 新增规则」添加</div>';
+            return;
+        }
+        box.innerHTML = ruleItems.map(function (t, i) {
+            return '<div class="rule-item">' +
+                '<span class="rule-index">' + (i + 1) + '</span>' +
+                '<textarea data-idx="' + i + '" oninput="ruleItems[' + i + '] = this.value" placeholder="例如: 禁止向服务器发送 /op 命令">' + esc(t) + '</textarea>' +
+                '<div class="rule-ops">' +
+                    '<button class="btn btn-sm btn-outline-secondary" onclick="moveRule(' + i + ',-1)" ' + (i === 0 ? 'disabled' : '') + ' title="上移">↑</button>' +
+                    '<button class="btn btn-sm btn-outline-secondary" onclick="moveRule(' + i + ',1)" ' + (i === ruleItems.length - 1 ? 'disabled' : '') + ' title="下移">↓</button>' +
+                    '<button class="btn btn-sm btn-outline-danger rule-del" onclick="removeRule(' + i + ')" title="删除该规则">✕</button>' +
+                '</div></div>';
+        }).join('');
+    }
+
+    function addRule() {
+        ruleItems.push('');
+        renderRules();
+        const list = document.querySelectorAll('#ruleList textarea');
+        if (list.length) list[list.length - 1].focus();
+    }
+
+    function removeRule(i) {
+        ruleItems.splice(i, 1);
+        renderRules();
+    }
+
+    function moveRule(i, delta) {
+        const j = i + delta;
+        if (j < 0 || j >= ruleItems.length) return;
+        const t = ruleItems[i]; ruleItems[i] = ruleItems[j]; ruleItems[j] = t;
+        renderRules();
+    }
+
+    async function saveRules() {
+        const btn = document.getElementById('ruleSaveBtn');
+        btn.disabled = true;
+        try {
+            const rules = ruleItems.map(function (s) { return (s || '').trim(); }).filter(function (s) { return s.length > 0; });
+            const r = await fetch('/api/features/ai/rules', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rules: rules })
+            });
+            const d = await r.json();
+            RtPanel.showToast(d.message || (d.success ? '已保存' : '保存失败'), d.success ? 'success' : 'error');
+            showRuleStatus(d.message || (d.success ? '已保存' : '保存失败'), d.success ? 'success' : 'warning');
+            if (d.success) { ruleItems = rules; renderRules(); }
+        } catch (e) {
+            showRuleStatus('保存失败: ' + e.message, 'warning');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // ==================== AI 工作流 ====================
+    var wfTasks = [];
+    var wfAvailableTools = [];
+    var wfEditingKey = '';
+
+    var WF_INPUTS = [
+        ['server_logs', '服务端日志'],
+        ['app_logs', '应用日志'],
+        ['server_tps', '服务器 TPS'],
+        ['server_plugin', '插件列表'],
+        ['host_cpu', '主机 CPU'],
+        ['host_memory', '主机内存'],
+        ['server_players', '玩家信息'],
+        ['server_status', '服务器状态'],
+        ['crash_report', '崩溃报告']
+    ];
+
+    function showWorkflowStatus(message, type) {
+        // 标题右侧的小提示, 自动消失
+        showFeatureHint(message, type);
+    }
+
+    async function loadWorkflow() {
+        var list = document.getElementById('wfTaskList');
+        list.innerHTML = '<div class="text-muted p-3">加载中…</div>';
+        showFeatureHint('刷新中…', 'info', true);
+        try {
+            var r = await fetch('/api/features/ai/workflow');
+            var d = await r.json();
+            if (!d.success) {
+                list.innerHTML = '<div class="text-warning small p-3">' + esc(d.message || '获取失败') + '</div>';
+                showWorkflowStatus(d.message || '获取失败', 'warning');
+                return;
+            }
+            wfTasks = d.tasks || [];
+            wfAvailableTools = d.availableTools || [];
+            applyWorkflowRuntime(d.runtime);
+
+            var runner = document.getElementById('wfRunner');
+            runner.className = 'badge ' + (d.runnerRunning ? 'bg-success' : 'bg-secondary');
+            runner.textContent = d.runnerRunning ? 'AI 自动化运行中' : 'AI 自动化未运行';
+            document.getElementById('wfFilePath').textContent = d.filePath || '';
+
+            renderTriggerOptions(d.defaultTriggers || [], d.availableEvents || []);
+            renderTriggerHelp(d.defaultTriggers || [], d.availableEvents || []);
+            renderWorkflowTasks();
+            showWorkflowStatus('已加载 ' + wfTasks.length + ' 个任务', 'success');
+        } catch (e) {
+            list.innerHTML = '<div class="text-muted p-3">请求失败</div>';
+            showWorkflowStatus('请求失败: ' + e.message, 'warning');
+        }
+    }
+
+    function applyWorkflowRuntime(rt) {
+        if (!rt) return;
+        document.getElementById('wfModel').value = rt.model || '';
+        document.getElementById('wfApiEndpoint').value = rt.apiEndpoint || '';
+        var keyInput = document.getElementById('wfApiKey');
+        keyInput.value = '';
+        keyInput.placeholder = rt.apiKeySet
+            ? ('已配置: ' + (rt.apiKeyMasked || '') + '（留空不修改）')
+            : '留空不修改';
+        document.getElementById('wfMaxTokens').value = rt.maxTokens;
+        document.getElementById('wfTemperature').value = rt.temperature;
+        document.getElementById('wfTimeout').value = rt.requestTimeoutSeconds;
+        document.getElementById('wfRetryCount').value = rt.retryCount;
+        document.getElementById('wfContextCacheSize').value = rt.contextCacheSize;
+        document.getElementById('wfMaxToolRounds').value = rt.maxToolRounds;
+        document.getElementById('wfRetryOnError').checked = !!rt.retryOnError;
+        document.getElementById('wfSaveResponse').checked = !!rt.saveResponse;
+        document.getElementById('wfPrompt').value = rt.prompt || '';
+    }
+
+    // 触发条件候选: 后端示例模板 + 运行时变量片段 + 全部事件名(event: 前缀);
+    // 先内置一份兜底列表, 避免在任务数据尚未加载完成时打开弹窗出现空列表
+    var wfTriggerItems = ['always', 'server_running', 'server_stopped', 'crash_detected',
+        '{rt.tps} < 18', '{rt.cpu} > 85', '{rt.memory} > 80', '{rt.players} == 0', '{rt.idle_minutes} > 360',
+        'event: PlayerJoinEvent', 'event: PlayerJoinEvent and {rt.player_name} == "Steve"']
+        .map(function (t) { return { value: t, desc: '示例' }; });
+
+    var WF_TRIGGER_VARS = ['{rt.tps}', '{rt.cpu}', '{rt.memory}', '{rt.players}', '{rt.idle_minutes}',
+        '{rt.uptime_minutes}', '{rt.server_running}', '{rt.server_key}', '{rt.server_name}', '{rt.mode}'];
+
+    function renderTriggerOptions(triggers, events) {
+        var items = (triggers && triggers.length ? triggers : []).map(function (t) { return { value: t, desc: '示例' }; });
+        WF_TRIGGER_VARS.forEach(function (v) { items.push({ value: v, desc: '运行时变量' }); });
+        (events || []).forEach(function (e) { items.push({ value: 'event: ' + e, desc: '事件' }); });
+        if (items.length) wfTriggerItems = items;
+    }
+
+    function renderTriggerHelp(triggers, events) {
+        var hint = '语法: 条件 (and|or 条件)* ; 可用 <code class="wf-tag">{rt.变量}</code> 比较、'
+            + '<code class="wf-tag">event: 事件名</code> 订阅事件, 运算符 == != &gt; &gt;= &lt; &lt;= contains startsWith endsWith';
+        var tpl = (triggers || []).map(function (t) { return '<code class="wf-tag">' + esc(t) + '</code>'; }).join('');
+        var evCount = (events || []).length;
+        document.getElementById('wfTriggerHelp').innerHTML = hint
+            + (tpl ? '<div class="mt-1">示例: ' + tpl + '</div>' : '')
+            + (evCount ? '<div class="mt-1">可选事件(' + evCount + '个): 可在下拉中选择 event: 事件名</div>' : '');
+    }
+
+    // ===== 触发条件 / Cron 自定义下拉(MC 方块风格, 复用 .jar-select/.jar-dropdown) =====
+    var WF_INTERVAL_ITEMS = [
+        { value: '0 0 0/1 * * ?', desc: '每小时' },
+        { value: '0 0/30 * * * ?', desc: '每 30 分钟' },
+        { value: '0 0 0 * * ?', desc: '每天 0 点' },
+        { value: '0 0 12 * * ?', desc: '每天 12 点' },
+        { value: '0 0 0 * * MON', desc: '每周一 0 点' },
+        { value: '0 0 0 1 * ?', desc: '每月 1 日 0 点' }
+    ];
+
+    function wfRenderDropdown(dd, items, filter, inputId) {
+        var kw = (filter || '').toLowerCase();
+        var list = (items || []).filter(function (it) { return it.value.toLowerCase().indexOf(kw) >= 0; });
+        if (!list.length) {
+            dd.innerHTML = '<div class="jar-dropdown-empty">无匹配项，可直接手动输入</div>';
+            return;
+        }
+        dd.innerHTML = list.map(function (it) {
+            var cls = it.desc ? 'jar-dropdown-item wf-dd-item' : 'jar-dropdown-item';
+            var body = it.desc
+                ? '<span>' + esc(it.value) + '</span><span class="wf-dd-desc">' + esc(it.desc) + '</span>'
+                : esc(it.value);
+            return '<div class="' + cls + '" data-value="' + esc(it.value) + '">' + body + '</div>';
+        }).join('');
+        dd.querySelectorAll('.jar-dropdown-item').forEach(function (el) {
+            // 用 mousedown 在输入框 blur 之前完成选择
+            el.addEventListener('mousedown', function (ev) {
+                ev.preventDefault();
+                document.getElementById(inputId).value = el.dataset.value;
+                dd.hidden = true;
+            });
+        });
+    }
+
+    function wfShowDropdown(ddId, inputId, items) {
+        var dd = document.getElementById(ddId);
+        if (!dd) return;
+        wfRenderDropdown(dd, items, document.getElementById(inputId).value.trim(), inputId);
+        dd.hidden = false;
+    }
+
+    function wfFilterDropdown(ddId, inputId, items) {
+        var dd = document.getElementById(ddId);
+        if (!dd || dd.hidden) return;
+        wfRenderDropdown(dd, items, document.getElementById(inputId).value.trim(), inputId);
+    }
+
+    function showTriggerDropdown() { wfShowDropdown('taskTriggerDropdown', 'taskTrigger', wfTriggerItems); }
+    function filterTriggerDropdown() { wfFilterDropdown('taskTriggerDropdown', 'taskTrigger', wfTriggerItems); }
+    function showIntervalDropdown() { wfShowDropdown('taskIntervalDropdown', 'taskInterval', WF_INTERVAL_ITEMS); }
+    function filterIntervalDropdown() { wfFilterDropdown('taskIntervalDropdown', 'taskInterval', WF_INTERVAL_ITEMS); }
+
+    // 点击下拉框之外区域时收起
+    document.addEventListener('click', function (e) {
+        ['taskTriggerDropdown', 'taskIntervalDropdown'].forEach(function (id) {
+            var dd = document.getElementById(id);
+            if (!dd || dd.hidden) return;
+            var box = dd.closest('.jar-select');
+            if (!box || !box.contains(e.target)) dd.hidden = true;
+        });
+    });
+
+    // actions 形如 ["ai", "tools:restart_server,toggle_plugin"]
+    function splitActions(actions) {
+        var ai = false, tools = [];
+        (actions || []).forEach(function (a) {
+            if (a === 'ai') ai = true;
+            else if (a && a.indexOf('tools:') === 0) {
+                a.substring(6).split(',').forEach(function (x) {
+                    var v = x.trim();
+                    if (v) tools.push(v);
+                });
+            }
+        });
+        return { ai: ai, tools: tools };
+    }
+
+    function renderWorkflowTasks() {
+        var list = document.getElementById('wfTaskList');
+        document.getElementById('wfTaskCount').textContent = wfTasks.length ? ('共 ' + wfTasks.length + ' 个') : '';
+        if (!wfTasks.length) {
+            list.innerHTML = '<div class="text-muted p-3">暂无任务，点击右上角「+ 新建任务」添加。</div>';
+            return;
+        }
+        list.innerHTML = wfTasks.map(function (t) {
+            var act = splitActions(t.actions);
+            var actionText = [];
+            if (act.ai) actionText.push('ai');
+            if (act.tools.length) actionText.push('tools: ' + act.tools.join(', '));
+            return '<div class="wf-task-card">' +
+                '<div class="wf-task-main">' +
+                    '<div class="wf-task-title">' +
+                        '<span class="badge ' + (t.enabled ? 'bg-success' : 'bg-secondary') + '">' + (t.enabled ? '启用' : '停用') + '</span>' +
+                        '<strong>' + esc(t.name || t.key) + '</strong>' +
+                        '<code class="wf-key">' + esc(t.key) + '</code>' +
+                    '</div>' +
+                    '<div class="wf-task-meta">' +
+                        '<span>触发: <code>' + esc(t.trigger) + '</code></span>' +
+                        '<span>Cron: <code>' + esc(t.interval) + '</code></span>' +
+                        '<span>最小间隔: ' + t.minTriggerIntervalMinutes + ' 分钟</span>' +
+                        '<span>最大 token: ' + t.limit + '</span>' +
+                    '</div>' +
+                    '<div class="wf-task-meta">' +
+                        '<span>数据源: ' + (t.input || []).map(function (i) { return '<code>' + esc(i) + '</code>'; }).join(' ') + '</span>' +
+                        '<span>动作: ' + (actionText.length ? esc(actionText.join('; ')) : '<span class="text-muted">无</span>') + '</span>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="wf-task-actions">' +
+                    '<button class="btn btn-sm btn-outline-secondary" data-action="toggle" data-key="' + esc(t.key) + '">' + (t.enabled ? '停用' : '启用') + '</button>' +
+                    '<button class="btn btn-sm btn-outline-info" data-action="edit" data-key="' + esc(t.key) + '">编辑</button>' +
+                    '<button class="btn btn-sm btn-outline-danger" data-action="delete" data-key="' + esc(t.key) + '">删除</button>' +
+                '</div>' +
+            '</div>';
+        }).join('');
+
+        // 事件委托: 通过 data-key 读取原始键名, 避免拼进 onclick 造成转义问题
+        list.querySelectorAll('button[data-action]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var key = btn.getAttribute('data-key');
+                var action = btn.getAttribute('data-action');
+                if (action === 'edit') openTaskModal(key);
+                else if (action === 'delete') deleteWorkflowTask(key);
+                else toggleWorkflowTask(key);
+            });
+        });
+    }
+
+    // === 新建 / 编辑任务 ===
+    function openTaskModal(key) {
+        wfEditingKey = key || '';
+        var task = key ? wfTasks.filter(function (t) { return t.key === key; })[0] : null;
+        var act = splitActions(task ? task.actions : []);
+
+        document.getElementById('taskModalTitle').textContent = task ? '编辑任务' : '新建任务';
+        var keyInput = document.getElementById('taskKey');
+        keyInput.value = task ? task.key : '';
+        keyInput.readOnly = !!task;
+        document.getElementById('taskName').value = task ? (task.name || '') : '';
+        document.getElementById('taskEnabled').checked = task ? !!task.enabled : true;
+        document.getElementById('taskTrigger').value = task ? (task.trigger || '') : 'always';
+        document.getElementById('taskInterval').value = task ? (task.interval || '') : '0 0 0/1 * * ?';
+        document.getElementById('taskMinInterval').value = task ? task.minTriggerIntervalMinutes : 30;
+        document.getElementById('taskServerKeys').value = task && task.serverKeys ? task.serverKeys.join(',') : '';
+        document.getElementById('taskLimit').value = task ? task.limit : 4000;
+        document.getElementById('taskSimThreshold').value = task ? task.errorSimilarityThreshold : 0;
+        document.getElementById('taskErrCache').value = task ? task.errorCacheMinutes : 0;
+        document.getElementById('taskPrompt').value = task ? (task.prompt || '') : '';
+        document.getElementById('taskActionAi').checked = task ? act.ai : true;
+
+        renderTaskInputBox(task ? (task.input || []) : ['server_logs']);
+        renderTaskToolsBox(act.tools);
+
+        document.getElementById('taskModal').style.display = 'flex';
+        if (!task) keyInput.focus();
+    }
+
+    function closeTaskModal() {
+        document.getElementById('taskModal').style.display = 'none';
+    }
+
+    function renderTaskInputBox(selected) {
+        document.getElementById('taskInputBox').innerHTML = WF_INPUTS.map(function (p) {
+            var on = (selected || []).indexOf(p[0]) >= 0 ? ' checked' : '';
+            return '<label class="wf-check wf-check-sm"><input type="checkbox" class="wf-input-chk" value="' + p[0] + '"' + on + ' />' +
+                '<span>' + esc(p[1]) + ' <code>' + p[0] + '</code></span></label>';
+        }).join('');
+    }
+
+    function renderTaskToolsBox(selected) {
+        var box = document.getElementById('taskToolsBox');
+        if (!wfAvailableTools.length) {
+            box.innerHTML = '<div class="text-muted small">暂无可选工具</div>';
+            return;
+        }
+        box.innerHTML = wfAvailableTools.map(function (t) {
+            var on = (selected || []).indexOf(t) >= 0 ? ' checked' : '';
+            return '<label class="wf-check wf-check-sm"><input type="checkbox" class="wf-tool-chk" value="' + esc(t) + '"' + on + ' />' +
+                '<span><code>' + esc(t) + '</code></span></label>';
+        }).join('');
+    }
+
+    function collectTaskPayload() {
+        var inputs = [];
+        document.querySelectorAll('.wf-input-chk').forEach(function (c) { if (c.checked) inputs.push(c.value); });
+        var tools = [];
+        document.querySelectorAll('.wf-tool-chk').forEach(function (c) { if (c.checked) tools.push(c.value); });
+        var actions = [];
+        if (document.getElementById('taskActionAi').checked) actions.push('ai');
+        if (tools.length) actions.push('tools:' + tools.join(','));
+
+        return {
+            key: document.getElementById('taskKey').value.trim().toLowerCase(),
+            originalKey: wfEditingKey,
+            enabled: document.getElementById('taskEnabled').checked,
+            name: document.getElementById('taskName').value.trim(),
+            trigger: document.getElementById('taskTrigger').value.trim(),
+            input: inputs,
+            actions: actions,
+            interval: document.getElementById('taskInterval').value.trim(),
+            limit: parseInt(document.getElementById('taskLimit').value) || 0,
+            prompt: document.getElementById('taskPrompt').value,
+            minTriggerIntervalMinutes: parseInt(document.getElementById('taskMinInterval').value) || 0,
+            serverKeys: document.getElementById('taskServerKeys').value.split(',').map(function (s) { return s.trim(); }).filter(Boolean),
+            errorSimilarityThreshold: parseInt(document.getElementById('taskSimThreshold').value) || 0,
+            errorCacheMinutes: parseInt(document.getElementById('taskErrCache').value) || 0
+        };
+    }
+
+    function validateTaskPayload(p) {
+        if (!p.key) return '任务标识不能为空';
+        if (!/^[a-z0-9_]+$/.test(p.key)) return '任务标识只能包含小写字母、数字与下划线';
+        if (!p.name) return '任务名称不能为空';
+        if (!p.trigger) return '触发条件不能为空';
+        if (p.interval.split(/\s+/).length !== 6) return 'Cron 表达式必须为 6 段（秒 分 时 日 月 周）';
+        if (!p.input.length) return '至少选择一个数据源';
+        return '';
+    }
+
+    async function saveWorkflowTask() {
+        var payload = collectTaskPayload();
+        var err = validateTaskPayload(payload);
+        if (err) { RtPanel.showToast(err, 'warning'); return; }
+
+        var btn = document.getElementById('taskSaveBtn');
+        btn.disabled = true;
+        try {
+            var r = await fetch('/api/features/ai/workflow/task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            var d = await r.json();
+            if (d.success) {
+                RtPanel.showToast(d.message || '保存成功', 'success');
+                closeTaskModal();
+                showWorkflowStatus(d.message || '保存成功', 'success');
+                loadWorkflow();
+            } else {
+                RtPanel.showToast(d.message || '保存失败', 'error');
+            }
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async function toggleWorkflowTask(key) {
+        var task = wfTasks.filter(function (t) { return t.key === key; })[0];
+        if (!task) return;
+        var payload = {
+            key: task.key, originalKey: task.key, enabled: !task.enabled, name: task.name,
+            trigger: task.trigger, input: task.input, actions: task.actions, interval: task.interval,
+            limit: task.limit, prompt: task.prompt,
+            minTriggerIntervalMinutes: task.minTriggerIntervalMinutes,
+            errorSimilarityThreshold: task.errorSimilarityThreshold,
+            errorCacheMinutes: task.errorCacheMinutes
+        };
+        try {
+            var r = await fetch('/api/features/ai/workflow/task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            var d = await r.json();
+            RtPanel.showToast(d.message || (d.success ? '已保存' : '保存失败'), d.success ? 'success' : 'error');
+            if (d.success) loadWorkflow();
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        }
+    }
+
+    async function deleteWorkflowTask(key) {
+        if (!await RtPanel.showConfirm('删除任务', '确定删除任务 "' + key + '" 吗？会写入 ai_settings.yml。')) return;
+        try {
+            var r = await fetch('/api/features/ai/workflow/task/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: key })
+            });
+            var d = await r.json();
+            RtPanel.showToast(d.message || (d.success ? '已删除' : '删除失败'), d.success ? 'success' : 'error');
+            if (d.success) { showWorkflowStatus(d.message || '已删除', 'success'); loadWorkflow(); }
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        }
+    }
+
+    async function saveWorkflowRuntime() {
+        var btn = document.getElementById('wfRuntimeSaveBtn');
+        btn.disabled = true;
+        try {
+            var r = await fetch('/api/features/ai/workflow/runtime', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    prompt: document.getElementById('wfPrompt').value,
+                    maxTokens: parseInt(document.getElementById('wfMaxTokens').value) || 0,
+                    apiEndpoint: document.getElementById('wfApiEndpoint').value.trim(),
+                    apiKey: document.getElementById('wfApiKey').value.trim(),
+                    model: document.getElementById('wfModel').value.trim(),
+                    temperature: parseFloat(document.getElementById('wfTemperature').value) || 0,
+                    requestTimeoutSeconds: parseInt(document.getElementById('wfTimeout').value) || 0,
+                    retryOnError: document.getElementById('wfRetryOnError').checked,
+                    retryCount: parseInt(document.getElementById('wfRetryCount').value) || 0,
+                    saveResponse: document.getElementById('wfSaveResponse').checked,
+                    contextCacheSize: parseInt(document.getElementById('wfContextCacheSize').value) || 0,
+                    maxToolRounds: parseInt(document.getElementById('wfMaxToolRounds').value) || 0
+                })
+            });
+            var d = await r.json();
+            RtPanel.showToast(d.message || (d.success ? '保存成功' : '保存失败'), d.success ? 'success' : 'error');
+            if (d.success) { showWorkflowStatus(d.message || '运行参数已保存', 'success'); loadWorkflow(); }
+        } catch {
+            RtPanel.showToast('请求失败', 'error');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // ==================== 调度器蓝图编辑器 ====================
+    var BP = (function () {
+        var META = {
+            trigger:   { label: '触发', icon: '⚡', ph: 'every: 30 / cron: "0 */5 * * * *" / event: ServerStartEvent' },
+            condition: { label: '条件', icon: '◆', ph: '可空; 例 {rt.server_running} == "true"' },
+            execute:   { label: '执行', icon: '▶', ph: 'script:名称 / backup / restart / command:/say hi' }
+        };
+        var PRESETS = {
+            trigger: ['cron: "0 */5 * * * *"', 'every: 30', 'daily: "08:00"', 'date: "2026-07-01 10:00"', 'event: ServerStartEvent'],
+            condition: ['{rt.server_running} == "true"', 'check file "logs/latest.log" true'],
+            execute: ['script:', 'backup', 'restart', 'command:/say hello']
+        };
+        // 条件节点快捷插入: 运行时变量 + 常用函数
+        var COND_CHIPS = [
+            '{rt.tps} < 18', '{rt.server_running} == "true"', '{rt.players} > 0', '{rt.cpu} > 80',
+            'check file "logs/latest.log" true', 'check script 脚本名 == "true"'
+        ];
+        var GAP_X = 330, GAP_Y = 172, PAD_X = 40, PAD_Y = 40;
+        var LS_KEY = 'rt.blueprint.layout.v1';
+        var KINDS = ['trigger', 'condition', 'execute'];
+
+        var tasks = [], layout = {}, pan = { x: 0, y: 0 }, zoom = 1, sel = null;
+        // 可选数据源(由 GetSchedulerTasks 提供): 让用户从下拉里选脚本/事件/实例
+        var avail = { scripts: [], events: [], servers: [] };
+        var drag = null, panning = null, bound = false;
+
+        // 状态提示统一走标题旁的小框(不再用页内大 alert, 避免遮挡/错位)
+        function status(msg, type) { showFeatureHint(msg, type); }
+        function statusSpinning(msg) { showFeatureHint(msg, 'info', true); }
+        function hideStatus() { hideFeatureHint(); }
+        function loadLayout() { try { layout = JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {}; } catch (e) { layout = {}; } }
+        function saveLayout() { try { localStorage.setItem(LS_KEY, JSON.stringify(layout)); } catch (e) { } }
+
+        function posOf(key, kind, step, idx) {
+            if (!layout[key]) layout[key] = {};
+            var id = kind === 'execute' ? 'execute:' + step : kind;
+            if (!layout[key][id]) {
+                // 兼容旧版单执行节点布局(execute 键)
+                if (kind === 'execute' && step === 0 && layout[key]['execute']) {
+                    layout[key][id] = layout[key]['execute'];
+                } else {
+                    layout[key][id] = {
+                        x: PAD_X + (kind === 'trigger' ? 0 : (kind === 'condition' ? GAP_X : GAP_X * (2 + step))),
+                        y: PAD_Y + idx * GAP_Y
+                    };
+                }
+            }
+            return layout[key][id];
+        }
+
+        function applyTransform() {
+            document.getElementById('bpCanvas').style.transform =
+                'translate(' + pan.x + 'px,' + pan.y + 'px) scale(' + zoom + ')';
+            var lbl = document.getElementById('bpZoomLabel');
+            if (lbl) lbl.textContent = Math.round(zoom * 100) + '%';
+        }
+
+        function zoomBy(factor) {
+            var outer = document.getElementById('bpOuter');
+            var rect = outer.getBoundingClientRect();
+            var mx = rect.width / 2, my = rect.height / 2;
+            var old = zoom;
+            zoom = Math.min(1.8, Math.max(0.35, zoom * factor));
+            pan.x = mx - (mx - pan.x) * (zoom / old);
+            pan.y = my - (my - pan.y) * (zoom / old);
+            applyTransform();
+        }
+
+        function resetView() { pan = { x: 0, y: 0 }; zoom = 1; applyTransform(); }
+
+        function linkPath(a, b) {
+            var ax = a.offsetLeft + a.offsetWidth, ay = a.offsetTop + a.offsetHeight / 2;
+            var bx = b.offsetLeft, by = b.offsetTop + b.offsetHeight / 2;
+            var dx = Math.max(40, Math.abs(bx - ax) * 0.5);
+            return '<path d="M' + ax + ',' + ay + ' C' + (ax + dx) + ',' + ay + ' ' + (bx - dx) + ',' + by + ' ' + bx + ',' + by +
+                   '" fill="none" stroke="var(--border-hover)" stroke-width="2"/>';
+        }
+
+        function nodeId(key, kind, step) { return key + ':' + kind + ':' + step; }
+
+        function renderEdges() {
+            var svg = document.getElementById('bpEdges');
+            var map = {};
+            document.querySelectorAll('#bpNodes .bp-node').forEach(function (n) {
+                map[nodeId(n.getAttribute('data-key'), n.getAttribute('data-kind'), n.getAttribute('data-step'))] = n;
+            });
+            var out = '';
+            tasks.forEach(function (t) {
+                var count = Math.max(1, stepsOf(t).length);
+                var prev = map[nodeId(t.key, 'trigger', -1)];
+                var cond = map[nodeId(t.key, 'condition', -1)];
+                if (prev && cond) out += linkPath(prev, cond);
+                if (cond) prev = cond;
+                for (var i = 0; i < count; i++) {
+                    var ex = map[nodeId(t.key, 'execute', i)];
+                    if (prev && ex) out += linkPath(prev, ex);
+                    if (ex) prev = ex;
+                }
+            });
+            svg.innerHTML = out;
+        }
+
+        // 一个流程 = 触发 + 条件 + N 个执行步骤节点(执行步骤在画布上横向串联)
+        function nodesFor(t) {
+            var steps = stepsOf(t);
+            if (!steps.length) steps = [''];
+            var list = [
+                { kind: 'trigger', step: -1, value: t.trigger || '' },
+                { kind: 'condition', step: -1, value: t.condition || '' }
+            ];
+            steps.forEach(function (s, i) { list.push({ kind: 'execute', step: i, value: s }); });
+            return list;
+        }
+
+        function isSelected(key, kind, step) {
+            if (!sel || sel.key !== key || sel.kind !== kind) return false;
+            return kind !== 'execute' || sel.step === step;
+        }
+
+        function render() {
+            applyTransform();
+            var host = document.getElementById('bpNodes');
+            var html = '';
+            tasks.forEach(function (t, idx) {
+                nodesFor(t).forEach(function (n) {
+                    var p = posOf(t.key, n.kind, n.step, idx);
+                    var m = META[n.kind];
+                    var label = m.label + (n.kind === 'execute' && n.step > 0 ? ' #' + (n.step + 1) : '');
+                    html += '<div class="bp-node ' + n.kind + (isSelected(t.key, n.kind, n.step) ? ' selected' : '') + (t.enabled ? '' : ' disabled') + '"' +
+                        ' data-key="' + esc(t.key) + '" data-kind="' + n.kind + '" data-step="' + n.step + '"' +
+                        ' style="left:' + p.x + 'px;top:' + p.y + 'px">' +
+                        '<div class="bp-node-head"><span>' + m.icon + '</span><span>' + label + '</span></div>' +
+                        '<div class="bp-node-body">' + (n.value ? esc(n.value) : '<span style="opacity:.5">' + esc(m.ph) + '</span>') + '</div>' +
+                        '<div class="bp-node-foot"><span>' + esc(t.key) + '</span><span class="bp-state">' + (t.enabled ? '' : '已禁用') + '</span></div>' +
+                        '<div class="bp-port in"></div><div class="bp-port out"></div>' +
+                    '</div>';
+                });
+            });
+            host.innerHTML = html || '<div class="bp-empty">暂无流程, 点右上角「+ 新建流程」开始</div>';
+            renderEdges();
+        }
+
+        // ---- 触发/执行的"结构化 <-> 字符串"互转(让用户从下拉选, 而不是手拼字符串) ----
+        var TRIG_LABEL = { every: '按间隔(分钟)', cron: 'Cron 表达式', daily: '每天定时', date: '指定日期时间', event: '事件触发', raw: '自定义(可 and/or)' };
+        var EXEC_LABEL = {
+            script: '执行脚本', command: '发送命令', cli: '执行面板命令',
+            backup: '备份服务端', restart: '重启服务端',
+            server_stop: '关闭服务端', server_restart: '关闭后重启(可填分钟)',
+            check_online: '检查在线玩家', check_tps: '检查 TPS', check_memory: '检查内存', clear_drops: '清理掉落物',
+            raw: '自定义'
+        };
+        // 无参数的执行方式(后端按字面量识别)
+        var EXEC_BARE = ['backup', 'restart', 'server_stop', 'check_online', 'check_tps', 'check_memory', 'clear_drops'];
+
+        function parseTrigger(s) {
+            s = (s || '').trim();
+            var m;
+            if ((m = /^every:\s*(\d+)/i.exec(s))) return { kind: 'every', v: m[1] };
+            if ((m = /^cron:\s*"?([^"]+)"?/i.exec(s))) return { kind: 'cron', v: m[1].trim() };
+            if ((m = /^daily:\s*"?([^"]+)"?/i.exec(s))) return { kind: 'daily', v: m[1].trim() };
+            if ((m = /^date:\s*"?([^"]+)"?/i.exec(s))) return { kind: 'date', v: m[1].trim() };
+            if ((m = /^event:\s*(\S+)/i.exec(s))) return { kind: 'event', v: m[1].trim() };
+            return { kind: s ? 'raw' : 'every', v: s || '30' };
+        }
+        function composeTrigger(kind, v) {
+            if (kind === 'every') return 'every: ' + (v || '30');
+            if (kind === 'cron') return 'cron: "' + (v || '') + '"';
+            if (kind === 'daily') return 'daily: "' + (v || '') + '"';
+            if (kind === 'date') return 'date: "' + (v || '') + '"';
+            if (kind === 'event') return 'event: ' + (v || '');
+            return v || '';
+        }
+        function parseExecute(s) {
+            s = (s || '').trim();
+            var m;
+            if ((m = /^script:\s*(\S+)/i.exec(s))) return { kind: 'script', v: m[1] };
+            // send_command 与 command 语义一致(后端两种都支持), 统一按 command 展示
+            if ((m = /^(?:send_)?command:\s*([\s\S]+)/i.exec(s))) return { kind: 'command', v: m[1] };
+            // cli / panel 均表示执行面板(RtCli 自身)命令, 统一按 cli 展示
+            if ((m = /^(?:cli|panel):\s*([\s\S]+)/i.exec(s))) return { kind: 'cli', v: m[1] };
+            if ((m = /^server_restart(?::\s*(\d*))?\s*$/i.exec(s))) return { kind: 'server_restart', v: (m[1] || '').trim() };
+            var low = s.toLowerCase();
+            if (EXEC_BARE.indexOf(low) >= 0) return { kind: low, v: '' };
+            return { kind: s ? 'raw' : 'script', v: s || '' };
+        }
+        function composeExecute(kind, v) {
+            v = (v || '').trim();
+            if (kind === 'script') return v ? 'script:' + v : '';
+            if (kind === 'command') return v ? 'command:' + v : '';
+            if (kind === 'cli') return v ? 'cli:' + v : '';
+            if (kind === 'server_restart') return v ? 'server_restart:' + v : 'server_restart';
+            if (EXEC_BARE.indexOf(kind) >= 0) return kind;
+            return v;
+        }
+
+        // 一个流程可配置多个执行步骤: execute 以换行分隔, 后端按顺序依次执行
+        function stepsOf(t) {
+            var raw = (t && t.execute ? t.execute : '').replace(/\r/g, '');
+            if (!raw) return [];
+            return raw.split('\n').map(function (s) { return s.trim(); });
+        }
+        function joinSteps(arr) { return (arr || []).join('\n'); }
+
+        function optionsHtml(map, selected) {
+            return Object.keys(map).map(function (k) {
+                return '<option value="' + k + '"' + (k === selected ? ' selected' : '') + '>' + map[k] + '</option>';
+            }).join('');
+        }
+
+        // 参数输入区(随触发方式切换)
+        function triggerParamHtml(p) {
+            if (p.kind === 'event') {
+                var opts = avail.events.map(function (e) {
+                    return '<option' + (e === p.v ? ' selected' : '') + '>' + esc(e) + '</option>';
+                }).join('');
+                return '<div class="bp-field"><label>事件名</label><select id="bpParam">' + opts + '</select>' +
+                    (avail.events.length ? '' : '<div class="text-warning small mt-1">未取到事件列表</div>') + '</div>';
+            }
+            if (p.kind === 'raw') {
+                return '<div class="bp-field"><label>自定义触发</label><textarea id="bpParam" placeholder="every: 30 and event: ServerStartEvent">' + esc(p.v) + '</textarea></div>';
+            }
+            var ph = {
+                every: '分钟数, 如 30', cron: '0 */5 * * * *', daily: '08:00 或 08:00,20:00', date: '2026-07-01 10:00'
+            }[p.kind] || '';
+            return '<div class="bp-field"><label>参数</label><input id="bpParam" value="' + esc(p.v) + '" placeholder="' + esc(ph) + '"/></div>';
+        }
+
+        // 单个执行步骤的参数控件(随执行方式切换)
+        function stepParamHtml(i, p) {
+            if (p.kind === 'script') {
+                var list = avail.scripts.slice();
+                if (p.v && list.indexOf(p.v) < 0) list.unshift(p.v);
+                var opts = list.map(function (s) {
+                    return '<option' + (s === p.v ? ' selected' : '') + '>' + esc(s) + '</option>';
+                }).join('');
+                return '<select class="bp-step-param" data-step="' + i + '">' + opts + '</select>' +
+                    (avail.scripts.length ? '' : '<div class="text-warning small mt-1">未取到脚本列表(Content/Scripts)</div>');
+            }
+            if (p.kind === 'command') {
+                return '<input class="bp-step-param" data-step="' + i + '" value="' + esc(p.v) + '" placeholder="/say hello"/>';
+            }
+            if (p.kind === 'cli') {
+                return '<input class="bp-step-param" data-step="' + i + '" value="' + esc(p.v) + '" placeholder=".auto list / rt status / .fx base"/>' +
+                    '<div class="text-muted small mt-1">面板/RtCli 自身命令, 不会发送到 MC 服务端</div>';
+            }
+            if (p.kind === 'server_restart') {
+                return '<input class="bp-step-param" data-step="' + i + '" value="' + esc(p.v) + '" placeholder="延迟分钟, 空=3秒后立即重启"/>';
+            }
+            if (p.kind === 'raw') {
+                return '<textarea class="bp-step-param" data-step="' + i + '" placeholder="script:名称 / command:/say hi">' + esc(p.v) + '</textarea>';
+            }
+            return '<div class="text-muted small mt-1">该执行方式无需参数</div>';
+        }
+
+        // 执行步骤列表编辑器(可增删/上下移动, 保存时按顺序以换行写入 execute)
+        function stepsEditorHtml(t) {
+            var steps = stepsOf(t);
+            if (!steps.length) steps = [''];
+            var rows = steps.map(function (s, i) {
+                var p = parseExecute(s);
+                var active = sel && sel.kind === 'execute' && sel.step === i;
+                return '<div class="bp-step' + (active ? ' active' : '') + '" data-step="' + i + '">' +
+                    '<div class="bp-step-head"><span>步骤 ' + (i + 1) + ' · ' + (EXEC_LABEL[p.kind] || '自定义') + '</span>' +
+                    '<span class="d-flex gap-1">' +
+                    (i > 0 ? '<button type="button" class="btn btn-sm btn-outline-secondary" onclick="BP.moveStep(' + i + ',-1)" title="上移">↑</button>' : '') +
+                    '<button type="button" class="btn btn-sm btn-outline-danger" onclick="BP.removeStep(' + i + ')" title="删除步骤">×</button>' +
+                    '</span></div>' +
+                    '<select class="bp-step-kind" data-step="' + i + '" onchange="BP.onStepKind(' + i + ', this.value)">' +
+                    optionsHtml(EXEC_LABEL, p.kind) + '</select>' +
+                    stepParamHtml(i, p) +
+                '</div>';
+            }).join('');
+            return '<div class="bp-steps">' + rows + '</div>' +
+                '<button type="button" class="btn btn-sm btn-outline-success mt-2" onclick="BP.addStep()">＋ 添加执行步骤</button>';
+        }
+
+        function serversHtml(t) {
+            if (!avail.servers.length) {
+                return '<div class="bp-field"><label>生效实例(逗号分隔, 空=全部)</label><input id="bpServers" value="' + esc((t.serverKeys || []).join(',')) + '"/></div>';
+            }
+            var keys = t.serverKeys || [];
+            return '<div class="bp-field"><label>生效实例(不选=全部)</label><div class="bp-chips">' +
+                avail.servers.map(function (s) {
+                    return '<label class="bp-chip"><input type="checkbox" class="bp-server-cb" value="' + esc(s) + '"' +
+                        (keys.indexOf(s) >= 0 ? ' checked' : '') + '/> ' + esc(s) + '</label>';
+                }).join('') + '</div></div>';
+        }
+
+        function taskOf(key) { return tasks.filter(function (x) { return x.key === key; })[0]; }
+
+        function renderInspector() {
+            var box = document.getElementById('bpInspector');
+            if (!sel) { box.innerHTML = '<div class="text-muted small p-3">点击左侧节点开始编辑</div>'; return; }
+            var t = taskOf(sel.key);
+            if (!t) { box.innerHTML = '<div class="text-muted small p-3">节点已失效</div>'; return; }
+            var m = META[sel.kind];
+
+            // 触发/执行节点用结构化编辑器; 条件节点保留文本 + 模板
+            var nodeEditor;
+            if (sel.kind === 'trigger') {
+                var pt = parseTrigger(t.trigger);
+                nodeEditor = '<div class="bp-field"><label>触发方式</label><select id="bpTrigKind" onchange="BP.refreshParam()">' +
+                    optionsHtml(TRIG_LABEL, pt.kind) + '</select></div><div id="bpParamWrap">' + triggerParamHtml(pt) + '</div>';
+            } else if (sel.kind === 'execute') {
+                nodeEditor = '<div class="bp-field"><label>执行步骤(按顺序执行, 可添加多个)</label>' + stepsEditorHtml(t) + '</div>';
+            } else {
+                var conds = PRESETS.condition.concat(COND_CHIPS).filter(function (v, i, a) { return a.indexOf(v) === i; });
+                var chips = conds.map(function (p) {
+                    return '<button type="button" class="btn btn-sm btn-outline-info" onclick="BP.insertCondition(' +
+                        JSON.stringify(p).replace(/"/g, '&quot;') + ')">' + esc(p) + '</button>';
+                }).join('');
+                nodeEditor = '<div class="bp-field"><label>条件表达式(可空)</label>' +
+                    '<textarea id="bpValue" placeholder="' + esc('{rt.tps} < 18 and {rt.server_running} == "true"') + '">' + esc(t.condition || '') + '</textarea>' +
+                    '<div class="bp-presets">' + chips + '</div></div>';
+            }
+
+            box.innerHTML =
+                // 标题按节点类型着色, 与下方"任务规则"(中性色)区分
+                '<h6 class="bp-insp-head bp-insp-' + sel.kind + '">' + m.icon + ' ' + m.label + ' 节点</h6>' +
+                '<div class="bp-field"><label>流程标识</label><input id="bpKey" value="' + esc(t.key) + '" ' + (t._isNew ? '' : 'readonly') + ' /></div>' +
+                '<div class="bp-field"><label class="bp-check"><input type="checkbox" id="bpEnabled" ' + (t.enabled ? 'checked' : '') + '/> 启用该流程</label></div>' +
+                // 节点自身设置: 整块带节点配色, 一眼能看出哪些属于节点
+                '<div class="bp-node-panel bp-node-panel-' + sel.kind + '">' +
+                    '<div class="bp-panel-title">' + m.icon + ' 节点设置</div>' +
+                    nodeEditor +
+                    '<div class="bp-preview" id="bpPreview"></div>' +
+                '</div>' +
+                // 任务规则: 中性面板, 与上方节点设置形成对比
+                '<div class="bp-rules-panel">' +
+                    '<div class="bp-panel-title">⚙ 任务规则</div>' +
+                '<div class="bp-field"><label>超时(毫秒, 0=不限)</label><input id="bpTimeout" type="number" value="' + (t.timeoutMs || 0) + '"/></div>' +
+                '<div class="bp-field"><label>延迟(分钟)</label><input id="bpDelay" type="number" value="' + (t.delayMinutes || 0) + '"/></div>' +
+                '<div class="bp-field"><label>延迟到</label><input id="bpDelayUntil" value="' + esc(t.delayUntil || '') + '"/></div>' +
+                '<div class="bp-field"><label>最大执行次数(0=不限)</label><input id="bpMaxExec" type="number" value="' + (t.maxExecutions || 0) + '"/></div>' +
+                '<div class="bp-field"><label>过期时间</label><input id="bpExpire" value="' + esc(t.expireAt || '') + '"/></div>' +
+                '<div class="bp-field"><label>队列</label><select id="bpQueue">' +
+                    ['Fast', 'Default', 'Long'].map(function (q) {
+                        return '<option' + ((t.queue || 'Fast') === q ? ' selected' : '') + '>' + q + '</option>';
+                    }).join('') + '</select></div>' +
+                '<div class="bp-field"><label class="bp-check"><input type="checkbox" id="bpImmediate" ' + (t.executeImmediately ? 'checked' : '') + '/> 命中后立即执行</label></div>' +
+                serversHtml(t) +
+                '</div>' +
+                '<div class="d-flex gap-2 mt-3">' +
+                    '<button class="btn btn-sm btn-primary" onclick="BP.save()">保存此流程</button>' +
+                    '<button class="btn btn-sm btn-outline-danger" onclick="BP.removeFlow()">删除流程</button>' +
+                '</div>';
+            bindInspectorInputs();
+            updatePreview();
+        }
+
+        // 属性面板的所有输入都实时写回内存, 避免切换节点/执行方式后丢失刚输入的内容
+        function bindInputs(root) {
+            if (!root) return;
+            root.querySelectorAll('input,select,textarea').forEach(function (el) {
+                el.addEventListener('input', onInspectorChanged);
+                el.addEventListener('change', onInspectorChanged);
+            });
+        }
+        function bindInspectorInputs() { bindInputs(document.getElementById('bpInspector')); }
+        function onInspectorChanged() {
+            syncInspector();
+            refreshFlowNodes();
+        }
+
+        // 把属性面板当前输入写回 tasks 中的任务对象
+        function syncInspector() {
+            if (!sel) return;
+            var t = taskOf(sel.key);
+            if (!t) return;
+
+            var en = document.getElementById('bpEnabled');
+            if (en) t.enabled = en.checked;
+
+            if (sel.kind === 'trigger') {
+                t.trigger = currentTrigger(t) || '';
+            } else if (sel.kind === 'condition') {
+                var cEl = document.getElementById('bpValue');
+                if (cEl) t.condition = cEl.value;
+            } else if (sel.kind === 'execute') {
+                t.execute = joinSteps(collectSteps());
+            }
+
+            var num = function (id, def) {
+                var e = document.getElementById(id);
+                return e ? (parseInt(e.value || '0', 10) || 0) : def;
+            };
+            t.timeoutMs = num('bpTimeout', t.timeoutMs || 0);
+            t.delayMinutes = num('bpDelay', t.delayMinutes || 0);
+            var du = document.getElementById('bpDelayUntil'); if (du) t.delayUntil = du.value || '';
+            t.maxExecutions = num('bpMaxExec', t.maxExecutions || 0);
+            var exp = document.getElementById('bpExpire'); if (exp) t.expireAt = exp.value || '';
+            var q = document.getElementById('bpQueue'); if (q) t.queue = q.value || 'Fast';
+            var im = document.getElementById('bpImmediate'); if (im) t.executeImmediately = im.checked;
+
+            var boxes = document.querySelectorAll('.bp-server-cb');
+            if (boxes.length) {
+                var keys = [];
+                boxes.forEach(function (cb) { if (cb.checked) keys.push(cb.value); });
+                t.serverKeys = keys;
+            } else {
+                var sEl = document.getElementById('bpServers');
+                if (sEl) t.serverKeys = (sEl.value || '').split(',')
+                    .map(function (s) { return s.trim(); }).filter(function (s) { return !!s; });
+            }
+
+            updatePreview();
+        }
+
+        // 收集执行步骤编辑区的所有行(保持顺序, 空行也保留用于编辑)
+        function collectSteps() {
+            var rows = document.querySelectorAll('#bpInspector .bp-step');
+            var arr = [];
+            for (var i = 0; i < rows.length; i++) {
+                var kindEl = rows[i].querySelector('.bp-step-kind');
+                var pEl = rows[i].querySelector('.bp-step-param');
+                arr.push(composeExecute(kindEl ? kindEl.value : 'script', pEl ? pEl.value : ''));
+            }
+            return arr;
+        }
+
+        // 只更新画布上该流程的节点文字, 不重建 DOM(输入时保持流畅)
+        function refreshFlowNodes() {
+            if (!sel) return;
+            var t = taskOf(sel.key);
+            if (!t) return;
+            var steps = stepsOf(t);
+            var selKey = sel.key.replace(/"/g, '\\"');
+            document.querySelectorAll('#bpNodes .bp-node[data-key="' + selKey + '"]').forEach(function (n) {
+                var kind = n.getAttribute('data-kind');
+                var step = parseInt(n.getAttribute('data-step'), 10);
+                var val = kind === 'trigger' ? (t.trigger || '')
+                    : kind === 'condition' ? (t.condition || '')
+                    : (steps[step] || '');
+                var body = n.querySelector('.bp-node-body');
+                if (body) body.innerHTML = val ? esc(val) : '<span style="opacity:.5">' + esc(META[kind].ph) + '</span>';
+                n.classList.toggle('disabled', !t.enabled);
+            });
+            renderEdges();
+        }
+
+        // 切换触发方式时只重绘参数区; 旧参数值会跟着带过去, 不会清零
+        function refreshParam() {
+            if (!sel) return;
+            syncInspector();
+            var t = taskOf(sel.key);
+            if (!t) return;
+            if (sel.kind === 'trigger') {
+                var wrap = document.getElementById('bpParamWrap');
+                if (wrap) {
+                    wrap.innerHTML = triggerParamHtml(parseTrigger(t.trigger));
+                    bindInputs(wrap);
+                }
+            }
+            updatePreview();
+        }
+
+        function currentTrigger(t) {
+            if (sel.kind !== 'trigger') return t.trigger || '';
+            var kEl = document.getElementById('bpTrigKind');
+            if (!kEl) return t.trigger || '';
+            var el = document.getElementById('bpParam');
+            return composeTrigger(kEl.value, el ? el.value : '');
+        }
+        function updatePreview() {
+            var t = taskOf(sel.key);
+            var el = document.getElementById('bpPreview');
+            if (!t || !el) return;
+            var trig = currentTrigger(t);
+            var execs = stepsOf(t).filter(function (s) { return !!s; });
+            var execHtml = execs.length
+                ? execs.map(function (s, i) {
+                    return '<div class="bp-preview-row"><span>' + (i === 0 ? '执行' : '') + '</span><code>' + esc(s) + '</code></div>';
+                }).join('')
+                : '<div class="bp-preview-row"><span>执行</span><code>(空)</code></div>';
+            el.innerHTML = '<div class="bp-preview-title">生成的任务定义</div>' +
+                '<div class="bp-preview-row"><span>触发</span><code>' + esc(trig || '(空)') + '</code></div>' +
+                '<div class="bp-preview-row"><span>条件</span><code>' + esc(t.condition || '(空)') + '</code></div>' + execHtml;
+        }
+
+        // ---- 执行步骤增删/排序 ----
+
+        function addStep() {
+            if (!sel) return;
+            syncInspector();
+            var t = taskOf(sel.key);
+            if (!t) return;
+            var arr = stepsOf(t);
+            if (!arr.length) arr = [''];
+            arr.push('');
+            t.execute = joinSteps(arr);
+            sel = { key: t.key, kind: 'execute', step: arr.length - 1 };
+            renderInspector();
+            render();
+        }
+
+        function removeStep(i) {
+            if (!sel) return;
+            syncInspector();
+            var t = taskOf(sel.key);
+            if (!t) return;
+            var arr = stepsOf(t);
+            if (!arr.length) arr = [''];
+            arr.splice(i, 1);
+            if (!arr.length) arr = [''];
+            t.execute = joinSteps(arr);
+            sel = { key: t.key, kind: 'execute', step: Math.max(0, Math.min(i, arr.length - 1)) };
+            renderInspector();
+            render();
+        }
+
+        function moveStep(i, dir) {
+            if (!sel) return;
+            syncInspector();
+            var t = taskOf(sel.key);
+            if (!t) return;
+            var arr = stepsOf(t);
+            var j = i + dir;
+            if (i < 0 || j < 0 || i >= arr.length || j >= arr.length) return;
+            var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+            t.execute = joinSteps(arr);
+            sel = { key: t.key, kind: 'execute', step: j };
+            renderInspector();
+            render();
+        }
+
+        // 切换某一步的执行方式: 先把当前输入收进内存, 再按新类型重绘参数控件
+        function onStepKind(i, kind) {
+            if (!sel) return;
+            syncInspector();
+            renderInspector();
+            render();
+        }
+
+        function insertCondition(text) {
+            var el = document.getElementById('bpValue');
+            if (!el) return;
+            var s = el.selectionStart == null ? el.value.length : el.selectionStart;
+            var e = el.selectionEnd == null ? s : el.selectionEnd;
+            el.value = el.value.slice(0, s) + text + el.value.slice(e);
+            el.focus();
+            el.selectionStart = el.selectionEnd = s + text.length;
+            syncInspector();
+            refreshFlowNodes();
+        }
+
+        // 左右分栏拖拽: 调整画布/属性面板宽度(记忆到 localStorage)
+        function bindSplitter() {
+            var split = document.getElementById('bpSplitter');
+            var insp = document.getElementById('bpInspector');
+            if (!split || !insp) return;
+            try {
+                var saved = parseInt(localStorage.getItem('rt.blueprint.split') || '0', 10);
+                if (saved >= 240) { insp.style.flex = '0 0 ' + saved + 'px'; insp.style.width = saved + 'px'; }
+            } catch (e) { }
+            split.addEventListener('mousedown', function (ev) {
+                ev.preventDefault();
+                split.classList.add('dragging');
+                var startX = ev.clientX, startW = insp.offsetWidth;
+                function move(e2) {
+                    var w = Math.min(680, Math.max(240, startW - (e2.clientX - startX)));
+                    insp.style.flex = '0 0 ' + w + 'px';
+                    insp.style.width = w + 'px';
+                }
+                function up() {
+                    document.removeEventListener('mousemove', move);
+                    document.removeEventListener('mouseup', up);
+                    split.classList.remove('dragging');
+                    try { localStorage.setItem('rt.blueprint.split', insp.offsetWidth); } catch (e) { }
+                }
+                document.addEventListener('mousemove', move);
+                document.addEventListener('mouseup', up);
+            });
+        }
+
+        function bind() {
+            bindSplitter();
+            var outer = document.getElementById('bpOuter');
+            outer.addEventListener('mousedown', function (ev) {
+                var node = ev.target.closest ? ev.target.closest('.bp-node') : null;
+                if (node) {
+                    var key = node.getAttribute('data-key'), kind = node.getAttribute('data-kind');
+                    var step = parseInt(node.getAttribute('data-step'), 10);
+                    if (isNaN(step)) step = -1;
+                    // 切换节点前先把属性面板里没保存的输入写回内存, 否则会丢失
+                    if (sel && (sel.key !== key || sel.kind !== kind || sel.step !== step)) syncInspector();
+                    sel = { key: key, kind: kind, step: kind === 'execute' ? step : -1 };
+                    var lid = kind === 'execute' ? 'execute:' + step : kind;
+                    var p = (layout[key] && layout[key][lid]) || { x: 0, y: 0 };
+                    drag = { key: key, id: lid, kind: kind, step: step, sx: ev.clientX, sy: ev.clientY, ox: p.x, oy: p.y };
+                    // 只切换选中态, 不整屏重绘(重绘会让正在拖的节点闪一下)
+                    document.querySelectorAll('#bpNodes .bp-node.selected').forEach(function (n) { n.classList.remove('selected'); });
+                    node.classList.add('selected');
+                    renderInspector();
+                    ev.preventDefault();
+                } else {
+                    panning = { sx: ev.clientX, sy: ev.clientY, ox: pan.x, oy: pan.y };
+                    outer.classList.add('panning');
+                }
+            });
+            document.addEventListener('mousemove', function (ev) {
+                if (drag) {
+                    var p = layout[drag.key][drag.id];
+                    p.x = drag.ox + (ev.clientX - drag.sx) / zoom;
+                    p.y = drag.oy + (ev.clientY - drag.sy) / zoom;
+                    var n = document.querySelector('#bpNodes .bp-node[data-key="' + drag.key + '"][data-kind="' + drag.kind + '"][data-step="' + drag.step + '"]');
+                    if (n) { n.style.left = p.x + 'px'; n.style.top = p.y + 'px'; }
+                    renderEdges();
+                } else if (panning) {
+                    pan.x = panning.ox + (ev.clientX - panning.sx);
+                    pan.y = panning.oy + (ev.clientY - panning.sy);
+                    applyTransform();
+                }
+            });
+            document.addEventListener('mouseup', function () {
+                if (drag) { saveLayout(); drag = null; }
+                if (panning) { panning = null; outer.classList.remove('panning'); }
+            });
+            outer.addEventListener('wheel', function (ev) {
+                ev.preventDefault();
+                var rect = outer.getBoundingClientRect();
+                var mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+                var old = zoom;
+                zoom = Math.min(1.8, Math.max(0.35, zoom * (ev.deltaY < 0 ? 1.1 : 0.9)));
+                pan.x = mx - (mx - pan.x) * (zoom / old);
+                pan.y = my - (my - pan.y) * (zoom / old);
+                applyTransform();
+            }, { passive: false });
+        }
+
+        async function refresh(skipDraftCheck) {
+            statusSpinning('加载流程…');
+            if (!skipDraftCheck) {
+                var hasDraft = tasks.some(function (x) { return x._isNew; });
+                if (hasDraft) {
+                    if (!await RtPanel.showConfirm('放弃未保存的流程', '当前有未保存的新建流程, 刷新会丢弃它。继续?')) return;
+                }
+            }
+            hideStatus();
+            if (!bound) { bind(); bound = true; }
+            try {
+                var r = await fetch('/api/features/scheduler/tasks');
+                var d = await r.json();
+                if (!d.success) { status(d.message || '获取失败', 'warning'); return; }
+                tasks = (d.tasks || []).map(function (t) {
+                    var o = {}; for (var k in t) { o[k] = t[k]; } o._isNew = false; return o;
+                });
+                avail = { scripts: d.scripts || [], events: d.events || [], servers: d.servers || [] };
+                loadLayout();
+                if (sel && !tasks.some(function (x) { return x.key === sel.key; })) sel = null;
+                // 选中的执行步骤可能已被删除, 夹到有效范围
+                if (sel && sel.kind === 'execute') {
+                    var cnt = Math.max(1, stepsOf(taskOf(sel.key)).length);
+                    if (sel.step == null || sel.step < 0 || sel.step >= cnt) sel.step = 0;
+                }
+                render(); renderInspector();
+                status((d.isRunning ? '调度器运行中' : '调度器未启动') + ' · 共 ' + tasks.length + ' 个流程', d.isRunning ? 'info' : 'secondary');
+            } catch (e) { status('加载失败: ' + e.message, 'warning'); }
+        }
+
+        function addFlow() {
+            var n = 1, key;
+            do { key = 'flow_' + n++; } while (tasks.some(function (x) { return x.key === key; }));
+            tasks.push({ key: key, enabled: true, trigger: 'every: 30', condition: '', execute: '', serverKeys: [], queue: 'Fast', _isNew: true });
+            layout[key] = {};
+            sel = { key: key, kind: 'trigger', step: -1 };
+            render(); renderInspector();
+            status('已新建流程 ' + key + ', 编辑后点「保存此流程」', 'info');
+        }
+
+        function autoLayout() { layout = {}; saveLayout(); resetView(); render(); status('已重新自动布局', 'info'); }
+
+        async function save() {
+            if (!sel) { status('请先选中一个节点', 'warning'); return; }
+            // 先把属性面板当前输入全部写回内存, 再组装请求
+            syncInspector();
+            var t = taskOf(sel.key);
+            if (!t) return;
+            var keyEl = document.getElementById('bpKey');
+            var newKey = (keyEl ? keyEl.value : t.key).trim();
+            if (!newKey) { status('流程标识不能为空', 'warning'); return; }
+            if (newKey !== t.key && tasks.some(function (x) { return x.key === newKey; })) {
+                status('已存在同名流程: ' + newKey, 'warning');
+                return;
+            }
+
+            // 空步骤不写入配置(编辑时的空行只是占位)
+            t.execute = stepsOf(t).filter(function (s) { return !!s; }).join('\n');
+
+            var payload = {
+                key: newKey,
+                enabled: !!t.enabled,
+                trigger: t.trigger || '', condition: t.condition || '', execute: t.execute || '',
+                passParameters: !!t.passParameters,
+                serverKeys: t.serverKeys || [],
+                timeoutMs: t.timeoutMs || 0,
+                delayMinutes: t.delayMinutes || 0,
+                delayUntil: t.delayUntil || '',
+                executeImmediately: !!t.executeImmediately,
+                maxExecutions: t.maxExecutions || 0,
+                expireAt: t.expireAt || '',
+                queue: t.queue || 'Fast'
+            };
+
+            try {
+                var r = await fetch('/api/features/scheduler/task', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                var d = await r.json();
+                RtPanel.showToast(d.message || (d.success ? '已保存' : '保存失败'), d.success ? 'success' : 'error');
+                status(d.message || (d.success ? '已保存' : '保存失败'), d.success ? 'success' : 'warning');
+                if (d.success) {
+                    if (newKey !== t.key && layout[t.key]) { layout[newKey] = layout[t.key]; delete layout[t.key]; saveLayout(); }
+                    sel = { key: newKey, kind: sel.kind, step: sel.step };
+                    await refresh(true);
+                }
+            } catch (e) { status('保存失败: ' + e.message, 'warning'); }
+        }
+
+        async function removeFlow() {
+            if (!sel) return;
+            var t = tasks.filter(function (x) { return x.key === sel.key; })[0];
+            if (!t) return;
+
+            if (t._isNew) {
+                tasks = tasks.filter(function (x) { return x.key !== t.key; });
+                delete layout[t.key]; saveLayout(); sel = null; render(); renderInspector();
+                status('已丢弃未保存的流程', 'info');
+                return;
+            }
+            if (!await RtPanel.showConfirm('删除流程', '确定删除流程 ' + t.key + '? 会同时从 scheduler_settings.yml 移除。')) return;
+            try {
+                var r = await fetch('/api/features/scheduler/delete', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: t.key })
+                });
+                var d = await r.json();
+                RtPanel.showToast(d.message || (d.success ? '已删除' : '删除失败'), d.success ? 'success' : 'error');
+                if (d.success) { delete layout[t.key]; saveLayout(); sel = null; await refresh(); }
+            } catch (e) { status('删除失败: ' + e.message, 'warning'); }
+        }
+
+        return {
+            refresh: refresh, addFlow: addFlow, autoLayout: autoLayout,
+            save: save, removeFlow: removeFlow,
+            zoomBy: zoomBy, resetView: resetView, refreshParam: refreshParam,
+            insertCondition: insertCondition,
+            addStep: addStep, removeStep: removeStep, moveStep: moveStep, onStepKind: onStepKind
+        };
+    })();
+</script>
+}

@@ -1,4 +1,9 @@
 @inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Antiforgery
+@inject RtPanel.Services.RtCliClientService RtCliClient
+@{
+    // 服务端渲染连接状态, 避免每次切页先显示"未连接"再被 JS 纠正造成闪烁
+    var connConnected = RtCliClient.IsConnected;
+}
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -13,11 +18,15 @@
     <script>
         // 主题预先应用: 避免 FOUC(页面加载时闪烁)
         // localStorage.theme = 'light' | 'dark'(缺省视为 dark)
+        // localStorage.themeStyle = 'classic' | 'nordic' | 'space' | 'stripe'(缺省视为 classic)
         try {
             var t = localStorage.getItem('theme') || 'dark';
+            var s = localStorage.getItem('themeStyle') || 'classic';
             document.documentElement.setAttribute('data-theme', t);
+            document.documentElement.setAttribute('data-style', s);
         } catch (e) {
             document.documentElement.setAttribute('data-theme', 'dark');
+            document.documentElement.setAttribute('data-style', 'classic');
         }
     </script>
     <script>
@@ -43,8 +52,10 @@
         .toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; }
         .custom-toast {
             min-width: 300px; max-width: 450px; padding: 14px 20px; margin-bottom: 10px;
-            border-radius: 0; color: #fff; opacity: 0; transform: translateX(100%);
+            border-radius: 0; color: var(--text-primary, #ecebe4); opacity: 0; transform: translateX(100%);
             transition: all 0.3s ease; display: flex; justify-content: space-between; align-items: center;
+            /* 默认使用主题导航栏/卡片色, 未知类型(如 danger)不再透明导致看不清 */
+            background: var(--bg-card, #1f1f28);
             border: 2px solid var(--btn-outline, #0c0c12);
             box-shadow: 4px 4px 0 rgba(0,0,0,0.45);
             font-family: var(--font-pixel, sans-serif);
@@ -52,7 +63,7 @@
         }
         .custom-toast.show { opacity: 1; transform: translateX(0); }
         .custom-toast.success { background: linear-gradient(180deg, #5ede8a, #34b968); color: #0c1a0e; }
-        .custom-toast.error { background: linear-gradient(180deg, #f66b6b, #d43c3c); }
+        .custom-toast.error, .custom-toast.danger { background: linear-gradient(180deg, #f66b6b, #d43c3c); color: #fff; }
         .custom-toast.warning { background: linear-gradient(180deg, #fde047, #d9ae04); color: #1c1602; }
         .custom-toast.info { background: linear-gradient(180deg, #5ec8f9, #0ea5e9); color: #0c1220; }
         .custom-toast .close-btn { cursor: pointer; margin-left: 12px; font-size: 18px; opacity: 0.7; }
@@ -73,12 +84,14 @@
             border-bottom: 2px solid var(--border-color, #3a3a49); padding-bottom: 0.5rem;
         }
         .modal-box p { margin-bottom: 20px; color: var(--text-secondary, #a8a89b); }
-        .modal-box input {
+        /* 仅作用于文本类输入框；勾选框/单选框有独立方块样式，必须排除，
+           否则这里的 padding 会在 border-box 下把 1.2em 的勾选框撑成长方形 */
+        .modal-box input:not([type="checkbox"]):not([type="radio"]) {
             width: 100%; padding: 8px 12px; border: 2px solid var(--border-color, #3a3a49); border-radius: 0;
             margin-bottom: 16px; font-size: 14px; background-color: var(--bg-input, #16161e); color: var(--text-primary, #ecebe4);
             box-shadow: inset 2px 2px 0 rgba(0,0,0,0.25);
         }
-        .modal-box input:focus { outline: none; border-color: var(--accent, #f97316); box-shadow: inset 2px 2px 0 rgba(0,0,0,0.25), 0 0 0 3px var(--accent-soft, rgba(249,115,22,0.16)); }
+        .modal-box input:not([type="checkbox"]):not([type="radio"]):focus { outline: none; border-color: var(--accent, #f97316); box-shadow: inset 2px 2px 0 rgba(0,0,0,0.25), 0 0 0 3px var(--accent-soft, rgba(249,115,22,0.16)); }
         .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
     </style>
 </head>
@@ -108,6 +121,9 @@
                             <a class="nav-link" asp-area="" asp-page="/Config">配置</a>
                         </li>
                         <li class="nav-item">
+                            <a class="nav-link" asp-area="" asp-page="/Features">功能</a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link" asp-area="" asp-page="/Extensions">扩展</a>
                         </li>
                         <li class="nav-item">
@@ -116,23 +132,34 @@
                     </ul>
                     <ul class="navbar-nav align-items-center island-actions">
                         <li class="nav-item me-2">
-                            <span id="globalConnStatus" class="badge bg-secondary" style="font-size:0.85em;padding:6px 12px;border-radius:12px;">未连接</span>
+                            <span id="globalConnStatus" class="conn-pill" data-connected="@(connConnected ? "true" : "false")"
+                                  title="@(connConnected ? "RtCli 已连接" : "RtCli 未连接")" role="status">
+                                <span class="conn-dot" aria-hidden="true"></span>
+                                <span class="conn-text">@(connConnected ? "已连接" : "未连接")</span>
+                            </span>
                         </li>
                         <li class="nav-item me-2">
                             <button class="btn btn-sm btn-outline-secondary" id="themeToggleBtn"
                                     title="切换亮色/暗色主题" onclick="toggleTheme()">
-                                <span id="themeIcon">🌙</span>
+                                <span id="themeIcon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+                                </span>
                             </button>
                         </li>
                         <li class="nav-item me-2 event-board-wrap">
                             <button class="btn btn-sm btn-outline-secondary event-board-btn" id="eventBoardBtn"
                                     title="事件板" onclick="event.stopPropagation(); EventBoard.toggle();">
-                                <span aria-hidden="true">📋</span><span class="event-board-badge" id="eventBoardBadge" hidden>0</span>
+                                <span aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6"/><path d="M8 6H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="14" y2="15"/></svg>
+                                </span><span class="event-board-badge" id="eventBoardBadge" hidden>0</span>
                             </button>
                             <div class="event-board-panel" id="eventBoardPanel" hidden>
                                 <div class="event-board-head">
                                     <span class="event-board-title">事件板</span>
-                                    <button class="btn btn-sm btn-outline-secondary event-board-clear" onclick="EventBoard.clearAll()">清空</button>
+                                    <div class="event-board-head-actions">
+                                        <button class="btn btn-sm btn-outline-info event-board-detail" onclick="event.stopPropagation(); EventBoard.openDetail();">详细</button>
+                                        <button class="btn btn-sm btn-outline-secondary event-board-clear" onclick="EventBoard.clearAll()">清空</button>
+                                    </div>
                                 </div>
                                 <div class="event-board-list" id="eventBoardList"></div>
                             </div>
@@ -168,6 +195,7 @@
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
+<script src="~/js/rtlog.js" asp-append-version="true"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
     <script>
@@ -233,22 +261,19 @@
             },
 
             updateConnectionStatus(connected) {
-                const badge = document.getElementById('globalConnStatus');
+                const pill = document.getElementById('globalConnStatus');
                 const alert = document.getElementById('globalDisconnectAlert');
-                const prev = badge.dataset.connected === 'true';
+                const prev = pill.dataset.connected === 'true';
+
+                pill.dataset.connected = connected ? 'true' : 'false';
+                const text = pill.querySelector('.conn-text');
+                if (text) text.textContent = connected ? '已连接' : '未连接';
+                pill.title = connected ? 'RtCli 已连接' : 'RtCli 未连接';
 
                 if (connected) {
-                    badge.textContent = '已连接';
-                    badge.className = 'badge bg-success';
-                    badge.style.cssText = 'font-size:0.85em;padding:6px 12px;border-radius:12px;';
-                    badge.dataset.connected = 'true';
                     alert.style.display = 'none';
-                } else {
-                    badge.textContent = '未连接';
-                    badge.className = 'badge bg-secondary';
-                    badge.style.cssText = 'font-size:0.85em;padding:6px 12px;border-radius:12px;';
-                    badge.dataset.connected = 'false';
-                    if (prev) alert.style.display = '';
+                } else if (prev) {
+                    alert.style.display = '';
                 }
             },
 
@@ -269,7 +294,7 @@
         };
 
         async function logout() {
-            if (!await RtPanel.showConfirm('登出', '确定要登出吗？(服务器连接将保持，其他会话不受影响)')) return;
+            if (!await RtPanel.showConfirm('登出', '确定要登出吗？(服务器连接将保持，重新登录会自动复用；其他会话不受影响)')) return;
             try {
                 await fetch('/api/auth/logout', { method: 'POST' });
             } catch {}
@@ -283,7 +308,12 @@
 
         function applyThemeIcon() {
             const icon = document.getElementById('themeIcon');
-            if (icon) icon.textContent = getTheme() === 'light' ? '☀' : '🌙';
+            if (!icon) return;
+            // 线条风格图标: 暗色主题显示月亮, 亮色主题显示太阳
+            const svgOpen = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">';
+            icon.innerHTML = getTheme() === 'light'
+                ? svgOpen + '<circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22"/><line x1="4.2" y1="4.2" x2="5.6" y2="5.6"/><line x1="18.4" y1="18.4" x2="19.8" y2="19.8"/><line x1="2" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22" y2="12"/><line x1="4.2" y1="19.8" x2="5.6" y2="18.4"/><line x1="18.4" y1="5.6" x2="19.8" y2="4.2"/></svg>'
+                : svgOpen + '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
         }
 
         function toggleTheme() {
@@ -311,7 +341,7 @@
         // === 事件板(VSCode 通知中心式下拉) ===
         window.EventBoard = {
             _timer: null,
-            _events: [],
+            _events: [],      // 事件板可见事件(已排除"仅详细"类型)
             _unread: 0,
 
             start() {
@@ -321,17 +351,62 @@
                 this._timer = setInterval(() => this.refresh(), 6000);
             },
 
+            // 每个窗口显示的事件时间范围(分钟), 由设置页写入 localStorage, 默认 1 小时
+            windowMinutes() {
+                const m = parseInt(localStorage.getItem('eventWindowMinutes') || '60', 10);
+                return isNaN(m) || m <= 0 ? 60 : m;
+            },
+
+            windowLabel() {
+                const m = this.windowMinutes();
+                if (m < 60) return m + ' 分钟';
+                return (m / 60) + ' 小时';
+            },
+
+            // 仅保留时间窗口内的事件(recordedAt 无法解析时保留)
+            filterByWindow(events) {
+                const cutoff = Date.now() - this.windowMinutes() * 60000;
+                return events.filter(ev => {
+                    const t = Date.parse(ev.recordedAt);
+                    return isNaN(t) ? true : t >= cutoff;
+                });
+            },
+
+            // "仅详细"事件: 只显示在详细页面(/Events), 不显示在事件板列表, 也不计入红点未读数
+            // 目前: 面板下发指令、扩展已加载、文件/备份/插件模组等日常小操作(高频、低信号)。
+            // 如需增加其它类型, 在此补充即可。
+            isDetailOnly(type) {
+                return type === 'panel_command'
+                    || type === 'plugin_load'
+                    || type === 'file_delete'
+                    || type === 'file_rename'
+                    || type === 'file_write'
+                    || type === 'jar_upload'
+                    || type === 'jar_delete'
+                    || type === 'jar_toggle'
+                    || type === 'backup_create'
+                    || type === 'backup_restore'
+                    || type === 'backup_delete';
+            },
+
             async refresh() {
                 const btn = document.getElementById('eventBoardBtn');
                 if (!btn) return;
                 try {
-                    const r = await fetch('/api/events/list?limit=100');
+                    // 时间窗口越大需要的事件越多, 上限 500 条
+                    const limit = this.windowMinutes() <= 60 ? 200 : 500;
+                    const r = await fetch('/api/events/list?limit=' + limit);
                     if (!r.ok) return;
                     const data = await r.json();
                     if (!data.success) return;
-                    // 服务端按时间正序存储, 展示时最新在前
-                    this._events = (data.events || []).slice().reverse();
-                    this._unread = data.unreadCount || 0;
+                    // 服务端按时间正序存储, 先反转为最新在前, 再按时间窗口过滤
+                    const sorted = (data.events || []).slice().reverse();
+                    const windowed = this.filterByWindow(sorted);
+                    // 事件板列表排除"仅详细"类型(如面板指令), 该类型只在详细页面展示
+                    this._events = windowed.filter(ev => !this.isDetailOnly(ev.eventType));
+                    // 红点未读数按事件板可见事件计算("仅详细"类型不计入)
+                    const lastReadId = data.lastReadId || 0;
+                    this._unread = this._events.filter(ev => (ev.id || 0) > lastReadId).length;
                     this.updateBadge();
                     if (this.isOpen()) this.render();
                 } catch { /* 断连等静默 */ }
@@ -381,14 +456,71 @@
                 } catch { RtPanel.showToast('清空失败', 'error'); }
             },
 
+            // 简约线条图标(1em, 跟随文字颜色), 不再使用 emoji
+            svg(name) {
+                const paths = {
+                    play: '<polygon points="6 4 20 12 6 20 6 4"/>',
+                    stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+                    crash: '<polygon points="13 2 4 14 11 14 10 22 20 10 13 10 13 2"/>',
+                    restart: '<polyline points="22 5 22 11 16 11"/><path d="M20.5 15a8.5 8.5 0 1 1-2-8.4L22 11"/>',
+                    warn: '<path d="M10.3 4.2 2.6 18a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17" x2="12" y2="17.01"/>',
+                    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+                    shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+                    shieldOff: '<path d="M19.7 14a7 7 0 0 0 .3-2V5l-8-3-3.2 1.2"/><path d="M4.7 4.7 4 5v7c0 6 8 10 8 10a20 20 0 0 0 5.6-4.4"/><line x1="2" y1="2" x2="22" y2="22"/>',
+                    ban: '<circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/>',
+                    check: '<path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><polyline points="22 4 12 14 9 11"/>',
+                    trash: '<polyline points="4 7 20 7"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M9 7V4h6v3"/>',
+                    box: '<path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/>',
+                    power: '<path d="M18.4 6.6a9 9 0 1 1-12.8 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
+                    refresh: '<polyline points="22 4 22 10 16 10"/><polyline points="2 20 2 14 8 14"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L22 10"/><path d="M2 14l3.6 4.4A9 9 0 0 0 20.5 15"/>',
+                    terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+                    cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/>',
+                    pulse: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+                    x: '<circle cx="12" cy="12" r="9"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+                    tool: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-8 8l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 8-8l-3.8 3.8z"/>',
+                    archive: '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><line x1="10" y1="12" x2="14" y2="12"/>',
+                    restore: '<polyline points="2 4 2 10 8 10"/><path d="M4.5 15a8.5 8.5 0 1 0 2-8.5L2 10"/>',
+                    move: '<polyline points="5 9 2 12 5 15"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><polyline points="9 5 12 2 15 5"/><polyline points="9 19 12 22 15 19"/>',
+                    save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+                    info: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="8.01"/>'
+                };
+                return '<svg class="event-icon-svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || paths.info) + '</svg>';
+            },
+
             typeMeta(type) {
                 switch (type) {
-                    case 'started': return { icon: '🟢', cls: 'event-type-started' };
-                    case 'stopped': return { icon: '⏹️', cls: 'event-type-stopped' };
-                    case 'crashed': return { icon: '💥', cls: 'event-type-crashed' };
-                    case 'auto_restarted': return { icon: '🔄', cls: 'event-type-auto' };
-                    case 'stop_unresponsive': return { icon: '⚠️', cls: 'event-type-unresponsive' };
-                    default: return { icon: '📌', cls: '' };
+                    case 'started': return { icon: this.svg('play'), cls: 'event-type-started' };
+                    case 'stopped': return { icon: this.svg('stop'), cls: 'event-type-stopped' };
+                    case 'crashed': return { icon: this.svg('crash'), cls: 'event-type-crashed' };
+                    case 'auto_restarted': return { icon: this.svg('restart'), cls: 'event-type-auto' };
+                    case 'stop_unresponsive': return { icon: this.svg('warn'), cls: 'event-type-unresponsive' };
+                    case 'file_upload': return { icon: this.svg('upload'), cls: 'event-type-upload' };
+                    case 'op': return { icon: this.svg('shield'), cls: 'event-type-op' };
+                    case 'deop': return { icon: this.svg('shieldOff'), cls: 'event-type-deop' };
+                    case 'ban': return { icon: this.svg('ban'), cls: 'event-type-ban' };
+                    case 'unban': return { icon: this.svg('check'), cls: 'event-type-unban' };
+                    case 'ip_ban': return { icon: this.svg('ban'), cls: 'event-type-ban' };
+                    case 'ip_unban': return { icon: this.svg('check'), cls: 'event-type-unban' };
+                    case 'file_delete': return { icon: this.svg('trash'), cls: 'event-type-file-delete' };
+                    case 'plugin_load': return { icon: this.svg('box'), cls: 'event-type-plugin-load' };
+                    case 'plugin_unload': return { icon: this.svg('power'), cls: 'event-type-plugin-unload' };
+                    case 'config_reload': return { icon: this.svg('refresh'), cls: 'event-type-config-reload' };
+                    case 'panel_command': return { icon: this.svg('terminal'), cls: 'event-type-panel-command' };
+                    case 'file_rename': return { icon: this.svg('move'), cls: 'event-type-file' };
+                    case 'file_write': return { icon: this.svg('save'), cls: 'event-type-file' };
+                    case 'jar_upload': return { icon: this.svg('box'), cls: 'event-type-plugin-load' };
+                    case 'jar_delete': return { icon: this.svg('trash'), cls: 'event-type-file-delete' };
+                    case 'jar_toggle': return { icon: this.svg('power'), cls: 'event-type-plugin-unload' };
+                    case 'backup_create': return { icon: this.svg('archive'), cls: 'event-type-file' };
+                    case 'backup_restore': return { icon: this.svg('restore'), cls: 'event-type-file' };
+                    case 'backup_delete': return { icon: this.svg('trash'), cls: 'event-type-file-delete' };
+                    case 'ai_task_start': return { icon: this.svg('cpu'), cls: 'event-type-ai' };
+                    case 'ai_task_done': return { icon: this.svg('check'), cls: 'event-type-ai-done' };
+                    case 'ai_task_fail': return { icon: this.svg('x'), cls: 'event-type-ai-fail' };
+                    case 'ai_tool_call': return { icon: this.svg('tool'), cls: 'event-type-ai-tool' };
+                    case 'ai_runner': return { icon: this.svg('pulse'), cls: 'event-type-ai' };
+                    case 'ai_activity': return { icon: this.svg('cpu'), cls: 'event-type-ai' };
+                    default: return { icon: this.svg('info'), cls: '' };
                 }
             },
 
@@ -408,12 +540,18 @@
                     const forceBtn = ev.eventType === 'stop_unresponsive'
                         ? `<button class="btn btn-sm btn-danger event-force-btn" onclick="event.stopPropagation(); EventBoard.forceStop('${this.esc(ev.instanceId)}', this)">强制关闭</button>`
                         : '';
+                    // 上传进行中: 标题含 "(NN%)" 时渲染进度条(完成后标题无百分比, 进度条消失)
+                    const pctMatch = ev.eventType === 'file_upload' ? /\((\d+)%\)/.exec(ev.title || '') : null;
+                    const progressBar = pctMatch
+                        ? `<div class="event-progress"><div class="event-progress-fill" style="width:${Math.min(100, parseInt(pctMatch[1], 10))}%"></div></div>`
+                        : '';
                     return `
                     <div class="event-item ${meta.cls}" data-id="${ev.id}">
                         <div class="event-item-head" onclick="EventBoard.toggleDetail(this)">
                             <span class="event-icon" aria-hidden="true">${meta.icon}</span>
                             <div class="event-main">
                                 <div class="event-title-line"><span class="event-title">${this.esc(ev.title || ev.eventType)}</span>${inst}</div>
+                                ${progressBar}
                                 <div class="event-time">${this.esc(time)}</div>
                             </div>
                             <span class="event-chevron" aria-hidden="true">▸</span>
@@ -452,6 +590,20 @@
                     RtPanel.showToast('强制关闭失败', 'error');
                 }
                 this.refresh();
+            },
+
+            // === 详细页面(独立路由 /Events): 事件板的"详细"按钮跳转到该页面 ===
+            openDetail() {
+                const panel = document.getElementById('eventBoardPanel');
+                if (panel) panel.hidden = true;
+                const target = '/Events';
+                const here = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+                if (here === target.toLowerCase()) {
+                    // 已在详细页面: 直接刷新数据, 避免整页重载
+                    if (window.EventDetail && window.EventDetail.refresh) window.EventDetail.refresh();
+                    return;
+                }
+                window.location.href = target;
             },
 
             esc(s) {

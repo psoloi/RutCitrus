@@ -50,18 +50,50 @@ service RtCliService {
   rpc AnalyzeInstanceErrors (InstanceDetailRequest) returns (InstanceErrorsResponse);
   // AI分析实例错误
   rpc AiAnalyzeInstanceErrors (AiAnalyzeRequest) returns (AiAnalyzeResponse);
+  // 基础分析实例错误(对应控制台 .fx base: 用 base 规则库匹配错误)
+  rpc BaseAnalyzeInstanceErrors (AiAnalyzeRequest) returns (BaseAnalyzeResponse);
+  // AI 技能管理(读写 ai_settings.yml 中 ServerAutoAi.skills)
+  rpc GetAiSkills (Empty) returns (AiSkillListResponse);
+  rpc SaveAiSkill (SaveAiSkillRequest) returns (SimpleResponse);
+  rpc DeleteAiSkill (DeleteAiSkillRequest) returns (SimpleResponse);
+  rpc ImportAiSkills (ImportAiSkillsRequest) returns (AiSkillListResponse);
+  // AI 记忆(读取 memory.json 条目, 读写记忆设置)
+  rpc GetAiMemories (Empty) returns (AiMemoryListResponse);
+  rpc SaveAiMemorySettings (AiMemorySettingsRequest) returns (SimpleResponse);
+  rpc ClearAiMemories (Empty) returns (SimpleResponse);
+  // AI 自动化观测: 任务状态 / 工具调用审计 / 历史结论
+  rpc GetAiAutomationStatus (Empty) returns (AiAutomationStatusResponse);
+  rpc GetAiToolAudit (AiToolAuditRequest) returns (AiToolAuditResponse);
+  rpc GetAiResponses (AiResponseListRequest) returns (AiResponseListResponse);
+  rpc DeleteAiResponse (DeleteAiResponseRequest) returns (SimpleResponse);
+  // AI 自动化规则(系统提示中的"必须遵守的规则")
+  rpc GetAiRules (Empty) returns (AiRuleListResponse);
+  rpc SaveAiRules (AiRuleListRequest) returns (SimpleResponse);
+  // AI 工作流(工作流编辑器: 读写 ai_settings.yml 中 ServerAutoAi 的任务列表与运行参数)
+  rpc GetAiWorkflow (Empty) returns (AiWorkflowResponse);
+  rpc SaveAiTask (AiTaskRequest) returns (SimpleResponse);
+  rpc DeleteAiTask (AiTaskKeyRequest) returns (SimpleResponse);
+  rpc SaveAiRuntime (AiRuntimeRequest) returns (SimpleResponse);
+  // 调度器任务(蓝图编辑器: 触发 -> 条件 -> 执行)
+  rpc GetSchedulerTasks (Empty) returns (SchedulerTaskListResponse);
+  rpc SaveSchedulerTask (SchedulerTaskRequest) returns (SimpleResponse);
+  rpc DeleteSchedulerTask (SchedulerTaskKeyRequest) returns (SimpleResponse);
   // 玩家事件监控: 获取指定实例的玩家活动日志
   rpc GetPlayerEvents (PlayerEventRequest) returns (PlayerEventListResponse);
   // 事件板: 实例生命周期事件(开启/关闭/崩溃/自动重启/stop无响应)
   rpc GetEventBoard (EventBoardRequest) returns (EventBoardResponse);
   rpc MarkEventBoardRead (Empty) returns (SimpleResponse);
   rpc ClearEventBoard (Empty) returns (SimpleResponse);
+  // 面板上报事件到事件板(如文件上传进度); event_key 非空且已存在时更新同一条(进度刷新), 否则追加
+  rpc ReportBoardEvent (ReportBoardEventRequest) returns (SimpleResponse);
   // 插件/模组管理
   rpc ListPlugins (InstanceDetailRequest) returns (JarFileListResponse);
   rpc ListMods (InstanceDetailRequest) returns (JarFileListResponse);
   rpc ToggleJarFile (ManageJarFileRequest) returns (SimpleResponse);
   rpc DeleteJarFile (ManageJarFileRequest) returns (SimpleResponse);
   rpc UploadJarFile (UploadJarFileRequest) returns (SimpleResponse);
+  // 插件更新(Modrinth): 用 plugin.yml 的插件名搜索并比对版本, 可下载替换
+  rpc UpdatePlugin (UpdatePluginRequest) returns (UpdatePluginResponse);
   // 实例文件管理: 浏览/上传/下载/删除/重命名(移动)工作目录内的文件, 工作目录为根
   rpc ListInstanceDir (InstanceDirRequest) returns (InstanceDirResponse);
   rpc DownloadInstanceFile (InstanceFileRequest) returns (stream FileDataChunk);
@@ -73,6 +105,11 @@ service RtCliService {
   rpc WriteInstanceTextFile (InstanceTextFileWriteRequest) returns (SimpleResponse);
   // 玩家管理
   rpc ManagePlayer (ManagePlayerRequest) returns (SimpleResponse);
+  // 全服配置(RM 管理协议 serversettings 读写)
+  rpc GetServerSettings (InstanceDetailRequest) returns (ServerSettingsResponse);
+  rpc SetServerSettings (SetServerSettingsRequest) returns (SimpleResponse);
+  // RM 管理协议通用操作: 游戏规则/名单(白名单/OP/封禁/IP封禁)/服务器控制/能力发现
+  rpc ManageServer (ManageServerRequest) returns (ManageServerResponse);
   // 面板向导: 服务端类型/版本列表与下载(对应 .guide 引导能力)
   rpc GetServerTypes (Empty) returns (ServerTypeListResponse);
   rpc GetServerVersions (ServerVersionRequest) returns (ServerVersionListResponse);
@@ -128,6 +165,7 @@ message LoadExtensionResponse {
 
 message ExecuteCommandRequest {
   string command = 1;
+  string instance_id = 2;           // 目标实例(ServerList key), 空 = 当前实例
 }
 
 message ExecuteCommandResponse {
@@ -140,6 +178,7 @@ message LogMessage {
   int32 level = 2;
   string source = 3;
   string message = 4;
+  string instance_id = 5;           // 日志归属实例, 空 = 全局消息
 }
 
 message ClientInfo {
@@ -270,6 +309,8 @@ message RtStatusResponse {
   bool auto_tips_running = 10;        // 自动提示运行中
   bool ai_running = 11;               // AI 自动化运行中
   bool scheduler_running = 12;        // 调度器运行中
+  string mc_version = 13;             // MC 服务端版本(取自 jar 内 version.json 的 id)
+  string server_jar = 14;             // 探测到版本的服务端 jar 文件名
 }
 
 // 面板设置 (panel_data.json)
@@ -339,7 +380,7 @@ message InstanceInfo {
   string work_path = 9;
   string java_path = 10;
   string run_flags = 11;
-  string analyzer_mode = 12;  // Run/Rcon/OnlyRcon/Management
+  string analyzer_mode = 12;  // RM / RUN / RR / RCON (旧名 Management/Run/Rcon/OnlyRcon 自动映射)
   string created_at = 13;
   string last_started_at = 14;
 }
@@ -356,6 +397,7 @@ message InstanceListResponse {
   string message = 2;
   repeated InstanceInfo instances = 3;
   repeated GroupInfo groups = 4;
+  string current_server_key = 5;    // RtCli 当前选中的实例(= server_list key), 免去前端再查较慢的 GetSystemStats
 }
 
 message CreateInstanceRequest {
@@ -475,6 +517,20 @@ message AiAnalyzeResponse {
   string result = 3;                // AI分析结果文本
 }
 
+// 基础分析响应(.fx base 规则匹配)
+message BaseAnalyzeResponse {
+  bool success = 1;
+  string message = 2;
+  repeated BaseMatch matches = 3;   // 命中的基础规则
+}
+
+message BaseMatch {
+  string topic = 1;                 // 问题主题
+  string solution = 2;              // 解决方案
+  string action = 3;                // 可执行的修复脚本名(可能为空)
+  string matched = 4;               // 命中的日志片段(截断)
+}
+
 // ===== 玩家事件监控 =====
 message PlayerEventRequest {
   string id = 1;                    // 实例ID(服务器标识)
@@ -498,6 +554,7 @@ message PlayerEventListResponse {
 // ===== 事件板(实例生命周期事件) =====
 message EventBoardRequest {
   int32 limit = 1;                  // 返回最近N条(0=全部)
+  string instance_id = 2;           // 可选过滤: 仅返回该实例事件(空=全部)
 }
 
 message BoardEvent {
@@ -515,6 +572,15 @@ message EventBoardResponse {
   string message = 2;
   int64 last_read_id = 3;           // 已读水位(id <= last_read_id 视为已读)
   repeated BoardEvent events = 4;
+}
+
+// 面板上报事件(如文件上传进度): event_key 非空且已存在则更新同一条(进度刷新), 否则追加新事件
+message ReportBoardEventRequest {
+  string event_key = 1;             // 稳定键(空=追加; 非空=同键更新, 保证一次操作只占一行)
+  string event_type = 2;            // 事件类型(如 file_upload)
+  string instance_id = 3;           // 实例标识(ServerList key)
+  string title = 4;                 // 主题
+  string detail = 5;                // 详细信息
 }
 
 // ===== 插件/模组管理 =====
@@ -626,6 +692,51 @@ message SimpleResponse {
   string message = 2;
 }
 
+// ===== 全服配置(RM 管理协议 serversettings) =====
+message ServerSettingEntry {
+  string key = 1;       // serversettings 键, 如 difficulty
+  string value = 2;     // 当前值(已序列化为字符串: 布尔 true/false、数字、字符串)
+  string type = 3;      // bool / int / enum / string
+  string label = 4;     // 中文显示名
+  repeated string options = 5; // enum 类型的可选值(bool/int/string 为空)
+}
+message ServerSettingsResponse {
+  bool success = 1;
+  string message = 2;
+  repeated ServerSettingEntry settings = 3;
+}
+message ServerSettingValue {
+  string key = 1;
+  string value = 2;
+}
+message SetServerSettingsRequest {
+  string instance_id = 1;
+  repeated ServerSettingValue values = 2;
+}
+
+// ===== RM 管理协议通用操作 =====
+// category: gamerules / allowlist / operators / bans / ip_bans / server / discover
+// action:   get / add / remove / clear / set(规则) / save / stop / system_message / status
+message ManageServerRequest {
+  string instance_id = 1;
+  string category = 2;
+  string action = 3;
+  string target = 4;   // 名称/规则名/IP
+  string value = 5;    // 值: 规则值 / 封禁原因 / 消息文本
+  bool flag = 6;       // system_message 是否作为标题叠加显示
+}
+message RmServerEntry {
+  string name = 1;     // 玩家名 / IP / 规则名
+  string value = 2;    // 封禁原因 / 规则值
+  string extra = 3;    // 附加信息(IP/UUID/来源等)
+}
+message ManageServerResponse {
+  bool success = 1;
+  string message = 2;
+  repeated RmServerEntry entries = 3;
+  string raw = 4;      // discover / status 的原始 JSON
+}
+
 // ===== 面板向导: 服务端下载 =====
 message ServerTypeInfoMsg {
   string name = 1;          // 显示名: "Paper (高性能)"
@@ -716,4 +827,258 @@ message ExtractArchiveResponse {
   bool success = 1;
   string message = 2;
   repeated string scripts = 3;  // 解压后工作目录第一层的 bat/cmd/sh 文件名
+}
+
+// ===== AI 技能管理 =====
+message AiSkillInfo {
+  string name = 1;          // 技能名称
+  string description = 2;   // 技能描述
+  string behavior = 3;      // 技能行为(详细说明)
+}
+
+message AiSkillListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated AiSkillInfo skills = 3;
+}
+
+message SaveAiSkillRequest {
+  string original_name = 1;  // 原技能名(空=新增; 非空=编辑, 用于在改名时定位)
+  string name = 2;
+  string description = 3;
+  string behavior = 4;
+}
+
+message DeleteAiSkillRequest {
+  string name = 1;
+}
+
+message ImportAiSkillsRequest {
+  string content = 1;   // JSON 或 YAML 文本(技能数组、含 skills 的对象或单个技能对象)
+  bool overwrite = 2;   // true=同名覆盖; false=跳过同名
+}
+
+// ===== AI 记忆 =====
+message AiMemoryInfo {
+  string time = 1;      // 时间
+  string topic = 2;     // 记忆主题
+  string content = 3;   // 记忆内容
+}
+
+message AiMemorySettings {
+  bool enabled = 1;                 // 是否启用AI记忆
+  bool use_ai = 2;                  // 是否用AI提炼(消耗token)
+  int32 max_tokens = 3;             // token使用限制(记忆提炼最大输出token)
+  int32 max_content_length = 4;     // 单条记忆内容最大字符数
+  int32 max_entries = 5;            // memory.json 最大条数
+  bool capture_server_info = 6;     // 记录服务器基本信息
+  bool capture_player_count = 7;    // 记录服务器玩家数量
+  bool capture_common_errors = 8;   // 记录服务器常见错误
+  string prompt = 9;                // AI提炼记忆提示词
+}
+
+message AiMemoryListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated AiMemoryInfo memories = 3;
+  AiMemorySettings settings = 4;
+}
+
+message AiMemorySettingsRequest {
+  AiMemorySettings settings = 1;
+}
+
+// ===== AI 自动化观测 =====
+message AiTaskStatus {
+  string key = 1;                        // 任务标识(如 tps_monitor)
+  string name = 2;                       // 任务名称
+  bool enabled = 3;                      // 是否启用
+  string trigger = 4;                    // 触发条件
+  string interval = 5;                   // cron 间隔
+  int32 min_trigger_interval_minutes = 6;// 最小触发间隔(分钟)
+  string actions = 7;                    // 动作(逗号分隔)
+  string last_run = 8;                   // 上次运行时间(空=从未运行)
+  int32 run_count = 9;                   // 累计执行次数
+  bool running = 10;                     // 该任务此刻是否正在执行
+}
+
+message AiAutomationStatusResponse {
+  bool success = 1;
+  string message = 2;
+  bool runner_running = 3;               // AI 自动化总开关是否开启
+  int32 memory_count = 4;                // 记忆条数
+  int64 memory_bytes = 5;                // memory.json 大小(字节)
+  int32 audit_count = 6;                 // 审计文件已记录条数
+  repeated AiTaskStatus tasks = 7;
+}
+
+message AiToolAuditRequest {
+  int32 limit = 1;                       // 取最近多少条(默认 100)
+}
+
+message AiToolAuditEntry {
+  string time = 1;
+  string task = 2;
+  string tool = 3;
+  string args = 4;
+  string result = 5;
+  bool ok = 6;
+}
+
+message AiToolAuditResponse {
+  bool success = 1;
+  string message = 2;
+  repeated AiToolAuditEntry entries = 3;
+  string file_path = 4;                  // 审计文件绝对路径(RtCli 侧)
+}
+
+message AiResponseListRequest {
+  int32 limit = 1;                       // 取最近多少条(默认 50)
+}
+
+message AiResponseItem {
+  string task_key = 1;
+  string task_name = 2;
+  string input_summary = 3;
+  string ai_response = 4;
+  string timestamp = 5;
+}
+
+message AiResponseListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated AiResponseItem responses = 3;
+  int32 total = 4;                       // 文件内总条数
+}
+
+message DeleteAiResponseRequest {
+  string timestamp = 1;                  // 时间戳(yyyy-MM-dd HH:mm:ss)
+  string task_key = 2;                   // 任务标识(可空; 用于同时间戳时精确定位)
+}
+
+// ===== AI 自动化规则 =====
+message AiRuleListResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string rules = 3;         // 规则列表(逐条注入系统提示)
+  string system_prompt = 4;          // 系统总提示词(只读展示)
+  bool runner_running = 5;           // AI 自动化是否运行中
+}
+
+message AiRuleListRequest {
+  repeated string rules = 1;
+}
+
+// ===== AI 工作流(ai_settings.yml 的 ServerAutoAi 段) =====
+message AiTaskConfig {
+  string key = 1;                           // 任务标识(字典键, 如 tps_monitor)
+  bool enabled = 2;                         // 是否启用
+  string name = 3;                          // 任务名称
+  string trigger = 4;                       // 触发条件
+  repeated string input = 5;                // 数据源
+  int32 limit = 6;                          // 提示词+输入内容最大token量
+  string prompt = 7;                        // 该任务的提示词
+  string interval = 8;                      // 6段Cron表达式
+  repeated string actions = 9;              // 执行动作(ai / tools:工具名1,工具名2)
+  int32 min_trigger_interval_minutes = 10;  // 最小触发间隔(分钟)
+  int32 error_similarity_threshold = 11;    // 错误相似度阈值(百分比)
+  int32 error_cache_minutes = 12;           // 错误缓存时长(分钟)
+  repeated string server_keys = 13;         // 生效实例标识(空=全部实例; 当前实例不在列表中的任务不注册/不触发)
+}
+
+message AiRuntimeConfig {
+  string prompt = 1;                        // 系统提示词(总)
+  int32 max_tokens = 2;                     // AI输出最大token数
+  string api_endpoint = 3;                  // API地址(留空复用Console_Error配置)
+  bool api_key_set = 4;                     // 是否已配置密钥
+  string api_key_masked = 5;                // 密钥掩码串(不回传明文)
+  string model = 6;                         // 模型名称
+  double temperature = 7;                   // 生成温度
+  int32 request_timeout_seconds = 8;        // 请求超时(秒)
+  bool retry_on_error = 9;                  // 异常时是否自动重连
+  int32 retry_count = 10;                   // 最大重试次数
+  bool save_response = 11;                  // 是否保存AI回复
+  int32 context_cache_size = 12;            // 上下文缓存最大条数
+  int32 max_tool_rounds = 13;               // 工具调用最大轮次
+  string api_key = 14;                      // 密钥明文: 仅提交时使用; 响应中恒为空(仅回传 api_key_set/api_key_masked)
+}
+
+message AiWorkflowResponse {
+  bool success = 1;
+  string message = 2;
+  AiRuntimeConfig runtime = 3;              // AI 运行参数
+  repeated AiTaskConfig tasks = 4;          // 任务列表(工作流)
+  repeated string available_tools = 5;      // 内置工具名(actions 中 tools: 可选值)
+  repeated string default_triggers = 6;     // 合法触发条件提示
+  string file_path = 7;                     // ai_settings.yml 路径
+  bool runner_running = 8;                  // AI 自动化是否运行中
+  repeated string available_events = 9;     // 合法事件名(内置事件 + CustomPlayerEvent + 自定义事件, 供 event: 触发条件使用)
+}
+
+message AiTaskRequest {
+  AiTaskConfig task = 1;
+  string original_key = 2;                  // 原键名(非空且与 task.key 不同时=改名, 用于定位旧键)
+}
+
+message AiTaskKeyRequest {
+  string key = 1;
+}
+
+message AiRuntimeRequest {
+  AiRuntimeConfig runtime = 1;              // runtime.api_key 为空串表示不修改密钥
+}
+
+// ===== 调度器任务(蓝图编辑器) =====
+message SchedulerTaskInfo {
+  string key = 1;
+  bool enabled = 2;
+  string trigger = 3;                // 触发条件(cron:/every:/daily:/date:/event:/组合)
+  string condition = 4;              // 前置条件
+  string execute = 5;                // 执行内容(script:/backup/restart/command:)
+  bool pass_parameters = 6;
+  repeated string server_keys = 7;   // 生效实例(空=全部)
+  int32 timeout_ms = 8;
+  int32 delay_minutes = 9;
+  string delay_until = 10;
+  bool execute_immediately = 11;
+  int32 max_executions = 12;
+  string expire_at = 13;
+  string queue = 14;
+  int32 run_count = 15;
+}
+
+message SchedulerTaskListResponse {
+  bool success = 1;
+  string message = 2;
+  bool is_running = 3;
+  repeated SchedulerTaskInfo tasks = 4;
+  repeated string scripts = 5;      // 可用脚本名(执行方式=script 时下拉)
+  repeated string events = 6;       // 合法事件名(触发方式=event 时下拉)
+  repeated string servers = 7;      // 已配置实例标识(生效实例下拉)
+}
+
+message SchedulerTaskRequest {
+  SchedulerTaskInfo task = 1;
+}
+
+message SchedulerTaskKeyRequest {
+  string key = 1;
+}
+
+// ===== 插件更新(Modrinth) =====
+message UpdatePluginRequest {
+  string id = 1;          // 实例标识
+  string file_name = 2;   // plugins 目录下的文件名(可含 .disjar)
+  bool apply = 3;         // false=只检查版本, true=下载并替换
+}
+
+message UpdatePluginResponse {
+  bool success = 1;
+  string message = 2;
+  bool has_update = 3;
+  string local_version = 4;
+  string remote_version = 5;
+  string project_title = 6;
+  string download_url = 7;
+  string new_file_name = 8;
 }

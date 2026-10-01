@@ -9,12 +9,12 @@ namespace Rt.Common
     /// <summary>
     /// Minecraft 服务器状态响应数据模型
     /// </summary>
-    public class McStatusResponse
+    public class MCStatusResponse
     {
-        public McVersion? Version { get; set; }
-        public McPlayers? Players { get; set; }
+        public MCVersion? Version { get; set; }
+        public MCPlayers? Players { get; set; }
         public JsonElement Description { get; set; }
-        public McFavicon? Favicon { get; set; }
+        public MCFavicon? Favicon { get; set; }
         public int? PreviewsChat { get; set; }
         public int? EnforcesSecureChat { get; set; }
 
@@ -32,26 +32,26 @@ namespace Rt.Common
         }
     }
 
-    public class McVersion
+    public class MCVersion
     {
         public string Name { get; set; } = "";
         public int Protocol { get; set; }
     }
 
-    public class McPlayers
+    public class MCPlayers
     {
         public int Max { get; set; }
         public int Online { get; set; }
-        public McPlayerSample[]? Sample { get; set; }
+        public MCPlayerSample[]? Sample { get; set; }
     }
 
-    public class McPlayerSample
+    public class MCPlayerSample
     {
         public string Name { get; set; } = "";
         public string Id { get; set; } = "";
     }
 
-    public class McFavicon
+    public class MCFavicon
     {
         public string? Data { get; set; }
     }
@@ -60,12 +60,12 @@ namespace Rt.Common
     /// Minecraft Server List Ping 协议实现
     /// 协议参考: https://wiki.vg/Server_List_Ping
     /// </summary>
-    public static class McPingProtocol
+    public static class MCPingProtocol
     {
         /// <summary>
         /// 查询MC服务器状态，返回(状态, 延迟ms)。失败抛出异常。
         /// </summary>
-        public static (McStatusResponse Status, int LatencyMs) Query(string host, int port, int timeoutSeconds = 5)
+        public static (MCStatusResponse Status, int LatencyMs) Query(string host, int port, int timeoutSeconds = 5)
         {
             using var client = new TcpClient();
             var connectResult = client.BeginConnect(host, port, null, null);
@@ -106,7 +106,7 @@ namespace Rt.Common
 
                 string json = ReadString(rs);
                 var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var status = JsonSerializer.Deserialize<McStatusResponse>(json, options)
+                var status = JsonSerializer.Deserialize<MCStatusResponse>(json, options)
                     ?? throw new InvalidDataException("状态响应JSON解析失败");
 
                 // 4. 发送Ping包 (0x01, 8字节payload)

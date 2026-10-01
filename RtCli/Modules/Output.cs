@@ -21,6 +21,12 @@ namespace RtCli.Modules
         private static ILogger? _logger;
         private static TextWriter? _originalConsoleOut;
         private static ConsoleInterceptor? _interceptor;
+
+        /// <summary>
+        /// 按异步流捕获控制台输出(脚本条件求值等场景使用)。
+        /// 仅当前异步流可见, 不修改进程级 Console.Out, 避免并发任务互相抢占输出。
+        /// </summary>
+        internal static readonly AsyncLocal<TextWriter?> AmbientCapture = new AsyncLocal<TextWriter?>();
         private static bool _isLoggingInitialized = false;
         private static readonly object _logLock = new object();
 
@@ -36,10 +42,11 @@ namespace RtCli.Modules
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>
-        /// 日志广播钩子：参数依次为 timestamp, level, source, message。
+        /// 日志广播钩子：参数依次为 timestamp, level, source, message, instanceId。
+        /// instanceId 取当前异步流的实例上下文(空表示全局消息, 面板所有实例控制台都显示)。
         /// 由 Backend.Initialize 挂载，将日志推送到已连接的 gRPC 面板。
         /// </summary>
-        public static Action<string, int, string, string>? OnLogBroadcast;
+        public static Action<string, int, string, string, string?>? OnLogBroadcast;
 
         public static void InitializeLogging()
         {
@@ -108,34 +115,44 @@ namespace RtCli.Modules
             string warn = $"[white on dodgerblue2][[{time}]][/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + " [black on gold1]警告[/] ";
 
             msg = RedactSensitive(msg);
-            string plainMsg = StripMarkup(msg);
+            // 先判别整条消息是否是合法的 Spectre markup:
+            //   合法 -> 按 markup 处理(保留颜色, 纯文本用 StripMarkup 去掉标签);
+            //   非法 -> 整条按普通文本处理(整体转义), 避免 "[文件名]" 这类字面方括号
+            //           被当成样式标签解析失败后, 连同括号里的内容一起被删掉。
+            bool isMarkup = IsValidMarkup(msg);
+            string plainMsg = isMarkup ? StripMarkup(msg) : msg;
+            string consoleMsg = isMarkup ? msg : Markup.Escape(msg);
 
             try
             {
                 switch (msg_type)
                 {
                     case 1:
-                        AnsiConsole.Markup(info + msg + "\n");
+                        AnsiConsole.Markup(info + consoleMsg + "\n");
                         _logger?.Information("[MainThread - {Task}] {Message}", Task, plainMsg);
                         break;
                     case 2:
-                        AnsiConsole.Markup(warn + msg + "\n");
+                        AnsiConsole.Markup(warn + consoleMsg + "\n");
                         _logger?.Warning("[MainThread - {Task}] {Message}", Task, plainMsg);
                         break;
                     case 3:
-                        AnsiConsole.Markup(error + msg + "\n");
+                        AnsiConsole.Markup(error + consoleMsg + "\n");
                         _logger?.Error("[MainThread - {Task}] {Message}", Task, plainMsg);
                         break;
                     default:
-                        AnsiConsole.Markup($"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on white]调试[/] " + msg + "\n");
+                        AnsiConsole.Markup($"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on white]调试[/] " + consoleMsg + "\n");
                         _logger?.Debug("[MainThread - {Task}] {Message}", Task, plainMsg);
                         break;
                 }
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("Could not find color or style"))
+            // 任意标记解析失败都回退为转义纯文本: 日志本身绝不能抛异常。
+            // 原先只匹配 "Could not find color or style", 遇到未闭合 [ / 孤立 [/] 这类
+            // "Encountered malformed markup tag" 会把异常直接抛给调用方,
+            // 而调用方常常是 AI 任务与工具回调(模型输出、工具结果里满是方括号)。
+            catch (Exception)
             {
-                // 消息包含无效的Spectre标记，回退到安全转义输出
-                string safeMsg = Markup.Escape(plainMsg);
+                // 消息包含无效的Spectre标记，回退为整体转义(保留原文, 不删除方括号内容)
+                string safeMsg = Markup.Escape(msg);
                 switch (msg_type)
                 {
                     case 1: AnsiConsole.Markup(info + safeMsg + "\n"); break;
@@ -143,7 +160,7 @@ namespace RtCli.Modules
                     case 3: AnsiConsole.Markup(error + safeMsg + "\n"); break;
                     default: AnsiConsole.Markup($"[white on dodgerblue2]{time}[/]" + $"[white on steelblue1][[MainThread - {Task}]][/]" + "[black on white]调试[/] " + safeMsg + "\n"); break;
                 }
-                _logger?.Warning("[MainThread - {Task}] 输出消息包含无效Spectre标记，已回退转义: {Message}", Task, plainMsg);
+                _logger?.Debug("[MainThread - {Task}] 输出消息包含无效Spectre标记，已回退转义: {Message}", Task, plainMsg);
             }
         }
 
@@ -167,9 +184,15 @@ namespace RtCli.Modules
         {
             string time = DateTime.Now.ToString("HH:mm:ss");
             msg = RedactSensitive(msg);
-            string plainMsg = StripMarkup(msg);
+            // 先判别整条消息是否是合法的 Spectre markup:
+            //   合法 -> 按 markup 处理(保留颜色, 纯文本用 StripMarkup 去掉标签);
+            //   非法 -> 整条按普通文本处理(整体转义), 避免 "[文件名]"、"[{任务}]" 这类字面方括号
+            //           被当成样式标签解析失败后, 连同括号里的内容一起被删掉。
+            bool isMarkup = IsValidMarkup(msg);
+            string plainMsg = isMarkup ? StripMarkup(msg) : msg;
             // 仅用于控制台显示的过滤(如移除MC日志行首时间戳)，不影响日志记录和gRPC广播
             string displayMsg = StripForConsole(msg);
+            string consoleMsg = isMarkup ? displayMsg : Markup.Escape(displayMsg);
             string name = string.IsNullOrEmpty(names) ? "Null" : names;
             string threadName = Thread.CurrentThread.Name ?? "Null";
 
@@ -189,15 +212,15 @@ namespace RtCli.Modules
                         _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                     case 1:
-                        AnsiConsole.Markup(prefix + displayMsg + "\n");
+                        AnsiConsole.Markup(prefix + consoleMsg + "\n");
                         _logger?.Information("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                     case 2:
-                        AnsiConsole.Markup(prefix + displayMsg + "\n");
+                        AnsiConsole.Markup(prefix + consoleMsg + "\n");
                         _logger?.Warning("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                     case 3:
-                        AnsiConsole.Markup(prefix + displayMsg + "\n");
+                        AnsiConsole.Markup(prefix + consoleMsg + "\n");
                         _logger?.Error("[{Thread}-{ThreadId}] ({Name}) {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
                         break;
                     default:
@@ -206,10 +229,14 @@ namespace RtCli.Modules
                         break;
                 }
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("Could not find color or style"))
+            // 任意标记解析失败都回退为转义纯文本: 日志本身绝不能抛异常。
+            // 原先只匹配 "Could not find color or style", 遇到未闭合 [ / 孤立 [/] 这类
+            // "Encountered malformed markup tag" 会把异常直接抛给调用方,
+            // 而调用方常常是 AI 任务与工具回调(模型输出、工具结果里满是方括号)。
+            catch (Exception)
             {
-                // 消息包含无效的Spectre标记，回退到安全转义输出
-                string safeMsg = Markup.Escape(StripMarkup(displayMsg));
+                // 消息包含无效的Spectre标记，回退为整体转义(保留原文, 不删除方括号内容)
+                string safeMsg = Markup.Escape(displayMsg);
                 try
                 {
                     switch (msg_type)
@@ -221,19 +248,84 @@ namespace RtCli.Modules
                         default: AnsiConsole.Markup($"[white][[{time}]][/] " + "[white]|[/][yellow]调试[/][white]| [/]" + $"[white][[{threadName}-{Thread.CurrentThread.ManagedThreadId}]][/] " + $"[dodgerblue1]({Markup.Escape(name)})[/] " + safeMsg + "\n"); break;
                     }
                 }
-                catch { Console.WriteLine($"[{time}] ({name}) {plainMsg}"); }
-                _logger?.Warning("[{Thread}-{ThreadId}] ({Name}) 输出消息包含无效Spectre标记，已回退转义: {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
+                catch
+                {
+                    // 连转义后的标记都写不出去: 退回裸控制台, 但文件日志仍完整
+                    try { Console.WriteLine($"[{time}] ({name}) {plainMsg}"); }
+                    catch { /* 控制台不可用则放弃 */ }
+                }
+                _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) 输出消息包含无效Spectre标记，已回退转义: {Message}", threadName, Thread.CurrentThread.ManagedThreadId, name, plainMsg);
             }
 
             // 广播日志到已连接的 gRPC 面板(使用原始plainMsg，不受控制台过滤影响)
             if (OnLogBroadcast != null)
             {
-                try { OnLogBroadcast(time, msg_type, name, plainMsg); }
+                try { OnLogBroadcast(time, msg_type, name, plainMsg, Function.InstanceContext.Current); }
                 catch { }
             }
         }
 
-        private static string StripMarkup(string text)
+        /// <summary>
+        /// 文件级调试日志: 只写入日志文件(Serilog), 不输出到控制台, 也不广播到面板。
+        /// 用于非热路径(配置加载/备份/启动与退出钩子)中被吞掉的异常, 留下排查痕迹而不打扰控制台。
+        /// 日志自身失败不会影响调用方。
+        /// </summary>
+        public static void Debug(string msg, string? names = null)
+        {
+            try
+            {
+                string name = string.IsNullOrEmpty(names) ? "Null" : names;
+                string threadName = Thread.CurrentThread.Name ?? "Null";
+                string text = StripMarkup(RedactSensitive(msg ?? ""));
+                _logger?.Debug("[{Thread}-{ThreadId}] ({Name}) {Message}",
+                    threadName, Thread.CurrentThread.ManagedThreadId, name, text);
+            }
+            catch { /* 日志失败不应影响调用方 */ }
+        }
+
+        /// <summary>文件级调试日志(带异常): 记录上下文、异常类型与消息</summary>
+        public static void Debug(Exception ex, string context, string? names = null)
+            => Debug($"{context}: {ex.GetType().Name}: {ex.Message}", names);
+
+        // 用于判定 "整条消息是否为合法 Spectre markup" 的探针控制台(输出丢弃)。
+        // 每条线程各自持有一个, 避免日志热路径上的锁竞争。
+        [ThreadStatic] private static IAnsiConsole? _markupProbe;
+
+        /// <summary>
+        /// 判定整条消息是否是合法的 Spectre markup。
+        /// 日志消息既可能是带颜色的 markup(如 "[green]完成[/]"), 也可能是夹带字面方括号的普通文本
+        /// (如 "实例文件 [a.jar] 已由面板上传")。后者若直接交给 AnsiConsole.Markup 会解析失败,
+        /// 旧的回退逻辑用 StripMarkup 处理导致方括号连同内容(文件名)一起消失。
+        /// 因此先用丢弃输出的探针控制台试解析一次, 调用方据此选择 markup 或纯文本输出。
+        /// </summary>
+        private static bool IsValidMarkup(string markup)
+        {
+            if (string.IsNullOrEmpty(markup) || markup.IndexOf('[') < 0) return false;
+
+            try
+            {
+                var probe = _markupProbe;
+                if (probe == null)
+                {
+                    probe = AnsiConsole.Create(new AnsiConsoleSettings
+                    {
+                        Ansi = AnsiSupport.No,
+                        ColorSystem = ColorSystemSupport.NoColors,
+                        Interactive = InteractionSupport.No,
+                        Out = new AnsiConsoleOutput(TextWriter.Null)
+                    });
+                    _markupProbe = probe;
+                }
+                probe.Markup(markup);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        internal static string StripMarkup(string text)
         {
             if (string.IsNullOrEmpty(text)) return text;
             
@@ -273,6 +365,64 @@ namespace RtCli.Modules
             }
             
             return result.ToString();
+        }
+
+        /// <summary>
+        /// 计算文本在终端中的显示宽度(以单元格计)。
+        /// CJK/全角/emoji 计 2, 组合符与零宽字符计 0, 其余计 1。
+        /// 用于给表格单元格补空格, 避免含中文等宽字符的数据撑歪表格边框。
+        /// </summary>
+        public static int DisplayWidth(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            int width = 0;
+            foreach (var rune in text.EnumerateRunes())
+            {
+                if (Rune.IsControl(rune)) continue;
+                var cat = Rune.GetUnicodeCategory(rune);
+                // 组合符/格式符(含 ZWJ、变体选择符)不占位
+                if (cat == System.Globalization.UnicodeCategory.NonSpacingMark ||
+                    cat == System.Globalization.UnicodeCategory.EnclosingMark ||
+                    cat == System.Globalization.UnicodeCategory.Format)
+                    continue;
+                width += IsWideRune(rune.Value) ? 2 : 1;
+            }
+            return width;
+        }
+
+        /// <summary>判断码点是否属于东亚宽字符/全角/emoji(显示 2 单元格)</summary>
+        private static bool IsWideRune(int cp)
+        {
+            return
+                (cp >= 0x1100 && cp <= 0x115F) ||   // Hangul Jamo
+                (cp >= 0x2329 && cp <= 0x232A) ||
+                (cp >= 0x2E80 && cp <= 0x303E) ||   // CJK Radicals ~ CJK Symbols/Punctuation
+                (cp >= 0x3041 && cp <= 0x33FF) ||   // Hiragana ~ CJK Compatibility
+                (cp >= 0x3400 && cp <= 0x4DBF) ||   // CJK Ext A
+                (cp >= 0x4E00 && cp <= 0x9FFF) ||   // CJK Unified
+                (cp >= 0xA000 && cp <= 0xA4CF) ||   // Yi
+                (cp >= 0xA960 && cp <= 0xA97F) ||
+                (cp >= 0xAC00 && cp <= 0xD7A3) ||   // Hangul Syllables
+                (cp >= 0xF900 && cp <= 0xFAFF) ||   // CJK Compatibility Ideographs
+                (cp >= 0xFE10 && cp <= 0xFE19) ||
+                (cp >= 0xFE30 && cp <= 0xFE6F) ||
+                (cp >= 0xFF00 && cp <= 0xFF60) ||   // Fullwidth Forms
+                (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+                (cp >= 0x1F300 && cp <= 0x1F64F) || // Emoji
+                (cp >= 0x1F900 && cp <= 0x1F9FF) ||
+                (cp >= 0x1F680 && cp <= 0x1F6FF) ||
+                (cp >= 0x20000 && cp <= 0x3FFFD);   // CJK Ext B+
+        }
+
+        /// <summary>
+        /// 按显示宽度用空格右填充(用于表格对齐; 支持含 Spectre 标记的文本, 测量时忽略标记)。
+        /// 已达到或超过目标宽度时原样返回。
+        /// </summary>
+        public static string PadDisplay(string? text, int targetWidth)
+        {
+            text ??= string.Empty;
+            int w = DisplayWidth(StripMarkup(text));
+            return w >= targetWidth ? text : text + new string(' ', targetWidth - w);
         }
 
         /// <summary>
@@ -495,11 +645,16 @@ namespace RtCli.Modules
 
         public override void Write(char value)
         {
+            // 当前异步流设置了捕获器时只写入捕获器(等价于局部重定向, 不影响其他并发任务)
+            var capture = Output.AmbientCapture.Value;
+            if (capture != null) { capture.Write(value); return; }
             _originalOut.Write(value);
         }
 
         public override void Write(string? value)
         {
+            var capture = Output.AmbientCapture.Value;
+            if (capture != null) { capture.Write(value); return; }
             _originalOut.Write(value);
             if (!string.IsNullOrEmpty(value))
             {
@@ -509,6 +664,8 @@ namespace RtCli.Modules
 
         public override void WriteLine(string? value)
         {
+            var capture = Output.AmbientCapture.Value;
+            if (capture != null) { capture.WriteLine(value); return; }
             _originalOut.WriteLine(value);
             if (!string.IsNullOrEmpty(value))
             {
@@ -518,6 +675,8 @@ namespace RtCli.Modules
 
         public override void WriteLine()
         {
+            var capture = Output.AmbientCapture.Value;
+            if (capture != null) { capture.WriteLine(); return; }
             _originalOut.WriteLine();
         }
     }

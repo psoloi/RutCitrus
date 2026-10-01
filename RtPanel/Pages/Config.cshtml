@@ -31,21 +31,14 @@
             <div class="header-title">
                 <span id="currentFileTitle" class="text-sky">未选择文件</span>
                 <small id="currentFileDesc" class="text-muted ms-2"></small>
+                <span id="fileHint" class="feature-hint" hidden><span class="feature-spinner" hidden></span><span class="feature-hint-text"></span></span>
             </div>
             <div class="header-actions">
-                <span id="versionSelectorWrap" class="me-2" style="display:none;">
-                    <label class="small text-muted me-1">MC 版本:</label>
-                    <select id="versionSelector" class="form-select form-select-sm d-inline-block" style="width:auto;">
-                        <option value="1.21">1.21</option>
-                    </select>
-                </span>
                 <button class="btn btn-sm btn-outline-info" onclick="reloadCurrent()" id="reloadBtn" title="从服务器重新加载(丢弃本地未保存修改)">刷新</button>
                 <button class="btn btn-sm btn-primary" onclick="saveCurrent()" id="saveBtn" title="保存到服务器(不重载)">保存</button>
                 <button class="btn btn-sm btn-outline-warning" onclick="hotReload()" title="向服务端发送热重载命令(不保存)">热重载</button>
             </div>
         </header>
-
-        <div id="statusMsg" class="alert mb-2 mx-3 mt-2" style="display:none;"></div>
 
         <div class="config-tabs-wrap mx-3 mt-2">
             <ul class="nav nav-tabs" id="configTabs">
@@ -99,10 +92,12 @@
     let currentFileSource = 'rtcli'; // rtcli | server
     let currentCategory = '';
     let knownRtcliFiles = [];
-    let knownServerFiles = [];
-    let currentServerKey = '';
+    let instances = [];                 // 实例列表(每个实例一个分组)
+    let serverFilesCache = {};          // serverKey -> 该实例的文件列表
+    let expandedInstances = new Set();  // 已展开的实例子分组
+    let currentServerKey = '';          // 当前正在编辑/读取文件所属的实例
     let propertiesSchema = null;
-    let currentVersion = '26.2';
+    let currentVersion = 'all'; // 界面不再提供 MC 版本选择, 统一使用全部字段
     let searchMode = 'files';
     let itemSearchIndex = []; // [{file, source, path, key, value, type, comment}]
 
@@ -128,12 +123,19 @@
         return `<div class="config-comment text-muted small mt-1 ps-2 border-start border-secondary">${lines.join('<br>')}</div>`;
     }
 
+    // 状态提示: 标题旁的小提示框(与功能页一致), 自动消失
+    let statusTimer = null;
     function showStatus(msg, type) {
-        const el = document.getElementById('statusMsg');
-        el.className = `alert alert-${type} mb-2 mx-3 mt-2`;
-        el.textContent = msg;
-        el.style.display = 'block';
-        setTimeout(() => { el.style.display = 'none'; }, 4000);
+        const hint = document.getElementById('fileHint');
+        if (!hint) return;
+        const txt = hint.querySelector('.feature-hint-text');
+        const kind = ['info', 'success', 'warning', 'danger'].includes(type) ? type : 'info';
+        hint.className = 'feature-hint feature-hint-' + kind;
+        txt.textContent = msg || '';
+        hint.title = msg || '';
+        hint.hidden = false;
+        if (statusTimer) clearTimeout(statusTimer);
+        statusTimer = setTimeout(() => { hint.hidden = true; statusTimer = null; }, 4000);
     }
 
     function isModified() {
@@ -178,40 +180,104 @@
     });
 
     // === 文件树渲染 ===
+    // 懒加载某实例的配置文件列表(缓存到 map)
+    async function ensureInstanceFiles(key) {
+        if (serverFilesCache[key]) return serverFilesCache[key];
+        try {
+            const res = await fetch(`/api/serverfile/list?serverKey=${encodeURIComponent(key)}`);
+            const data = await res.json();
+            if (data.success && data.files) {
+                serverFilesCache[key] = data.files;
+                return data.files;
+            }
+        } catch (e) { }
+        return null;
+    }
+
+    // 加载全部实例的文件列表(供文件名搜索用)
+    async function ensureAllInstanceFiles() {
+        const missing = instances.filter(i => !serverFilesCache[i.id]).map(i => i.id);
+        if (missing.length === 0) return;
+        await Promise.all(missing.map(k => ensureInstanceFiles(k)));
+    }
+
+    // 展开/折叠实例子分组(展开时惰性加载其文件)
+    async function toggleInstance(key) {
+        if (!key) return;
+        if (expandedInstances.has(key)) {
+            expandedInstances.delete(key);
+            renderFileTree();
+            return;
+        }
+        expandedInstances.add(key);
+        renderFileTree();
+        if (!serverFilesCache[key]) {
+            await ensureInstanceFiles(key);
+            if (expandedInstances.has(key)) renderFileTree();
+        }
+    }
+
+    function findServerFile(key, fileName) {
+        const arr = serverFilesCache[key] || [];
+        return arr.find(f => f.fileName === fileName) || null;
+    }
+
     async function loadFileList() {
         const tree = document.getElementById('fileTree');
         tree.innerHTML = '<div class="tree-placeholder text-muted small">加载中…</div>';
 
-        const tasks = [
+        const [rtcliRes, instancesRes] = await Promise.all([
             fetch('/api/config/files').then(r => r.json()).catch(() => ({ success: false, files: [] })),
-            fetch(`/api/serverfile/list${urlServerKey ? '?serverKey=' + encodeURIComponent(urlServerKey) : ''}`)
-                .then(r => r.json()).catch(() => ({ success: false, files: [] }))
-        ];
-        const [rtcliRes, serverRes] = await Promise.all(tasks);
+            fetch('/api/instances/list').then(r => r.json()).catch(() => ({ success: false, instances: [] }))
+        ]);
 
         knownRtcliFiles = (rtcliRes.success && rtcliRes.files) ? rtcliRes.files : [];
-        knownServerFiles = (serverRes.success && serverRes.files) ? serverRes.files : [];
-        currentServerKey = serverRes.serverKey || '';
+        instances = (instancesRes.success && instancesRes.instances) ? instancesRes.instances : [];
+
+        // 深链指定的实例不在列表中时(如已隐藏)也补一条, 保证能定位
+        if (urlSource === 'server' && urlServerKey && !instances.some(i => i.id === urlServerKey)) {
+            instances.unshift({ id: urlServerKey, identifier: urlServerKey, name: urlServerKey, isRunning: false });
+        }
+
+        // 无实例列表时(未连接/无实例), 回退为按当前实例加载单组
+        if (instances.length === 0) {
+            const res = await fetch(`/api/serverfile/list${urlServerKey ? '?serverKey=' + encodeURIComponent(urlServerKey) : ''}`)
+                .then(r => r.json()).catch(() => null);
+            if (res && res.success && res.files) {
+                const k = res.serverKey || urlServerKey || '__current__';
+                serverFilesCache[k] = res.files;
+                expandedInstances.add(k);
+                instances = [{ id: k, identifier: res.serverKey || '', name: res.serverName || '当前实例', isRunning: false }];
+            }
+        } else if (urlSource === 'server' && urlServerKey) {
+            // 深链: 自动展开目标实例并加载其文件
+            expandedInstances.add(urlServerKey);
+            await ensureInstanceFiles(urlServerKey);
+        }
 
         renderFileTree();
+
         // 优先选择 URL 深链指定的文件(来自文件管理等页面的跳转)
         if (urlFile && !currentFileName) {
-            const pool = urlSource === 'rtcli' ? knownRtcliFiles : knownServerFiles;
-            const hit = pool.find(f => f.fileName === urlFile);
-            if (hit) selectFile(hit.fileName, urlSource, hit.displayName);
+            if (urlSource === 'rtcli') {
+                const hit = knownRtcliFiles.find(f => f.fileName === urlFile);
+                if (hit) selectFile(hit.fileName, 'rtcli', hit.displayName);
+            } else if (urlServerKey) {
+                const hit = findServerFile(urlServerKey, urlFile);
+                if (hit) selectFile(hit.fileName, 'server', hit.displayName, urlServerKey);
+            }
         }
-        // 自动选择第一个文件
+        // 自动选择第一个 RtCli 文件
         if (!currentFileName && knownRtcliFiles.length > 0) {
             selectFile(knownRtcliFiles[0].fileName, 'rtcli', knownRtcliFiles[0].displayName);
-        } else if (!currentFileName && knownServerFiles.length > 0) {
-            selectFile(knownServerFiles[0].fileName, 'server', knownServerFiles[0].displayName);
         }
     }
 
     function renderFileTree() {
         const tree = document.getElementById('fileTree');
         const filter = (document.getElementById('searchInput').value || '').toLowerCase().trim();
-        const showAll = searchMode !== 'files' || !filter;
+        const searchingFiles = searchMode === 'files' && !!filter;
+        const showAll = !searchingFiles;
 
         let html = '';
 
@@ -224,35 +290,26 @@
             html += renderTreeGroup('rtcli', 'RtCli 配置文件', rtcliFiltered, knownRtcliFiles.length);
         }
 
-        // === MC 服务端配置文件组(按子分类分组) ===
-        const serverFiltered = knownServerFiles.filter(f =>
-            showAll || f.fileName.toLowerCase().includes(filter) ||
-            (f.displayName || '').toLowerCase().includes(filter)
-        );
-        if (knownServerFiles.length > 0) {
-            const notConnected = currentServerKey ? null : '<span class="text-warning small">未连接服务端</span>';
-            // 按 path 分组
-            const coreFiles = serverFiltered.filter(f => !f.fileName.includes('/'));
-            const configFiles = serverFiltered.filter(f => f.fileName.startsWith('config/'));
-            const pluginFiles = serverFiltered.filter(f => f.fileName.startsWith('plugins/'));
-            const modFiles = serverFiltered.filter(f => f.fileName.startsWith('mods/'));
-            const otherFiles = serverFiltered.filter(f =>
-                f.fileName.includes('/') &&
-                !f.fileName.startsWith('config/') &&
-                !f.fileName.startsWith('plugins/') &&
-                !f.fileName.startsWith('mods/')
-            );
-
+        // === MC 服务端配置(按实例分组) ===
+        let serverMatchCount = 0;
+        if (instances.length > 0) {
             html += `<div class="tree-group">`;
             html += `<div class="tree-group-header">
-                <span class="tree-arrow">▶</span> MC 服务端配置
-                <span class="tree-count">${serverFiltered.length}</span>${notConnected || ''}</div>`;
+                <span class="tree-twisty">▾</span>
+                <span class="tree-icon">📁</span>
+                <span class="tree-name">MC 服务端配置</span>
+                <span class="tree-count">${instances.length} 实例</span></div>`;
             html += `<div class="tree-group-body">`;
-            if (coreFiles.length) html += renderTreeGroup('server', '核心配置', coreFiles, coreFiles.length);
-            if (configFiles.length) html += renderTreeGroup('server', 'config 目录', configFiles, configFiles.length);
-            if (pluginFiles.length) html += renderTreeGroup('server', '插件配置', pluginFiles, pluginFiles.length);
-            if (modFiles.length) html += renderTreeGroup('server', '模组配置', modFiles, modFiles.length);
-            if (otherFiles.length) html += renderTreeGroup('server', '其他配置', otherFiles, otherFiles.length);
+            for (const inst of instances) {
+                const files = serverFilesCache[inst.id];
+                if (searchingFiles && files) {
+                    serverMatchCount += files.filter(f =>
+                        f.fileName.toLowerCase().includes(filter) ||
+                        (f.displayName || '').toLowerCase().includes(filter)).length;
+                }
+                const expanded = searchingFiles || expandedInstances.has(inst.id);
+                html += renderInstanceGroup(inst, files, expanded, { filter, showAll });
+            }
             html += `</div></div>`;
         }
 
@@ -260,11 +317,16 @@
             tree.innerHTML = '<div class="tree-placeholder text-muted small">无匹配文件</div>';
         } else {
             tree.innerHTML = html;
-            // 绑定折叠(阻止冒泡以支持嵌套)
+            // 绑定折叠(阻止冒泡以支持嵌套); 实例子分组点击时惰性加载
             tree.querySelectorAll('.tree-group-header').forEach(h => {
                 h.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    h.parentElement.classList.toggle('collapsed');
+                    const grp = h.parentElement;
+                    if (grp.classList.contains('tree-instance')) {
+                        toggleInstance(grp.dataset.instanceKey);
+                    } else {
+                        grp.classList.toggle('collapsed');
+                    }
                 });
             });
             // 绑定文件点击
@@ -273,20 +335,23 @@
                     const name = f.dataset.fileName;
                     const source = f.dataset.source;
                     const display = f.dataset.displayName || name;
-                    selectFile(name, source, display);
+                    const serverKey = f.dataset.serverKey || '';
+                    selectFile(name, source, display, serverKey);
                 });
             });
-            // 高亮当前文件
+            // 高亮当前文件(server 文件还需匹配实例 key)
             if (currentFileName) {
-                const cur = tree.querySelector(`.tree-file[data-file-name="${CSS.escape(currentFileName)}"][data-source="${currentFileSource}"]`);
+                let sel = `.tree-file[data-file-name="${CSS.escape(currentFileName)}"][data-source="${currentFileSource}"]`;
+                if (currentFileSource === 'server') sel += `[data-server-key="${CSS.escape(currentServerKey || '')}"]`;
+                const cur = tree.querySelector(sel);
                 if (cur) cur.classList.add('active');
             }
         }
 
         // 文件名搜索结果计数
         const info = document.getElementById('searchResultInfo');
-        if (searchMode === 'files' && filter) {
-            const total = rtcliFiltered.length + serverFiltered.length;
+        if (searchingFiles) {
+            const total = rtcliFiltered.length + serverMatchCount;
             info.textContent = `${total} 个文件匹配`;
             info.style.display = 'block';
         } else {
@@ -294,13 +359,67 @@
         }
     }
 
-    function renderTreeGroup(source, title, files, totalCount, extra) {
+    // 渲染单个实例的分组(默认折叠, 展开时显示其配置文件)
+    function renderInstanceGroup(inst, files, expanded, opts) {
+        const key = inst.id;
+        const label = inst.name || inst.identifier || key;
+        const status = inst.isRunning
+            ? '<span class="text-success small" title="运行中">●</span>'
+            : '<span class="text-muted small" title="已停止">○</span>';
+        const collapsed = expanded ? '' : ' collapsed';
+        let body;
+        if (!files) {
+            body = '<div class="tree-placeholder text-muted small">展开以加载配置文件…</div>';
+        } else {
+            body = renderServerCategories(files, key, opts.filter, opts.showAll);
+        }
+        return `<div class="tree-group tree-instance${collapsed}" data-instance-key="${escapeHtml(key)}">
+            <div class="tree-group-header">
+                <span class="tree-twisty">▾</span>
+                <span class="tree-icon">📁</span>
+                <span class="tree-name">${escapeHtml(label)}</span>
+                <span class="tree-count">${files ? files.length : '?'}</span>
+                ${status}
+            </div>
+            <div class="tree-group-body">${body}</div>
+        </div>`;
+    }
+
+    // 把某实例的文件按 path 分成子分类渲染
+    function renderServerCategories(files, serverKey, filter, showAll) {
+        const filtered = files.filter(f =>
+            showAll || f.fileName.toLowerCase().includes(filter) ||
+            (f.displayName || '').toLowerCase().includes(filter)
+        );
+        const coreFiles = filtered.filter(f => !f.fileName.includes('/'));
+        const configFiles = filtered.filter(f => f.fileName.startsWith('config/'));
+        const pluginFiles = filtered.filter(f => f.fileName.startsWith('plugins/'));
+        const modFiles = filtered.filter(f => f.fileName.startsWith('mods/'));
+        const otherFiles = filtered.filter(f =>
+            f.fileName.includes('/') &&
+            !f.fileName.startsWith('config/') &&
+            !f.fileName.startsWith('plugins/') &&
+            !f.fileName.startsWith('mods/')
+        );
+
+        let h = '';
+        if (coreFiles.length) h += renderTreeGroup('server', '核心配置', coreFiles, coreFiles.length, '', serverKey);
+        if (configFiles.length) h += renderTreeGroup('server', 'config 目录', configFiles, configFiles.length, '', serverKey);
+        if (pluginFiles.length) h += renderTreeGroup('server', '插件配置', pluginFiles, pluginFiles.length, '', serverKey);
+        if (modFiles.length) h += renderTreeGroup('server', '模组配置', modFiles, modFiles.length, '', serverKey);
+        if (otherFiles.length) h += renderTreeGroup('server', '其他配置', otherFiles, otherFiles.length, '', serverKey);
+        return h || '<div class="tree-placeholder text-muted small">无匹配</div>';
+    }
+
+    function renderTreeGroup(source, title, files, totalCount, extra, serverKey) {
         if (files.length === 0 && totalCount === 0) return '';
+        const sk = serverKey || '';
         const items = files.map(f => {
-            const isActive = (f.fileName === currentFileName && source === currentFileSource);
+            const isActive = f.fileName === currentFileName && source === currentFileSource &&
+                (source !== 'server' || sk === (currentServerKey || ''));
             const icon = getFileIcon(f.fileName, f.category);
             const hint = f.description ? ` title="${escapeHtml(f.description)}"` : '';
-            return `<div class="tree-file${isActive ? ' active' : ''}" data-file-name="${escapeHtml(f.fileName)}" data-source="${source}" data-display-name="${escapeHtml(f.displayName || '')}"${hint}>
+            return `<div class="tree-file${isActive ? ' active' : ''}" data-file-name="${escapeHtml(f.fileName)}" data-source="${source}" data-server-key="${escapeHtml(sk)}" data-display-name="${escapeHtml(f.displayName || '')}"${hint}>
                 <span class="tree-icon">${icon}</span>
                 <span class="tree-name">${escapeHtml(f.fileName)}</span>
                 ${f.displayName && f.displayName !== f.fileName ? `<span class="tree-display text-muted">${escapeHtml(f.displayName)}</span>` : ''}
@@ -331,32 +450,35 @@
     }
 
     // === 选择文件 ===
-    function selectFile(fileName, source, displayName) {
-        if (fileName === currentFileName && source === currentFileSource) return;
+    async function selectFile(fileName, source, displayName, serverKey) {
+        const prevKey = currentServerKey;
+        if (source === 'server' && serverKey) currentServerKey = serverKey;
+        // 同名文件在不同实例间切换也要重新加载
+        const sameInstance = source !== 'server' || (serverKey || '') === prevKey;
+        if (fileName === currentFileName && source === currentFileSource && sameInstance) return;
         if (isModified()) {
             if (!confirm('当前文件有未保存的修改，切换文件将丢弃这些修改。是否继续？')) return;
         }
         currentFileName = fileName;
         currentFileSource = source;
-        currentCategory = source === 'server'
-            ? (knownServerFiles.find(f => f.fileName === fileName)?.category || '')
-            : '';
+        const srvFile = source === 'server' ? findServerFile(currentServerKey, fileName) : null;
+        currentCategory = srvFile?.category || '';
 
         document.getElementById('currentFileTitle').textContent = fileName;
         const desc = source === 'rtcli'
             ? (knownRtcliFiles.find(f => f.fileName === fileName)?.description || '')
-            : (knownServerFiles.find(f => f.fileName === fileName)?.description || '');
+            : (srvFile?.description || '');
         document.getElementById('currentFileDesc').textContent = desc ? '— ' + desc : '';
 
-        // 显示版本选择器(仅 server.properties)
-        const isProps = (fileName.toLowerCase() === 'server.properties');
-        document.getElementById('versionSelectorWrap').style.display = isProps ? '' : 'none';
-        if (isProps) loadPropertiesVersions();
+        // server.properties 需要字段 schema 提供分类/显示名/说明
+        if (fileName.toLowerCase() === 'server.properties') await loadPropertiesMeta();
 
-        // 对不支持界面编辑的文件类型(json/toml/log/text/binary)自动切换到文本编辑
+        // 对不支持界面编辑的文件类型(toml/log/text/binary 等)自动切换到文本编辑
+        // ops.json / whitelist.json 有专门的结构化编辑器, 同样按支持界面编辑处理
         const schemaSupported = source === 'rtcli' ||
             currentCategory === 'yaml' ||
-            currentCategory === 'properties';
+            currentCategory === 'properties' ||
+            (source === 'server' && isPlayerListFile(fileName));
         if (!schemaSupported && currentTab === 'ui') {
             switchTab('text');
         } else if (schemaSupported && currentTab === 'text' && !isModified()) {
@@ -370,43 +492,18 @@
         reloadCurrent();
     }
 
-    async function loadPropertiesVersions() {
-        if (propertiesSchema) {
-            fillVersionSelector(propertiesSchema.versions);
-            return;
-        }
+    // 加载 server.properties 字段元数据(分类 / 显示名 / 官方 wiki 说明), 不再按 MC 版本筛选
+    async function loadPropertiesMeta() {
+        if (propertiesSchema) return propertiesSchema;
         try {
             const res = await fetch('/api/serverfile/propertiesSchema');
             const data = await res.json();
             if (data.success) {
                 propertiesSchema = data;
-                fillVersionSelector(data.versions);
+                return data;
             }
         } catch (e) { }
-    }
-
-    function fillVersionSelector(versions) {
-        const sel = document.getElementById('versionSelector');
-        sel.innerHTML = '';
-        versions.forEach(v => {
-            const opt = document.createElement('option');
-            opt.value = v;
-            opt.textContent = v;
-            sel.appendChild(opt);
-        });
-        // 确保当前版本在列表中，否则选最新的
-        if (versions.includes(currentVersion)) {
-            sel.value = currentVersion;
-        } else {
-            currentVersion = versions[versions.length - 1];
-            sel.value = currentVersion;
-        }
-        sel.onchange = () => {
-            currentVersion = sel.value;
-            if (currentFileName.toLowerCase() === 'server.properties' && currentTab === 'ui') {
-                reloadCurrent();
-            }
-        };
+        return null;
     }
 
     // === 加载配置(界面模式) ===
@@ -417,6 +514,8 @@
         try {
             let data;
             if (currentFileSource === 'server') {
+                // server.properties 需要字段 schema 提供分类/显示名/说明
+                if (currentFileName.toLowerCase() === 'server.properties') await loadPropertiesMeta();
                 const url = `/api/serverfile?file=${encodeURIComponent(currentFileName)}&serverKey=${encodeURIComponent(currentServerKey)}&version=${encodeURIComponent(currentVersion)}`;
                 const res = await fetch(url);
                 data = await res.json();
@@ -644,41 +743,209 @@
     }
 
     // === 渲染界面编辑 ===
+    // 生成单个配置项的输入控件(供普通配置与 server.properties 设置式布局复用)
+    function buildControl(node) {
+        const path = escapeHtml(node.path);
+        const type = node.valueType;
+        const value = node.value ?? '';
+
+        if (type === 'bool') {
+            const checked = (value === 'true' || value === true) ? 'checked' : '';
+            return `
+                <div class="form-check form-switch m-0 d-inline-flex align-items-center gap-2">
+                    <input class="form-check-input config-bool" type="checkbox" id="sw_${path}" data-path="${path}" data-type="bool" ${checked} />
+                    <label class="form-check-label small text-muted" for="sw_${path}">${value === 'true' || value === true ? '已启用' : '已禁用'}</label>
+                </div>`;
+        }
+        // 有可选值的字段: 输入框 + 下拉建议(支持 Tab / Enter 填充, 也允许自定义值)
+        if (Array.isArray(node.options) && node.options.length > 0) {
+            const items = node.options.map(o =>
+                `<div class="prop-combo-item" data-value="${escapeHtml(o)}">${escapeHtml(o)}</div>`).join('');
+            return `
+                <div class="prop-combo">
+                    <input type="text" class="form-control form-control-sm config-scalar" data-path="${path}" data-type="${escapeHtml(type)}"
+                           value="${escapeHtml(value)}" autocomplete="off" spellcheck="false" />
+                    <button type="button" class="prop-combo-toggle" tabindex="-1" title="展开可选值">▾</button>
+                    <div class="prop-combo-menu" hidden>${items}</div>
+                </div>`;
+        }
+        if (type === 'int') {
+            return `<input type="number" class="form-control form-control-sm config-scalar" data-path="${path}" data-type="int" value="${escapeHtml(value)}" />`;
+        }
+        if (type === 'longstring') {
+            return `<textarea class="form-control form-control-sm config-scalar" rows="3" data-path="${path}" data-type="longstring" spellcheck="false">${escapeHtml(value)}</textarea>`;
+        }
+        if (type === 'list') {
+            const items = (node.listValue || []).join('\n');
+            return `<textarea class="form-control form-control-sm config-list" rows="4" data-path="${path}" data-type="list" placeholder="每行一项" spellcheck="false">${escapeHtml(items)}</textarea>`;
+        }
+        return `<input type="text" class="form-control form-control-sm config-scalar" data-path="${path}" data-type="string" value="${escapeHtml(value)}" spellcheck="false" />`;
+    }
+
     function renderScalarItem(node) {
         const path = escapeHtml(node.path);
         const key = escapeHtml(node.key);
         const type = node.valueType;
-        const value = node.value ?? '';
-        let control = '';
-
-        if (type === 'bool') {
-            const checked = (value === 'true' || value === true) ? 'checked' : '';
-            control = `
-                <div class="form-check form-switch m-0">
-                    <input class="form-check-input config-bool" type="checkbox" id="sw_${path}" data-path="${path}" data-type="bool" ${checked} />
-                    <label class="form-check-label small text-muted" for="sw_${path}">${value === 'true' || value === true ? '已启用' : '已禁用'}</label>
-                </div>`;
-        } else if (type === 'int') {
-            control = `<input type="number" class="form-control form-control-sm config-scalar" data-path="${path}" data-type="int" value="${escapeHtml(value)}" />`;
-        } else if (type === 'longstring') {
-            control = `<textarea class="form-control form-control-sm config-scalar" rows="3" data-path="${path}" data-type="longstring" spellcheck="false">${escapeHtml(value)}</textarea>`;
-        } else if (type === 'list') {
-            const items = (node.listValue || []).join('\n');
-            control = `<textarea class="form-control form-control-sm config-list" rows="4" data-path="${path}" data-type="list" placeholder="每行一项" spellcheck="false">${escapeHtml(items)}</textarea>`;
-        } else {
-            control = `<input type="text" class="form-control form-control-sm config-scalar" data-path="${path}" data-type="string" value="${escapeHtml(value)}" spellcheck="false" />`;
-        }
-
         return `
             <div class="config-item mb-3">
                 <div class="d-flex justify-content-between align-items-center mb-1">
                     <label class="form-label mb-0 small fw-bold text-info">${key}</label>
                     <small class="text-muted" style="font-size:0.7em;">${type}</small>
                 </div>
-                ${control}
+                ${buildControl(node)}
                 ${commentToHtml(node.comment)}
             </div>`;
     }
+
+    // server.properties 的注释转纯文本(去掉行首 #, 保留换行; 样式里用 pre-line 展示)
+    function commentToPlainText(comment) {
+        if (!comment) return '';
+        return comment.split('\n')
+            .map(l => escapeHtml(l.replace(/^#\s?/, '')))
+            .filter(l => l.length > 0)
+            .join('\n');
+    }
+
+    // server.properties 单项: 设置页风格(名称+键名 / 控件 / 说明), 放在两列网格里
+    function renderPropertyItem(node) {
+        const wide = node.valueType === 'longstring' || node.valueType === 'list';
+        const desc = commentToPlainText(node.comment);
+        const missing = node.lineIndex === -1;
+        return `
+            <div class="prop-row${wide ? ' prop-row-wide' : ''}">
+                <div class="prop-title">
+                    <span class="prop-name">${escapeHtml(node.key)}</span>
+                    <code class="prop-key">${escapeHtml(node.path)}</code>
+                    ${missing ? '<span class="prop-tag">未写入文件</span>' : ''}
+                </div>
+                <div class="prop-control">${buildControl(node)}</div>
+                ${desc ? `<div class="prop-desc">${desc}</div>` : ''}
+            </div>`;
+    }
+
+    // === 可选值下拉补全(点击 ▾ 展开; 输入过滤; ↑↓ 选择; Tab/Enter 填充) ===
+    function comboMenuOf(input) { return input.parentElement.querySelector('.prop-combo-menu'); }
+
+    function comboVisibleItems(input) {
+        const menu = comboMenuOf(input);
+        if (!menu) return [];
+        return Array.from(menu.querySelectorAll('.prop-combo-item')).filter(i => !i.hidden);
+    }
+
+    function closeAllCombos(except) {
+        document.querySelectorAll('.prop-combo-menu').forEach(m => {
+            if (m === except) return;
+            m.hidden = true;
+            m.parentElement.classList.remove('open');
+        });
+    }
+
+    function openCombo(input) {
+        const menu = comboMenuOf(input);
+        if (!menu) return;
+        closeAllCombos(menu);
+        filterCombo(input, true);
+        menu.hidden = false;
+        input.parentElement.classList.add('open');
+    }
+
+    function filterCombo(input, resetActive) {
+        const menu = comboMenuOf(input);
+        if (!menu) return;
+        const q = (input.value || '').trim().toLowerCase();
+        const items = Array.from(menu.querySelectorAll('.prop-combo-item'));
+        items.forEach(i => { i.hidden = q.length > 0 && !i.dataset.value.toLowerCase().includes(q); });
+        const vis = items.filter(i => !i.hidden);
+        items.forEach(i => i.classList.remove('active'));
+        if (vis.length === 0) {
+            menu.hidden = true;
+            return;
+        }
+        if (resetActive) vis[0].classList.add('active');
+        menu.hidden = false;
+    }
+
+    function moveComboActive(input, delta) {
+        const vis = comboVisibleItems(input);
+        if (vis.length === 0) return;
+        let idx = vis.findIndex(i => i.classList.contains('active'));
+        idx = idx < 0 ? 0 : (idx + delta + vis.length) % vis.length;
+        vis.forEach(i => i.classList.remove('active'));
+        vis[idx].classList.add('active');
+        vis[idx].scrollIntoView({ block: 'nearest' });
+    }
+
+    function applyCombo(input, value) {
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        closeAllCombos();
+    }
+
+    function applyActiveCombo(input) {
+        const vis = comboVisibleItems(input);
+        const active = vis.find(i => i.classList.contains('active')) || vis[0];
+        if (!active) return false;
+        applyCombo(input, active.dataset.value);
+        return true;
+    }
+
+    document.addEventListener('focusin', e => {
+        if (e.target.matches?.('.prop-combo input')) openCombo(e.target);
+    });
+
+    document.addEventListener('input', e => {
+        if (e.target.matches?.('.prop-combo input')) filterCombo(e.target, true);
+    });
+
+    document.addEventListener('keydown', e => {
+        const input = e.target;
+        if (!input.matches?.('.prop-combo input')) return;
+        const menu = comboMenuOf(input);
+        const isOpen = menu && !menu.hidden;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (!isOpen) openCombo(input);
+            moveComboActive(input, 1);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (!isOpen) openCombo(input);
+            moveComboActive(input, -1);
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+            // Tab / Enter 直接填充当前高亮(或首个)候选值
+            if (isOpen && applyActiveCombo(input)) e.preventDefault();
+            else closeAllCombos();
+        } else if (e.key === 'Escape') {
+            closeAllCombos();
+        }
+    });
+
+    document.addEventListener('mousedown', e => {
+        const item = e.target.closest?.('.prop-combo-item');
+        if (item) {
+            e.preventDefault();
+            const input = item.closest('.prop-combo').querySelector('input');
+            applyCombo(input, item.dataset.value);
+            input.focus();
+            return;
+        }
+        const toggle = e.target.closest?.('.prop-combo-toggle');
+        if (toggle) {
+            e.preventDefault();
+            const input = toggle.parentElement.querySelector('input');
+            input.focus();
+            openCombo(input);
+            return;
+        }
+        if (!e.target.closest?.('.prop-combo')) closeAllCombos();
+    });
+
+    document.addEventListener('focusout', e => {
+        if (!e.target.matches?.('.prop-combo input')) return;
+        setTimeout(() => {
+            if (!e.target.parentElement.contains(document.activeElement)) closeAllCombos();
+        }, 150);
+    });
 
     function renderUnknownItem(node) {
         const path = escapeHtml(node.path);
@@ -741,6 +1008,15 @@
             </div>`;
     }
 
+    // 最常调整的设置: 置顶到「常用设置」分组(按此顺序排列)
+    const POPULAR_PATHS = [
+        'motd', 'max-players', 'server-port', 'online-mode', 'white-list', 'enforce-whitelist',
+        'difficulty', 'gamemode', 'hardcore', 'allow-flight', 'level-name', 'level-seed',
+        'view-distance', 'simulation-distance', 'spawn-protection', 'enable-command-block',
+        'op-permission-level', 'player-idle-timeout'
+    ];
+    const POPULAR_SET = new Set(POPULAR_PATHS);
+
     // server.properties 渲染：按 category 分组
     function renderPropertiesConfig(nodes) {
         const container = document.getElementById('configItems');
@@ -751,23 +1027,28 @@
         const categoryMap = propertiesSchema?.fields?.reduce((m, f) => { m[f.key] = f.category; return m; }, {}) || {};
         const categoryNameMap = propertiesSchema?.categories || {};
         const groups = {};
-        const order = ['basic', 'gameplay', 'players', 'network', 'remote', 'performance', 'deprecated'];
+        const order = ['popular', 'basic', 'gameplay', 'players', 'network', 'remote', 'performance', 'deprecated'];
 
         knownNodes.forEach(n => {
-            const cat = categoryMap[n.path] || 'other';
+            const cat = POPULAR_SET.has(n.path) ? 'popular' : (categoryMap[n.path] || 'other');
             if (!groups[cat]) groups[cat] = [];
             groups[cat].push(n);
         });
 
+        if (groups['popular']) {
+            groups['popular'].sort((a, b) => POPULAR_PATHS.indexOf(a.path) - POPULAR_PATHS.indexOf(b.path));
+        }
+
         let html = '';
         order.forEach(cat => {
             if (!groups[cat]) return;
-            const name = categoryNameMap[cat] || cat;
-            const body = groups[cat].map(renderScalarItem).join('');
+            const name = cat === 'popular' ? '常用设置' : (categoryNameMap[cat] || cat);
+            const headerCls = cat === 'popular' ? 'bg-info text-dark' : 'bg-secondary';
+            const body = groups[cat].map(renderPropertyItem).join('');
             html += `
                 <div class="card border-secondary bg-dark text-light mb-3">
-                    <div class="card-header py-2 bg-secondary"><strong>${escapeHtml(name)}</strong></div>
-                    <div class="card-body py-2">${body}</div>
+                    <div class="card-header py-2 ${headerCls}"><strong>${escapeHtml(name)}</strong></div>
+                    <div class="card-body py-2 prop-grid">${body}</div>
                 </div>`;
         });
 
@@ -776,7 +1057,7 @@
             html += `
                 <div class="card border-secondary bg-dark text-light mb-3">
                     <div class="card-header py-2 bg-secondary"><strong>其它</strong></div>
-                    <div class="card-body py-2">${groups['other'].map(renderScalarItem).join('')}</div>
+                    <div class="card-body py-2 prop-grid">${groups['other'].map(renderPropertyItem).join('')}</div>
                 </div>`;
         }
 
@@ -786,7 +1067,7 @@
                 <div class="card border-warning bg-dark text-light mb-3">
                     <div class="card-header py-2 bg-warning text-dark">
                         <strong>未识别字段 (${unknowns.length})</strong>
-                        <small class="ms-2">这些字段不在当前版本(${escapeHtml(currentVersion)})的 schema 中，可能是其它版本/插件添加</small>
+                        <small class="ms-2">不在已知配置项中，可能由插件/模组添加或属其它版本</small>
                     </div>
                     <div class="card-body py-2">${unknowns.map(renderUnknownItem).join('')}</div>
                 </div>`;
@@ -803,6 +1084,12 @@
     }
 
     function renderConfig(nodes) {
+        // ops.json / whitelist.json 走玩家列表结构化编辑
+        if (isPlayerListFile(currentFileName)) {
+            renderPlayerListConfig();
+            return;
+        }
+
         // server.properties 走分类渲染
         if (currentFileName.toLowerCase() === 'server.properties') {
             renderPropertiesConfig(nodes);
@@ -838,6 +1125,195 @@
         }
 
         container.innerHTML = html || '<div class="text-muted">无配置项</div>';
+    }
+
+    // === 玩家列表界面编辑(ops.json / whitelist.json) ===
+    // 这两个文件走结构化编辑器: 列表展示 UUID/名称, 可改 OP 等级、超限加入、删除、新增
+
+    function isPlayerListFile(fileName) {
+        const n = (fileName || '').toLowerCase();
+        return n === 'ops.json' || n === 'whitelist.json';
+    }
+
+    // 原始 JSON 对象数组(界面直接增删改, 保留文件里已有的未知字段)
+    let playerListRows = [];
+
+    function parsePlayerList() {
+        const text = (originalContent || '').trim();
+        if (!text) { playerListRows = []; return; }
+        try {
+            const parsed = JSON.parse(text);
+            playerListRows = Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+            playerListRows = [];
+            showStatus(`${currentFileName} 不是合法 JSON，已按空列表展示(保存会覆盖原文件)`, 'warning');
+        }
+    }
+
+    function renderPlayerListConfig() {
+        parsePlayerList();
+        renderPlayerListTable();
+    }
+
+    function renderPlayerListTable() {
+        const isOps = currentFileName.toLowerCase() === 'ops.json';
+        const container = document.getElementById('configItems');
+
+        let body = '';
+        playerListRows.forEach((row, idx) => {
+            const uuid = escapeHtml(row.uuid || '');
+            const name = escapeHtml(row.name || '');
+            const level = [1, 2, 3, 4].includes(Number(row.level)) ? Number(row.level) : 4;
+            const bypass = row.bypassesPlayerLimit === true;
+
+            body += `<tr>
+                <td><code>${uuid || '<span class="text-muted">(缺失)</span>'}</code></td>
+                <td>${name || '<span class="text-muted">(缺失)</span>'}</td>`;
+            if (isOps) {
+                body += `<td style="width:110px;">
+                    <select class="form-select form-select-sm plist-level" data-idx="${idx}">
+                        ${[1, 2, 3, 4].map(l => `<option value="${l}"${l === level ? ' selected' : ''}>${l} 级</option>`).join('')}
+                    </select>
+                </td>
+                <td class="text-center" style="width:90px;">
+                    <input type="checkbox" class="plist-bypass" data-idx="${idx}"${bypass ? ' checked' : ''} title="允许在服务器人数超过上限时加入" />
+                </td>`;
+            }
+            body += `<td class="text-end" style="width:96px;">
+                    <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="removePlayerListRow(${idx})">删除</button>
+                </td>
+            </tr>`;
+        });
+
+        const addRow = `
+            <div class="border rounded p-2 mt-3" style="border-color:var(--border-color)!important;">
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <input type="text" id="plistAddName" class="form-control form-control-sm" style="width:170px;" placeholder="玩家名称" autocomplete="off" />
+                    <button class="btn btn-sm btn-outline-info" id="plistLookupBtn" onclick="lookupPlayerUuid()">查询 UUID</button>
+                    <input type="text" id="plistAddUuid" class="form-control form-control-sm" style="flex:1;min-width:260px;" placeholder="UUID(查询所得或手动填写)" autocomplete="off" />
+                    <button class="btn btn-sm btn-primary" onclick="addPlayerListRow()">+ 添加</button>
+                </div>
+                <small class="text-muted d-block mt-2">
+                    ⚠ UUID 分「正版」与「离线」两套，同一玩家名在两种模式下 UUID 不同，请先甄别本实例的模式再填写。
+                    「查询 UUID」按该实例 server.properties 的 online-mode 自动获取(正版走 Mojang API、离线本地计算)；
+                    无法自动获取时请手动粘贴正确 UUID。
+                </small>
+            </div>`;
+
+        container.innerHTML = `
+            <div class="card border-secondary bg-dark text-light mb-3">
+                <div class="card-header py-2 bg-secondary d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <strong>${isOps ? 'OP 管理员列表' : '白名单列表'} (${playerListRows.length})</strong>
+                    <small class="text-muted">${escapeHtml(currentFileName)} · 修改后点右上角「保存」写入文件</small>
+                </div>
+                <div class="card-body py-2">
+                    ${playerListRows.length === 0
+                        ? '<div class="text-muted py-2">列表为空，可在下方新增。</div>'
+                        : `<table class="table table-sm table-dark align-middle mb-0">
+                            <thead><tr>
+                                <th>UUID</th><th>名称</th>${isOps ? '<th>OP 等级</th><th class="text-center">超限加入</th>' : ''}<th></th>
+                            </tr></thead>
+                            <tbody>${body}</tbody>
+                           </table>`}
+                    ${addRow}
+                </div>
+            </div>`;
+    }
+
+    // 按实例 online-mode 查询 UUID(正版 → Mojang API / 离线 → 本地计算; 无法判断则提示手动填写)
+    async function lookupPlayerUuid() {
+        const name = (document.getElementById('plistAddName').value || '').trim();
+        if (!name) { showStatus('请先输入玩家名称', 'warning'); return; }
+
+        const btn = document.getElementById('plistLookupBtn');
+        btn.disabled = true;
+        try {
+            const res = await fetch(`/api/instances/player/uuid?serverKey=${encodeURIComponent(currentServerKey)}&name=${encodeURIComponent(name)}`);
+            const data = await res.json();
+            if (data.success) {
+                document.getElementById('plistAddUuid').value = data.uuid;
+                showStatus(`已获取 UUID（${data.source === 'mojang' ? '正版 API' : '离线计算'}），请确认无误后点「添加」`, 'success');
+            } else {
+                showStatus(data.message || '查询失败，请手动填写 UUID', 'warning');
+            }
+        } catch (e) {
+            showStatus('查询失败: ' + e.message + '，请手动填写 UUID', 'warning');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function addPlayerListRow() {
+        const name = (document.getElementById('plistAddName').value || '').trim();
+        const uuid = (document.getElementById('plistAddUuid').value || '').trim();
+        if (!name) { showStatus('请输入玩家名称', 'warning'); return; }
+
+        const uuidRe = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+        if (!uuidRe.test(uuid)) {
+            showStatus('UUID 格式不正确(应为 8-4-4-4-12)，请先查询或手动填写', 'warning');
+            return;
+        }
+        if (playerListRows.some(r => (r.uuid || '').toLowerCase() === uuid.toLowerCase())) {
+            showStatus('该 UUID 已在列表中', 'warning');
+            return;
+        }
+
+        if (currentFileName.toLowerCase() === 'ops.json') {
+            playerListRows.push({ uuid, name, level: 4, bypassesPlayerLimit: false });
+        } else {
+            playerListRows.push({ uuid, name });
+        }
+        renderPlayerListTable();
+        showStatus('已添加，记得点「保存」写入文件', 'info');
+    }
+
+    function removePlayerListRow(idx) {
+        if (idx < 0 || idx >= playerListRows.length) return;
+        playerListRows.splice(idx, 1);
+        renderPlayerListTable();
+        showStatus('已移除，记得点「保存」写入文件', 'info');
+    }
+
+    async function savePlayerList() {
+        const btn = document.getElementById('saveBtn');
+        btn.disabled = true;
+
+        // 从界面回读 OP 等级与超限加入
+        if (currentFileName.toLowerCase() === 'ops.json') {
+            document.querySelectorAll('.plist-level').forEach(sel => {
+                const idx = Number(sel.dataset.idx);
+                if (playerListRows[idx]) playerListRows[idx].level = Number(sel.value);
+            });
+            document.querySelectorAll('.plist-bypass').forEach(cb => {
+                const idx = Number(cb.dataset.idx);
+                if (playerListRows[idx]) playerListRows[idx].bypassesPlayerLimit = cb.checked;
+            });
+        }
+
+        const content = JSON.stringify(playerListRows, null, 2) + '\n';
+        try {
+            const res = await fetch('/api/serverfile/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    serverKey: currentServerKey,
+                    fileName: currentFileName,
+                    content: content,
+                    applySchema: false
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                originalContent = content;
+                showStatus(data.message || '保存成功(未热重载)', 'success');
+            } else {
+                showStatus(data.message || '保存失败', 'danger');
+            }
+        } catch (e) {
+            showStatus('网络错误: ' + e.message, 'danger');
+        } finally {
+            btn.disabled = false;
+        }
     }
 
     // === 保存 ===
@@ -887,6 +1363,11 @@
     }
 
     async function saveSchema() {
+        // ops.json / whitelist.json 由结构化编辑器序列化后保存
+        if (isPlayerListFile(currentFileName)) {
+            return savePlayerList();
+        }
+
         const btn = document.getElementById('saveBtn');
         btn.disabled = true;
 
@@ -981,6 +1462,11 @@
         if (searchMode === 'files') {
             renderFileTree();
             closeItemSearch();
+            // 文件名搜索需跨实例查找, 惰性补齐尚未加载的实例文件
+            const q = (document.getElementById('searchInput').value || '').trim();
+            if (q && instances.some(i => !serverFilesCache[i.id])) {
+                ensureAllInstanceFiles().then(() => renderFileTree());
+            }
         } else {
             handleItemSearch();
         }

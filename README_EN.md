@@ -21,16 +21,15 @@ This project assumes that you have a basic understanding of Minecraft server adm
 If you really can't manage, you can use the `.guide` command to quickly create one, then refine the configuration file and use the `.ai` feature.
 Obviously, you'll need a good AI model, since an unreliable model may cause unexpected issues.
 You should also know how to properly edit configuration files; if you find a bug, please report it on GitHub.
-Currently the `rt reload` feature is unstable, so hot reloading is not recommended. It will be fixed later.
 
 ## 🧪 Test Reference
 These tests are for reference only, since most features are highly customizable; even if something isn't supported, you can still adapt the configuration file.
-However, modded servers are not yet supported, and group management for proxy servers is still being implemented.
+However, modded server support is still being improved, and Velocity is recommended for proxy groups.
 The following MC server cores have been tested:
  - [x] Paper
-   > 1.8.8、1.12.2、1.16.5、1.20.1、1.21.11
+   > 1.8.8、1.12.2、1.16.5、1.20.1、1.21.11、26.2
  - [x] Vanilla (Original)
-   > 1.8.8、1.12.2、1.16.5、1.18.2、1.19.2、1.20.1、1.20.4、1.20.6、1.21、1.21.11、26.1、26.2
+   > 1.8.8、1.12.2、1.16.5、1.18.2、1.19.2、1.20.1、1.20.4、1.20.6、1.21、1.21.11、26.1、26.2、26.3
  - [ ] Folia
    > Pending
  - [ ] Leaf
@@ -40,26 +39,31 @@ The following MC server cores have been tested:
 
 ## 🔨 Current Features
 
- - Unattended automatic maintenance and monitoring of servers
- - Simple creation of MC server instances
+ - Unattended automated server maintenance and monitoring, AI memory, AI skills and rules, etc.
+ - Full-stack logs let you view most panel events, including AI tool calls
+ - MC server creation and import, server JAR download, and server group instance management
+ - MC server file management, upload/delete, and plugin updates
+ - MC server configuration, including gamerule editing on newer versions and live configuration changes while the server is running
+ - Player management such as bans, and player event queries
  - MC console error analysis (basic analysis and AI analysis | AI analysis requires you to prepare your own API and key)
- - Customizable regex matching and scripts for console error analysis
+ - Customizable regex matching and scripts for console error analysis (such as the built-in mclog script)
  - Customizable most regex-based configuration content and options
  - Support for custom CSharp and Python scripts, and full extensions (DLL)
  - Customizable task scheduling (customizable trigger methods or conditions, running built-in modules or scripts, etc.)
- - Automatic server backups, filtering of problematic plugins, and filtering of file modifications
- - Support for controlling and switching between multiple servers (with feature isolation between servers)
+ - Automatic server backups, filtering of problematic plugins (command line), and filtering of file modifications (command line)
+ - Support for controlling and switching between multiple server instances (with feature isolation between servers)
+ - Support for splitting the frontend and backend across a LAN (e.g., RtCli on a cloud server and the panel locally)
  - Most features are highly customizable, though some are not yet supported; the code comments are quite easy to understand, and you can try adding features yourself
- - [Rt extension] Support for external Antibot and data packet send rate limiting
+ - [Rt extension] Support for external Antibot, data packet send rate limiting, and server MOTD status events
 
 ## 📘 Project Structure
 > [!WARNING]\
 > Developers who modify this program must be careful NOT to upload their own AI API keys; please double-check.
 
 This project uses RtCli as the manager for Minecraft servers, and RtPanel as the panel that assists in controlling RtCli; optionally, you can choose Rt as an extension or make your own extension.
-RtPanel mainly assists in controlling RtCli and is not recommended to be exposed to the public internet as a standalone panel. If you're using a cloud server, we suggest a panel like BT Panel.
-Set a server port for RtCli, then open RtPanel and connect. If you find the panel not good-looking or usable, any author is welcome to create their own.
-Rt mainly provides security-related extensions and is currently not recommended for use; if you need its features, you can compile it yourself.
+RtPanel mainly assists in controlling RtCli and is not recommended to be exposed to the public internet as a standalone panel; as long as you don't share the port, it is generally fine to use.
+Set a server port for RtCli, then open RtPanel and connect. If you find the panel unusable or unattractive, any author is welcome to create their own, but the original panel is still recommended.
+Rt mainly provides security-related extensions and is still under testing; if you need its features, you can use `ct` to unload the extension.
 
 ## 🔌 RtCli Extensions
 These are only basic definitions; there are also events used as extension callbacks. See Events.cs in the source code for details.
@@ -117,22 +121,9 @@ If you still can't understand, you can try looking at the Rt extension example.
 ```
 > [!WARNING]\
 > This program is currently not recommended for use on public networks or in dangerous network environments!
-> The extension system is not yet very stable!
 
 ## Upcoming Updates
-1. Improve the project (yes, you read that right - progress is about 75%)
-2. Implement MC server configuration file configuration
-3. Improve the Rt extension plugin
-4. Add support for mainstream MC server cores
-   - Newer versions that include a config folder
-   - Older versions that don't
-5. Add support for MC velocity proxy
-6. Improve Events for extension callbacks
-7. Implement configuration of MC server plugins
-8. Implement group server management
-9. Strengthen connection security
-10. Support a simple web panel for configuring RtCli
-11. Improve multilingual support
+1. Improve the project (yes, you read that right - progress is about 89%)
 
 #### Closing and Credits
 When using or modifying this project in any way, we sincerely hope you will keep the original author's name and the original project URL. Thank you for respecting the author! [GitHub](https://github.com/psoloi/RutCitrus)
