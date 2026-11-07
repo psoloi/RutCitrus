@@ -53,6 +53,7 @@ The following MC server cores have been tested:
  - Automatic server backups, filtering of problematic plugins (command line), and filtering of file modifications (command line)
  - Support for controlling and switching between multiple server instances (with feature isolation between servers)
  - Support for splitting the frontend and backend across a LAN (e.g., RtCli on a cloud server and the panel locally)
+ - Runs on both Windows and Linux (self-contained win-x64 / linux-x64 builds are provided)
  - Most features are highly customizable, though some are not yet supported; the code comments are quite easy to understand, and you can try adding features yourself
  - [Rt extension] Support for external Antibot, data packet send rate limiting, and server MOTD status events
 
@@ -63,7 +64,7 @@ The following MC server cores have been tested:
 This project uses RtCli as the manager for Minecraft servers, and RtPanel as the panel that assists in controlling RtCli; optionally, you can choose Rt as an extension or make your own extension.
 RtPanel mainly assists in controlling RtCli and is not recommended to be exposed to the public internet as a standalone panel; as long as you don't share the port, it is generally fine to use.
 Set a server port for RtCli, then open RtPanel and connect. If you find the panel unusable or unattractive, any author is welcome to create their own, but the original panel is still recommended.
-Rt mainly provides security-related extensions and is still under testing; if you need its features, you can use `ct` to unload the extension.
+Rt mainly provides security-related extensions and is still under testing. The Rt extension is no longer embedded in RtCli; download `Rt.dll` from the release assets and load it manually when needed.
 
 ## 🔌 RtCli Extensions
 These are only basic definitions; there are also events used as extension callbacks. See Events.cs in the source code for details.
@@ -127,7 +128,7 @@ If you still can't understand, you can try looking at the Rt extension example.
 
 #### Closing and Credits
 When using or modifying this project in any way, we sincerely hope you will keep the original author's name and the original project URL. Thank you for respecting the author! [GitHub](https://github.com/psoloi/RutCitrus)
-We highly welcome your feedback. I'm only a high school student and don't have much time, so about half of this program was made with AI assistance. My device may have issues running container programs, and compatibility has not been tested. If you find any errors, I would be very grateful if you could point them out or even improve them. If you have time, could you please give us a Star?
+We highly welcome your feedback. I'm only a high school student and don't have much time, so about half of this program was made with AI assistance. If you find any errors, I would be very grateful if you could point them out or even improve them. If you have time, could you please give us a Star?
 ![GitHub Stars](https://img.shields.io/github/stars/psoloi/RutCitrus?logo=github)
 
 This project references many libraries. I deeply respect the efforts of those authors and have not modified their library code. For details, run the `rt about` command in the project to view the actively referenced libraries.

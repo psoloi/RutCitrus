@@ -3550,6 +3550,10 @@ namespace RtCli.Modules.Function
 
         private static string? GetProcessWorkingDirectory(int pid)
         {
+            // Linux: /proc/{pid}/cwd 是指向工作目录的符号链接, 无需 P/Invoke
+            if (!OperatingSystem.IsWindows())
+                return ResolveProcLink($"/proc/{pid}/cwd");
+
             IntPtr hProcess = IntPtr.Zero;
             try
             {
@@ -3617,52 +3621,12 @@ namespace RtCli.Modules.Function
 
         #endregion
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:验证平台兼容性", Justification = "Windows only")]
         private static List<MinecraftServerInfo> ScanMinecraftServers()
         {
             var results = new List<MinecraftServerInfo>();
-            var javaProcesses = new List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle, string ExecutablePath)>();
-
-            try
-            {
-                using var searcher = new ManagementObjectSearcher(
-                    "SELECT ProcessId, CommandLine, Name, ExecutablePath FROM Win32_Process WHERE Name LIKE 'java%'");
-                using var collection = searcher.Get();
-
-                foreach (ManagementObject obj in collection)
-                {
-                    int pid = Convert.ToInt32(obj["ProcessId"]);
-                    string? cmdLine = obj["CommandLine"]?.ToString() ?? "";
-                    string? exePath = obj["ExecutablePath"]?.ToString() ?? "";
-
-                    try
-                    {
-                        using var process = Process.GetProcessById(pid);
-                        string processName = "";
-                        string windowTitle = "";
-                        try
-                        {
-                            processName = process.ProcessName;
-                            windowTitle = process.MainWindowTitle ?? "";
-                            // WMI 未返回 ExecutablePath 时回退到 MainModule.FileName
-                            if (string.IsNullOrEmpty(exePath))
-                            {
-                                try { exePath = process.MainModule?.FileName ?? ""; } catch { }
-                            }
-                        }
-                        catch { }
-
-                        javaProcesses.Add((pid, processName, cmdLine, windowTitle, exePath ?? ""));
-                    }
-                    catch
-                    {
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Output.Log(I18n.Get("anz_wmi_query_failed", ex.Message), 3, "Analyzer");
-            }
+            // 进程采集按平台分支: Windows 用 WMI, Linux 读 /proc; 下游的 MC 服务端判定完全共用
+            List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle, string ExecutablePath)> javaProcesses =
+                OperatingSystem.IsWindows() ? CollectJavaProcessesWindows() : CollectJavaProcessesLinux();
 
             // 计算配置的 Java 路径目录(用于优先级匹配)
             // 仅当配置为完整路径(包含目录且文件名为 java.exe/javaw.exe)时才参与匹配,
@@ -3756,12 +3720,156 @@ namespace RtCli.Modules.Function
             return results;
         }
 
-        /// <summary>规范化目录字符串: 小写 + 去除尾部路径分隔符, 用于路径比较</summary>
+        /// <summary>Windows: 通过 WMI 枚举 java 进程(命令行/可执行路径/窗口标题)</summary>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:验证平台兼容性", Justification = "仅 Windows 调用")]
+        private static List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle, string ExecutablePath)> CollectJavaProcessesWindows()
+        {
+            var javaProcesses = new List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle, string ExecutablePath)>();
+
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(
+                    "SELECT ProcessId, CommandLine, Name, ExecutablePath FROM Win32_Process WHERE Name LIKE 'java%'");
+                using var collection = searcher.Get();
+
+                foreach (ManagementObject obj in collection)
+                {
+                    int pid = Convert.ToInt32(obj["ProcessId"]);
+                    string? cmdLine = obj["CommandLine"]?.ToString() ?? "";
+                    string? exePath = obj["ExecutablePath"]?.ToString() ?? "";
+
+                    try
+                    {
+                        using var process = Process.GetProcessById(pid);
+                        string processName = "";
+                        string windowTitle = "";
+                        try
+                        {
+                            processName = process.ProcessName;
+                            windowTitle = process.MainWindowTitle ?? "";
+                            // WMI 未返回 ExecutablePath 时回退到 MainModule.FileName
+                            if (string.IsNullOrEmpty(exePath))
+                            {
+                                try { exePath = process.MainModule?.FileName ?? ""; } catch { }
+                            }
+                        }
+                        catch { }
+
+                        javaProcesses.Add((pid, processName, cmdLine, windowTitle, exePath ?? ""));
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Output.Log(I18n.Get("anz_wmi_query_failed", ex.Message), 3, "Analyzer");
+            }
+
+            return javaProcesses;
+        }
+
+        /// <summary>
+        /// Linux: 遍历 /proc 找出 java 进程。/proc/{pid}/exe 为可执行文件符号链接,
+        /// /proc/{pid}/cmdline 以 NUL 分隔参数, 这里拼接为空格分隔字符串以复用 ExtractJarPath 的解析逻辑。
+        /// </summary>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:验证平台兼容性", Justification = "仅 Linux 调用")]
+        private static List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle, string ExecutablePath)> CollectJavaProcessesLinux()
+        {
+            var javaProcesses = new List<(int ProcessId, string ProcessName, string CommandLine, string WindowTitle, string ExecutablePath)>();
+
+            try
+            {
+                foreach (var dir in Directory.EnumerateDirectories("/proc"))
+                {
+                    if (!int.TryParse(Path.GetFileName(dir), out int pid))
+                        continue;
+
+                    try
+                    {
+                        string? exePath = ResolveProcLink(Path.Combine(dir, "exe"));
+                        if (string.IsNullOrEmpty(exePath))
+                            continue;
+
+                        string exeName = Path.GetFileName(exePath);
+                        if (!exeName.StartsWith("java", StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        string cmdLine = ReadProcCmdline(Path.Combine(dir, "cmdline"));
+                        if (string.IsNullOrWhiteSpace(cmdLine))
+                            continue;
+
+                        // 控制台程序无窗口标题, 下游会回退为 "java (PID: n)"
+                        javaProcesses.Add((pid, exeName, cmdLine, "", exePath));
+                    }
+                    catch
+                    {
+                        // 进程在枚举过程中退出属正常现象, 跳过即可
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Output.Log(I18n.Get("anz_proc_scan_failed", ex.Message), 3, "Analyzer");
+            }
+
+            return javaProcesses;
+        }
+
+        /// <summary>读取 /proc 下的 NUL 分隔文件(cmdline), 含空格的参数补引号以保持路径完整</summary>
+        private static string ReadProcCmdline(string path)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                    return "";
+
+                string raw = File.ReadAllText(path);
+                var args = raw.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+                return string.Join(' ', args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a));
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        /// <summary>解析 /proc 下的符号链接(exe/cwd), 目标进程已退出时内核会追加 " (deleted)"</summary>
+        private static string? ResolveProcLink(string path)
+        {
+            try
+            {
+                var fi = new FileInfo(path);
+                string? target = fi.LinkTarget;
+                if (string.IsNullOrEmpty(target))
+                {
+                    var resolved = fi.ResolveLinkTarget(true);
+                    target = resolved?.FullName;
+                }
+                if (string.IsNullOrEmpty(target))
+                    return null;
+
+                const string deletedSuffix = " (deleted)";
+                if (target.EndsWith(deletedSuffix, StringComparison.Ordinal))
+                    target = target[..^deletedSuffix.Length];
+
+                return target.Length == 0 ? null : target;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>规范化目录字符串: Windows 统一小写并用反斜杠; Linux 区分大小写, 统一用正斜杠</summary>
         private static string? NormalizeDir(string? dir)
         {
             if (string.IsNullOrWhiteSpace(dir))
                 return null;
-            return dir.Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
+            if (OperatingSystem.IsWindows())
+                return dir.Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
+            return dir.Replace('\\', '/').TrimEnd('/');
         }
 
         /// <summary>

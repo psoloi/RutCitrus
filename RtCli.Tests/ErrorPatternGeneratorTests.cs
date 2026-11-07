@@ -22,7 +22,7 @@ public class ErrorPatternGeneratorTests
     [InlineData(@"Could not load .*plugin")]
     [InlineData(@"Caused by: com\.example\.[A-Za-z]+Exception")]
     public void 合法表达式可用(string pattern)
-        => Assert.True(ErrorPatternGenerator.IsUsablePattern(pattern, out _));
+        => Assert.True(ErrorPatternGenerator.IsUsablePattern(pattern, null, out _));
 
     [Theory]
     [InlineData(@"[unclosed")]
@@ -33,14 +33,14 @@ public class ErrorPatternGeneratorTests
     [InlineData("(?s).*")]
     public void 不合法或过宽的表达式被拒绝(string pattern)
     {
-        Assert.False(ErrorPatternGenerator.IsUsablePattern(pattern, out string reason));
+        Assert.False(ErrorPatternGenerator.IsUsablePattern(pattern, null, out string reason));
         Assert.False(string.IsNullOrWhiteSpace(reason));
     }
 
     [Fact]
     public void 过长的表达式被拒绝()
     {
-        Assert.False(ErrorPatternGenerator.IsUsablePattern(new string('a', 301), out string reason));
+        Assert.False(ErrorPatternGenerator.IsUsablePattern(new string('a', 301), null, out string reason));
         Assert.Contains("过长", reason);
     }
 

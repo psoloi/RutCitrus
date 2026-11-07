@@ -217,7 +217,10 @@ namespace RtCli.Modules.Function
 
             try
             {
-                using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(file));
+#pragma warning disable SYSLIB0057 // Authenticode 签名的 PE 文件没有 X509CertificateLoader 等价 API
+                using var signer = X509Certificate.CreateFromSignedFile(file);
+#pragma warning restore SYSLIB0057
+                using var cert = X509CertificateLoader.LoadCertificate(signer.GetRawCertData());
                 using var chain = new X509Chain();
                 chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
                 chain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;

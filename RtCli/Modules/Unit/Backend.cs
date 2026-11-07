@@ -2241,6 +2241,9 @@ namespace RtCli.Modules.Unit
 
         // ===== 实例增强: Java 扫描 / 克隆 / zip 解压导入 =====
 
+        /// <summary>当前平台 java 可执行文件名(Windows 为 java.exe, Linux 为 java)</summary>
+        private static string JavaExeName => OperatingSystem.IsWindows() ? "java.exe" : "java";
+
         /// <summary>
         /// 扫描本机 Java 安装: JAVA_HOME / PATH / 常见安装目录(Java、Eclipse Adoptium、Zulu、Microsoft、BellSoft、Amazon Corretto)。
         /// 版本号优先从目录名解析, 解析不到时运行 java -version 获取。
@@ -2309,26 +2312,28 @@ namespace RtCli.Modules.Unit
                 var jhome = Environment.GetEnvironmentVariable("JAVA_HOME");
                 if (!string.IsNullOrWhiteSpace(jhome))
                 {
-                    AddJava(Path.Combine(jhome, "bin", "java.exe"), "JAVA_HOME");
+                    AddJava(Path.Combine(jhome, "bin", JavaExeName), "JAVA_HOME");
 
                     // 1b. JAVA_HOME 同级目录(纯 zip 解压的 Java 常与当前 JDK 集中放在同一父目录)
                     var jhomeParent = Path.GetDirectoryName(jhome.TrimEnd('\\', '/'));
                     if (!string.IsNullOrEmpty(jhomeParent) && Directory.Exists(jhomeParent))
                     {
                         foreach (var sub in Directory.GetDirectories(jhomeParent))
-                            AddJava(Path.Combine(sub, "bin", "java.exe"), "解压目录(JAVA_HOME 同级)");
+                            AddJava(Path.Combine(sub, "bin", JavaExeName), "解压目录(JAVA_HOME 同级)");
                     }
                 }
             }
             catch { }
 
-            // 2. PATH 中的 java.exe
+            // 2. PATH 中的 java 可执行文件
             try
             {
                 var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
-                foreach (var seg in pathVar.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                foreach (var seg in pathVar.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                 {
-                    var candidate = seg.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? seg : Path.Combine(seg, "java.exe");
+                    var candidate = OperatingSystem.IsWindows() && seg.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                        ? seg
+                        : Path.Combine(seg, JavaExeName);
                     if (File.Exists(candidate)) AddJava(candidate, "PATH");
 
                     // 2b. PATH 段的父目录兄弟版本(如 PATH 含 D:\Java\jdk-21\bin, 扫描 D:\Java 下其他解压版本)
@@ -2340,7 +2345,7 @@ namespace RtCli.Modules.Unit
                         if (!string.IsNullOrEmpty(segGrand) && Directory.Exists(segGrand))
                         {
                             foreach (var sub in Directory.GetDirectories(segGrand))
-                                AddJava(Path.Combine(sub, "bin", "java.exe"), "解压目录(PATH 同级)");
+                                AddJava(Path.Combine(sub, "bin", JavaExeName), "解压目录(PATH 同级)");
                         }
                     }
                     catch { }
@@ -2369,46 +2374,58 @@ namespace RtCli.Modules.Unit
                     roots.Add(Path.Combine(pf86, "Eclipse Adoptium"));
                     roots.Add(Path.Combine(pf86, "Zulu"));
                 }
+                // Linux 发行版/厂商常见的 JDK 安装根目录
+                if (!OperatingSystem.IsWindows())
+                {
+                    roots.Add("/usr/lib/jvm");
+                    roots.Add("/usr/java");
+                    roots.Add("/usr/local/lib/jvm");
+                    roots.Add("/opt/java");
+                    roots.Add("/opt/jdk");
+                }
                 foreach (var root in roots)
                 {
                     if (!Directory.Exists(root)) continue;
                     foreach (var sub in Directory.GetDirectories(root))
-                        AddJava(Path.Combine(sub, "bin", "java.exe"), $"安装目录({Path.GetFileName(root)})");
+                        AddJava(Path.Combine(sub, "bin", JavaExeName), $"安装目录({Path.GetFileName(root)})");
                 }
             }
             catch { }
 
-            // 4. 各驱动器根目录下的 Java(纯 zip 解压未安装、未配置环境变量的场景, 仅扫根目录一层)
-            try
+            // 4. 各驱动器根目录下的 Java(纯 zip 解压未安装、未配置环境变量的场景, 仅扫根目录一层; 仅 Windows)
+            if (OperatingSystem.IsWindows())
             {
-                foreach (var drive in Environment.GetLogicalDrives())
+                try
                 {
-                    try
+                    foreach (var drive in Environment.GetLogicalDrives())
                     {
-                        var di = new DirectoryInfo(drive);
-                        if (!di.Exists) continue;
-
-                        foreach (var sub in di.GetDirectories())
+                        try
                         {
-                            var name = sub.Name;
-                            // 根下集中存放目录(如 D:\Java) → 再深入一层
-                            if (name.Equals("Java", StringComparison.OrdinalIgnoreCase)
-                                || name.Equals("JDK", StringComparison.OrdinalIgnoreCase))
+                            var di = new DirectoryInfo(drive);
+                            if (!di.Exists) continue;
+
+                            foreach (var sub in di.GetDirectories())
                             {
-                                foreach (var inner in sub.GetDirectories())
-                                    AddJava(Path.Combine(inner.FullName, "bin", "java.exe"), $"解压目录({drive}{name})");
-                                continue;
+                                var name = sub.Name;
+                                // 根下集中存放目录(如 D:\Java) → 再深入一层
+                                if (name.Equals("Java", StringComparison.OrdinalIgnoreCase)
+                                    || name.Equals("JDK", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    foreach (var inner in sub.GetDirectories())
+                                        AddJava(Path.Combine(inner.FullName, "bin", JavaExeName), $"解压目录({drive}{name})");
+                                    continue;
+                                }
+                                // 根下直接解压的 JDK/JRE 目录(如 D:\jdk-17.0.2、E:\zulu21)
+                                if (Regex.IsMatch(name, @"^(jdk|jre|zulu|corretto|liberica|graalvm|temurin)[-_\.]?\d", RegexOptions.IgnoreCase))
+                                    AddJava(Path.Combine(sub.FullName, "bin", JavaExeName), "解压目录(驱动器根)");
                             }
-                            // 根下直接解压的 JDK/JRE 目录(如 D:\jdk-17.0.2、E:\zulu21)
-                            if (Regex.IsMatch(name, @"^(jdk|jre|zulu|corretto|liberica|graalvm|temurin)[-_\.]?\d", RegexOptions.IgnoreCase))
-                                AddJava(Path.Combine(sub.FullName, "bin", "java.exe"), "解压目录(驱动器根)");
                         }
+                        catch (UnauthorizedAccessException) { }
+                        catch (IOException) { }
                     }
-                    catch (UnauthorizedAccessException) { }
-                    catch (IOException) { }
                 }
+                catch { }
             }
-            catch { }
 
             return (true, $"共找到 {results.Count} 个 Java", results);
         }

@@ -674,14 +674,19 @@ namespace RtCli.Modules.Extension
             }
 
             // 可回收上下文中返回 IntPtr.Zero 的默认回退可能无法解析系统目录中的原生库
-            // (如 SharpPcap 依赖的 wpcap.dll)，因此显式从系统目录尝试加载
-            string fileName = unmanagedDllName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-                ? unmanagedDllName : unmanagedDllName + ".dll";
+            // (如 SharpPcap 依赖的 wpcap.dll / libpcap.so)，因此显式从系统目录尝试加载
+            string fileName;
+            if (unmanagedDllName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || unmanagedDllName.Contains(".so"))
+                fileName = unmanagedDllName;
+            else if (OperatingSystem.IsWindows())
+                fileName = unmanagedDllName + ".dll";
+            else
+                fileName = "lib" + unmanagedDllName + ".so";
 
             string[] candidateDirs = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
                 System.Runtime.InteropServices.OSPlatform.Windows)
                 ? new[] { Environment.SystemDirectory, Environment.GetFolderPath(Environment.SpecialFolder.System) }
-                : new[] { "/usr/lib", "/usr/lib/x86_64-linux-gnu", "/lib" };
+                : new[] { "/usr/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/usr/lib64", "/lib", "/lib64" };
 
             foreach (string dir in candidateDirs)
             {

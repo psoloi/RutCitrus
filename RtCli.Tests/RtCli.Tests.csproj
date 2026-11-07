@@ -1,13 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- 与被测项目 RtCli 同为 net8.0 且自包含(RtCli 是自包含可执行文件, 只能被自包含工程引用) -->
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- 与被测项目 RtCli 同为 net10.0 且自包含(RtCli 是自包含可执行文件, 只能被自包含工程引用) -->
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(OS)' == 'Windows_NT'">win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">linux-x64</RuntimeIdentifier>
     <NoWarn>CS1591</NoWarn>
   </PropertyGroup>
 

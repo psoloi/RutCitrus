@@ -50,7 +50,7 @@ namespace RtCli.Modules
 
                 string? currentProcessPath = Environment.ProcessPath;
                 Program.ReleaseMutex();
-                Console.Clear();
+                Output.SafeClearConsole();
                 if (currentProcessPath == null)
                 {
                     Output.Log("进程路径环境异常无法重新加载！", 3, "Reload");

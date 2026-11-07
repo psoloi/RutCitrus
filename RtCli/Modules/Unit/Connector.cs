@@ -131,7 +131,7 @@ namespace RtCli.Modules.Unit
                 {
                     string certPem = File.ReadAllText(certPath);
                     string keyPem = File.ReadAllText(keyPath);
-                    using var loaded = new X509Certificate2(certPath);
+                    using var loaded = X509CertificateLoader.LoadCertificateFromFile(certPath);
                     if (DateTimeOffset.UtcNow < loaded.NotAfter.AddDays(-30))
                         return new SslServerCredentials(new[] { new KeyCertificatePair(certPem, keyPem) });
                     Output.Log("gRPC 证书即将过期, 已重新生成", 2, "Connector");

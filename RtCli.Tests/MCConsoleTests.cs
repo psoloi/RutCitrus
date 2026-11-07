@@ -8,7 +8,7 @@ public class MCConsoleTests
     [Theory]
     [InlineData("---- Minecraft Crash Report ----", true)]
     [InlineData("This crash report has been saved to: /srv/crash", true)]
-    [InlineData("Shutting down the server", true)]
+    [InlineData("Shutting down the server", false)] // 正常停服序列由 IsNormalShutdownLine 识别, 不属崩溃
     [InlineData("[12:00:00] [Server thread/FATAL]: ticking entity", true)]
     [InlineData("[12:00:00] [Server thread/ERROR]: A Crash occurred while ticking", true)]
     [InlineData("[12:00:00] [Server thread/ERROR]: 普通错误不应判为崩溃", false)]

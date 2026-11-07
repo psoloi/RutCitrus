@@ -97,35 +97,37 @@ namespace RtCli.Modules.Unit
         {
             if (_cachedPythonResult != null) return _cachedPythonResult;
 
-            try
+            // Windows 惯例是 python; Linux/macOS 通常只提供 python3, 按顺序探测
+            string[] commands = OperatingSystem.IsWindows() ? new[] { "python" } : new[] { "python3", "python" };
+            foreach (var command in commands)
             {
-                var startInfo = new ProcessStartInfo
+                try
                 {
-                    FileName = "python",
-                    Arguments = "--version",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var process = Process.Start(startInfo);
-                if (process == null)
-                {
-                    return _cachedPythonResult = I18n.Get("checker_nopython");
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = command,
+                        Arguments = "--version",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    using var process = Process.Start(startInfo);
+                    if (process == null)
+                        continue;
+
+                    string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+                    if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
+                        continue;
+
+                    string version = output.Trim();
+                    return _cachedPythonResult = $"{I18n.Get("checker_python")} {version}";
                 }
-                string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-                process.WaitForExit();
-                if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
-                {
-                    return _cachedPythonResult = I18n.Get("checker_nopython");
-                }
-                string version = output.Trim();
-                return _cachedPythonResult = $"{I18n.Get("checker_python")} {version}";
+                catch { }
             }
-            catch
-            {
-                return _cachedPythonResult = I18n.Get("checker_nopython");
-            }
+
+            return _cachedPythonResult = I18n.Get("checker_nopython");
         }
 
         private static long ExtractVersionDate()

@@ -7,15 +7,14 @@ namespace RtCli.Tests;
 ///   1) 每个登记的库都能解析出版本(否则运行时表格显示"未加载");
 ///   2) 解析出的版本与 RtCli.csproj 声明的包版本一致 —— 这条证明自动读取拿到的是
 ///      真实包版本(AssemblyInformationalVersion), 而不是像 13.0.0.0 那样的 AssemblyVersion;
-///   3) 登记的库都是 csproj 的直接依赖, 除仅构建期/随框架裁剪的两个外没有遗漏。
+///   3) 登记的库都是 csproj 的直接依赖, 除仅构建期的包外没有遗漏。
 /// </summary>
 public class AboutDependencyTableTests
 {
     /// <summary>csproj 里声明但运行时不会作为独立包加载的条目</summary>
     private static readonly HashSet<string> NonRuntimePackages = new(StringComparer.Ordinal)
     {
-        "Grpc.Tools",        // PrivateAssets=all, 仅构建期
-        "System.Private.Uri" // 随共享框架统一/裁剪
+        "Grpc.Tools"         // PrivateAssets=all, 仅构建期
     };
 
     private static string RepoRoot()

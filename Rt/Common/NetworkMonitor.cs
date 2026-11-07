@@ -154,6 +154,28 @@ namespace Rt.Common
         private static string[] GetCandidatePaths(string libraryName)
         {
             string normalized = libraryName.ToLowerInvariant();
+
+            // Linux/macOS: SharpPcap 依赖 libpcap, 原生库名为 libpcap.so(.x)
+            if (!OperatingSystem.IsWindows())
+            {
+                string soName;
+                if (normalized.Contains(".so"))
+                    soName = normalized;
+                else
+                    soName = (normalized.StartsWith("lib") ? normalized : "lib" + normalized) + ".so";
+
+                return new[]
+                {
+                    soName,
+                    $"/usr/lib/{soName}",
+                    $"/usr/lib/x86_64-linux-gnu/{soName}",
+                    $"/usr/lib/aarch64-linux-gnu/{soName}",
+                    $"/usr/lib64/{soName}",
+                    $"/lib/{soName}",
+                    $"/lib64/{soName}"
+                };
+            }
+
             string fileName = normalized.EndsWith(".dll") ? normalized : normalized + ".dll";
 
             var paths = new List<string>
@@ -181,7 +203,9 @@ namespace Rt.Common
             var devices = CaptureDeviceList.Instance;
             if (devices.Count == 0)
             {
-                Output.Log("未找到任何网络接口(Npcap可能未安装或未启动服务)", 3, Name);
+                Output.Log(OperatingSystem.IsWindows()
+                    ? "未找到任何网络接口(Npcap可能未安装或未启动服务)"
+                    : "未找到任何网络接口(请确认已安装 libpcap: apt install libpcap0.8 / yum install libpcap)", 3, Name);
                 return null;
             }
 
@@ -198,21 +222,25 @@ namespace Rt.Common
                 Output.Log($"未找到指定接口 {interfaceName}，将使用默认接口", 2, Name);
             }
 
-            // 虚拟网卡关键词(Windows常见)
+            // 虚拟网卡关键词(Windows/Linux 常见)
             string[] virtualKeywords = new[]
             {
                 "virtual", "vmware", "virtualbox", "hyper-v", "vpn",
                 "tap", "tun", "loopback", "bluetooth", "pseudo",
                 "wan miniport", "isatap", "teredo", "6to4",
-                "host-only", "nat"
+                "host-only", "nat", "docker", "veth", "virbr", "br-"
             };
+
+            // Linux 的回环接口名为 lo, Windows 的回环在描述中包含 loopback
+            bool IsLoopback(string dname, string desc)
+                => dname == "lo" || dname.StartsWith("lo.") || dname.Contains("loopback") || desc.Contains("loopback");
 
             // 第一轮: 排除回环和虚拟网卡
             foreach (var d in devices)
             {
                 string desc = (d.Description ?? d.Name).ToLowerInvariant();
                 string dname = d.Name.ToLowerInvariant();
-                if (dname.Contains("loopback") || desc.Contains("loopback"))
+                if (IsLoopback(dname, desc))
                     continue;
                 if (virtualKeywords.Any(k => desc.Contains(k) || dname.Contains(k)))
                     continue;
@@ -224,7 +252,7 @@ namespace Rt.Common
             {
                 string desc = (d.Description ?? d.Name).ToLowerInvariant();
                 string dname = d.Name.ToLowerInvariant();
-                if (dname.Contains("loopback") || desc.Contains("loopback"))
+                if (IsLoopback(dname, desc))
                     continue;
                 return d;
             }
@@ -308,9 +336,12 @@ namespace Rt.Common
 
                 Output.Log($"[red]网络监测器启动失败[/]: {Markup.Escape(real.Message)}", 3, Name);
 
-                if (real is DllNotFoundException || real.Message.Contains("wpcap", StringComparison.OrdinalIgnoreCase))
+                if (real is DllNotFoundException || real.Message.Contains("wpcap", StringComparison.OrdinalIgnoreCase)
+                    || real.Message.Contains("pcap", StringComparison.OrdinalIgnoreCase))
                 {
-                    Output.Log("[yellow]原因[/]: 缺少 Npcap 原生库(wpcap.dll)。请从 https://npcap.com/ 下载并安装 Npcap", 3, Name);
+                    Output.Log(OperatingSystem.IsWindows()
+                        ? "[yellow]原因[/]: 缺少 Npcap 原生库(wpcap.dll)。请从 https://npcap.com/ 下载并安装 Npcap"
+                        : "[yellow]原因[/]: 缺少 libpcap 或权限不足。请安装 libpcap(apt install libpcap0.8 / yum install libpcap)，并以 root 或授予 CAP_NET_RAW 权限运行", 3, Name);
                 }
 
                 CleanupDevice();
@@ -454,21 +485,66 @@ namespace Rt.Common
         {
             Output.Log("[green]=== 网络监测器诊断 ===[/]", 1, Name);
 
-            // 1. 管理员权限检查
+            // 1. 权限检查(Windows 管理员 / Linux root 或 CAP_NET_RAW)
             bool isAdmin = false;
-            try
+            if (OperatingSystem.IsWindows())
             {
-                using var identity = new System.Security.Principal.WindowsIdentity("CURRENT_USER");
-                var principal = new System.Security.Principal.WindowsPrincipal(identity);
-                isAdmin = principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                try
+                {
+                    using var identity = new System.Security.Principal.WindowsIdentity("CURRENT_USER");
+                    var principal = new System.Security.Principal.WindowsPrincipal(identity);
+                    isAdmin = principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                }
+                catch { }
             }
-            catch { }
-            Output.Log($"管理员权限: {(isAdmin ? "[green]是[/]" : "[red]否[/] (Npcap抓包需要管理员权限！)")} ", isAdmin ? 1 : 3, Name);
+            else
+            {
+                // Linux: 以 /proc/self/status 的 Uid 是否为 0 作为 root 判定
+                try
+                {
+                    foreach (var line in File.ReadLines("/proc/self/status"))
+                    {
+                        if (!line.StartsWith("Uid:"))
+                            continue;
+                        var parts = line.Split('\t', ' ', StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length >= 2)
+                            isAdmin = parts[1] == "0";
+                        break;
+                    }
+                }
+                catch { }
+            }
+            string permHint = OperatingSystem.IsWindows() ? "Npcap抓包需要管理员权限！" : "抓包需要 root 或 CAP_NET_RAW 权限！";
+            Output.Log($"{(OperatingSystem.IsWindows() ? "管理员权限" : "root权限")}: {(isAdmin ? "[green]是[/]" : $"[red]否[/] ({permHint})")} ", isAdmin ? 1 : 3, Name);
 
-            // 2. Npcap/wpcap.dll 检查
-            string wpcapPath = System.IO.Path.Combine(Environment.SystemDirectory, "wpcap.dll");
-            bool wpcapExists = System.IO.File.Exists(wpcapPath);
-            Output.Log($"Npcap安装: {(wpcapExists ? "[green]已安装[/] (" + Markup.Escape(wpcapPath) + ")" : "[red]未找到wpcap.dll！请从 https://npcap.com/ 安装并勾选 WinPcap API-compatible Mode[/]")} ", wpcapExists ? 1 : 3, Name);
+            // 2. 原生抓包库检查(Windows: wpcap.dll / Linux: libpcap.so)
+            bool nativeLibExists;
+            string nativeLibText;
+            if (OperatingSystem.IsWindows())
+            {
+                string wpcapPath = System.IO.Path.Combine(Environment.SystemDirectory, "wpcap.dll");
+                nativeLibExists = System.IO.File.Exists(wpcapPath);
+                nativeLibText = nativeLibExists
+                    ? "[green]已安装[/] (" + Markup.Escape(wpcapPath) + ")"
+                    : "[red]未找到wpcap.dll！请从 https://npcap.com/ 安装并勾选 WinPcap API-compatible Mode[/]";
+            }
+            else
+            {
+                string? pcapPath = new[]
+                {
+                    "/usr/lib/x86_64-linux-gnu/libpcap.so",
+                    "/usr/lib/aarch64-linux-gnu/libpcap.so",
+                    "/usr/lib/libpcap.so",
+                    "/usr/lib64/libpcap.so",
+                    "/lib/libpcap.so",
+                    "/lib64/libpcap.so"
+                }.FirstOrDefault(System.IO.File.Exists);
+                nativeLibExists = pcapPath != null;
+                nativeLibText = nativeLibExists
+                    ? "[green]已安装[/] (" + Markup.Escape(pcapPath!) + ")"
+                    : "[red]未找到 libpcap！请安装: apt install libpcap0.8 / yum install libpcap[/]";
+            }
+            Output.Log($"{(OperatingSystem.IsWindows() ? "Npcap安装" : "libpcap 安装")}: {nativeLibText} ", nativeLibExists ? 1 : 3, Name);
 
             // 3. 枚举网络接口
             try
@@ -478,7 +554,7 @@ namespace Rt.Common
                 Output.Log($"网络接口总数: {devices.Count}", 1, Name);
 
                 if (devices.Count == 0)
-                    Output.Log("[red]✗[/] 未找到任何网络接口！Npcap服务可能未启动", 3, Name);
+                    Output.Log(OperatingSystem.IsWindows() ? "[red]✗[/] 未找到任何网络接口！Npcap服务可能未启动" : "[red]✗[/] 未找到任何网络接口！请确认 libpcap 已安装", 3, Name);
 
                 var devTable = new Table()
                     .Border(TableBorder.Rounded)
@@ -514,7 +590,9 @@ namespace Rt.Common
             catch (Exception ex)
             {
                 Output.Log($"枚举接口失败: {Markup.Escape(ex.Message)}", 3, Name);
-                Output.Log("[yellow]可能原因: SharpPcap原生库加载失败，请以管理员身份运行RtCli[/]", 3, Name);
+                Output.Log(OperatingSystem.IsWindows()
+                    ? "[yellow]可能原因: SharpPcap原生库加载失败，请以管理员身份运行RtCli[/]"
+                    : "[yellow]可能原因: libpcap 缺失或权限不足，请安装 libpcap 并检查 CAP_NET_RAW 权限[/]", 3, Name);
             }
 
             // 4. 配置检查
@@ -541,9 +619,9 @@ namespace Rt.Common
                     Output.Log("  可能原因:", 3, Name);
                     Output.Log("  a) 接口选错 - 在上方接口列表中找到有流量的接口", 3, Name);
                     if (!isAdmin)
-                        Output.Log("  b) 权限不足 - 请以管理员身份运行RtCli", 3, Name);
-                    if (!wpcapExists)
-                        Output.Log("  c) Npcap未安装", 3, Name);
+                        Output.Log(OperatingSystem.IsWindows() ? "  b) 权限不足 - 请以管理员身份运行RtCli" : "  b) 权限不足 - 请以 root 或授予 CAP_NET_RAW 权限运行", 3, Name);
+                    if (!nativeLibExists)
+                        Output.Log(OperatingSystem.IsWindows() ? "  c) Npcap未安装" : "  c) libpcap 未安装", 3, Name);
                 }
                 else if (TotalMcPackets == 0)
                 {

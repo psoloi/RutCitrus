@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
 	<PublishSingleFile>true</PublishSingleFile>
 	<SelfContained>true</SelfContained>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -11,9 +11,9 @@
     <ApplicationIcon>rc.ico</ApplicationIcon>
     
     <!-- 版本号定义 - 程序版本号规则：主版本号.日期yyyymmdd.次版本号.编译号 -->
-    <VersionPrefix>1.20261030.6.6</VersionPrefix>
-	<AssemblyVersion>1.2026.10.30</AssemblyVersion>
-    <FileVersion>1.2026.10.30</FileVersion>
+    <VersionPrefix>1.20261107.7.7</VersionPrefix>
+	<AssemblyVersion>1.2026.11.07</AssemblyVersion>
+    <FileVersion>1.2026.11.07</FileVersion>
     <InformationalVersion>$(VersionPrefix)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     
@@ -46,7 +46,6 @@
 
   <ItemGroup>
     <PackageReference Include="CS-Script" Version="4.14.11" />
-    <PackageReference Include="CSnakes.Runtime" Version="1.2.1" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.80.0" />
     <PackageReference Include="Grpc.Core" Version="2.46.6" />
     <PackageReference Include="Grpc.Tools" Version="2.82.0">
@@ -64,7 +63,6 @@
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="Spectre.Console" Version="0.57.2" />
     <PackageReference Include="System.Management" Version="10.0.12" />
-    <PackageReference Include="System.Private.Uri" Version="4.3.2" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 

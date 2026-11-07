@@ -19,8 +19,6 @@ namespace RtCli
     {
         // 功能测试稳定优化完善
 
-        // 支持Linux系统
-
         // 优化文字和整理及I18n完整支持
         // 服务端信息获取模式（Run、Rcon、RR、RM）"四架构 理功能"
         // 程序和MC添加测试更多错误识别并分类
@@ -165,9 +163,13 @@ namespace RtCli
 
         private static Task MainInternal(string[] args)
         {
-            Console.OutputEncoding = System.Text.Encoding.UTF8;
-            Console.Title = "RtCli";
-            Console.Clear();
+            // 控制台初始化: Linux/无 TTY 环境下部分 API 不受支持或会抛异常, 逐项兜底
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+            if (OperatingSystem.IsWindows())
+            {
+                try { Console.Title = "RtCli"; } catch { }
+            }
+            Output.SafeClearConsole();
             Output.TextBlock("启动主线程", 1, "Task#0");
 
             TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
@@ -847,7 +849,6 @@ namespace RtCli
         internal static readonly (string Name, string AssemblyName)[] DependencyLibraries =
         {
             ("CS-Script", "CSScriptLib"),
-            ("CSnakes.Runtime", "CSnakes.Runtime"),
             ("Google.Protobuf", "Google.Protobuf"),
             ("Grpc.AspNetCore", "Grpc.AspNetCore.Server"),
             ("Grpc.Core", "Grpc.Core"),

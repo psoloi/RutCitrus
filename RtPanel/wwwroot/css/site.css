@@ -685,33 +685,41 @@ input[type="checkbox"]:not(.form-check-input):checked {
 .modal-box .form-check { min-height: auto; margin-bottom: 0.25rem; }
 
 /* === 开关（不受全局方块勾选框影响, 还原横向滑轨） === */
+/* 轨道 = 胶囊, 滑钮 = 正圆, 几何在所有主题下保持一致
+   (主题皮肤曾把 border-radius 覆盖成 4px, 轨道变成小圆角方块而滑钮仍是圆的) */
 .form-switch input[type="checkbox"] {
     -webkit-appearance: none;
     appearance: none;
     width: 2em !important;
     height: 1em !important;
+    min-width: 2em !important;
+    min-height: 1em !important;
+    aspect-ratio: auto !important; /* 关键: 覆盖全局勾选框的 1/1 正方形约束 */
+    padding: 0 !important;
     margin-top: 0.25em !important;
-    border-radius: 1em !important;
+    border-radius: 100px !important;
     border: 1px solid var(--border-color) !important;
     box-shadow: none !important;
     background-color: var(--bg-input);
     background-image: none !important;
     transition: background-color 0.15s;
     position: relative;
+    flex: 0 0 auto;
     cursor: pointer;
 }
 
 .form-switch input[type="checkbox"]::after {
     content: "";
     position: absolute;
-    top: 1px;
-    left: 1px;
-    width: calc(1em - 4px);
-    height: calc(1em - 4px);
+    top: 50%;
+    left: 2.5px;
+    width: calc(1em - 5px);
+    height: calc(1em - 5px);
+    transform: translateY(-50%);
     background: var(--text-secondary);
-    border-radius: 50%; /* 圆形滑钮（非方块） */
-    box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.25);
-    transition: left 0.15s;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    transition: left 0.15s, background-color 0.15s;
 }
 
 .form-switch input[type="checkbox"]:checked {
@@ -722,7 +730,7 @@ input[type="checkbox"]:not(.form-check-input):checked {
 }
 
 .form-switch input[type="checkbox"]:checked::after {
-    left: calc(100% - 1em + 3px);
+    left: calc(100% - 1em + 2.5px);
     background: #fff;
 }
 
@@ -3330,6 +3338,7 @@ a.text-decoration-none:hover h5 { color: var(--accent) !important; }
    nordic  = 北欧极简风格
    space   = 深空蓝运维风格
    stripe  = Stripe 式克制风格
+   warm    = 暖风主题（纸张 / 墨色 / 印章红）
    风格与亮/暗模式(data-theme)相互独立，可任意组合。
    ============================================================ */
 
@@ -3600,7 +3609,97 @@ html[data-theme="light"][data-style="stripe"] {
     --shadow-pop: 0 15px 35px rgba(50, 50, 93, 0.15), 0 5px 15px rgba(0, 0, 0, 0.07);
 }
 
-/* ---------- 三种新风格共用的现代皮肤 ---------- */
+/* ---------- 暖风主题 · 暗（夜里书桌） ---------- */
+html[data-style="warm"] {
+    --bg-page: #211c16;
+    --bg-card: #2b241c;
+    --bg-card-hover: #352c22;
+    --bg-input: #1a1611;
+    --bg-header: #2f281f;
+    --bg-footer: #191510;
+    --border-color: #463a2c;
+    --border-hover: #5d4d39;
+
+    --accent: #e2683f;
+    --accent-hover: #f08053;
+    --accent-soft: rgba(226, 104, 63, 0.16);
+    --accent-glow: rgba(226, 104, 63, 0.30);
+    --accent-contrast: #241209; /* 深棕字压在暖橙上, 对比度 5.4:1 */
+    --accent-2: #7fb0a3;
+    --accent-2-soft: rgba(127, 176, 163, 0.14);
+    --accent-2-contrast: #10231d;
+
+    --text-primary: #f2e9da;
+    --text-secondary: #c3b49e;
+    --text-muted: #8d7f6c;
+
+    --color-success: #7fbf9a;
+    --color-warning: #e0b062;
+    --color-danger: #e8795e;
+    --color-info: #8fb3b7;
+
+    --grid-line: rgba(226, 190, 140, 0.05);
+    --glow-a: rgba(226, 104, 63, 0.05);
+    --glow-b: rgba(127, 176, 163, 0.04);
+
+    --btn-outline: #3d3328;
+    --btn-hi: rgba(255, 255, 255, 0.10);
+    --btn-lo: rgba(0, 0, 0, 0.28);
+
+    --font-pixel: var(--font-body);
+    --font-serif: 'Songti SC', 'SimSun', 'Noto Serif SC', 'Source Han Serif SC', serif;
+    --radius-sm: 7px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-btn: 8px;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.22), 0 8px 22px rgba(0, 0, 0, 0.18);
+    --shadow-nav: 0 2px 8px rgba(0, 0, 0, 0.30), 0 12px 30px rgba(0, 0, 0, 0.24);
+    --shadow-pop: 0 20px 52px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- 暖风主题 · 亮（纸张书桌） ---------- */
+html[data-theme="light"][data-style="warm"] {
+    --bg-page: #f4efe6;
+    --bg-card: #fbf7ef;
+    --bg-card-hover: #f5efe3;
+    --bg-input: #fffdf8;
+    --bg-header: #faf5ea;
+    --bg-footer: #eee7d8;
+    --border-color: #dcd1bf;
+    --border-hover: #c4b298;
+
+    --accent: #c4432b;
+    --accent-hover: #a6351f;
+    --accent-soft: rgba(196, 67, 43, 0.12);
+    --accent-glow: rgba(196, 67, 43, 0.22);
+    --accent-contrast: #fbf7ee;
+    --accent-2: #2f5d50;
+    --accent-2-soft: rgba(47, 93, 80, 0.10);
+    --accent-2-contrast: #f4f9f5;
+
+    --text-primary: #221f19;
+    --text-secondary: #4a4437;
+    --text-muted: #8a8171;
+
+    --color-success: #2f5d50;
+    --color-warning: #a8792c;
+    --color-danger: #b23a24;
+    --color-info: #2f6a72;
+
+    --grid-line: rgba(120, 98, 66, 0.055);
+    --glow-a: rgba(196, 67, 43, 0.045);
+    --glow-b: rgba(47, 93, 80, 0.035);
+
+    --btn-outline: #d0c0a8;
+    --btn-hi: rgba(255, 255, 255, 0.72);
+    --btn-lo: rgba(0, 0, 0, 0.06);
+
+    --shadow-card: 0 1px 2px rgba(60, 45, 25, 0.06), 0 8px 22px rgba(60, 45, 25, 0.07);
+    --shadow-nav: 0 2px 8px rgba(60, 45, 25, 0.08), 0 12px 30px rgba(60, 45, 25, 0.07);
+    --shadow-pop: 0 20px 48px rgba(60, 45, 25, 0.18);
+}
+
+/* ---------- 新风格共用的现代皮肤 ---------- */
 html[data-style]:not([data-style="classic"]) .island-nav {
     border-width: 1px !important;
     border-radius: var(--radius-lg) !important;
@@ -3814,6 +3913,116 @@ html[data-style]:not([data-style="classic"]) .login-card .brand .logo {
     box-shadow: none !important;
     image-rendering: auto;
 }
+
+/* 开关轨道: 所有主题统一为胶囊, 避免主题皮肤把轨道改成方块而滑钮仍是圆的 */
+html[data-style]:not([data-style="classic"]) .form-switch input[type="checkbox"] {
+    border-radius: 100px !important;
+    aspect-ratio: auto !important;
+}
+
+/* ============================================================
+   暖风主题专属修饰（纸张 / 墨色 / 印章红）
+   变量定义在 data-style="warm" 块, 这里补通用皮肤覆盖不到的细节
+   ============================================================ */
+
+/* 标题与卡片头用衬线体: 纸张书桌的气质; 按钮/正文仍为无衬线 */
+html[data-style="warm"] h1,
+html[data-style="warm"] h2,
+html[data-style="warm"] h3,
+html[data-style="warm"] h4,
+html[data-style="warm"] h5,
+html[data-style="warm"] h6,
+html[data-style="warm"] .display-4,
+html[data-style="warm"] .display-6,
+html[data-style="warm"] .card-header {
+    font-family: var(--font-serif);
+    letter-spacing: 0.5px;
+}
+
+/* 按钮: 纯色纸感主体 + 底部压边, 去掉渐变 */
+html[data-style="warm"][data-theme] .btn {
+    font-family: var(--font-body);
+    letter-spacing: 0.2px;
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.08) !important;
+}
+html[data-style="warm"][data-theme] .btn-primary,
+html[data-style="warm"][data-theme] .btn-info {
+    background-image: none !important;
+}
+html[data-style="warm"][data-theme] .btn:active:not(:disabled) {
+    box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.12) !important;
+}
+
+/* 品牌方块: 印章红实底 + 底部压边 (呼应 LG56 的印章 Logo) */
+html[data-style="warm"][data-theme] .brand-block {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    border-radius: 8px;
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.16) !important;
+}
+
+/* 卡片头/脚: 细线分隔 + 纸张底色 */
+html[data-style="warm"] .card-header {
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border-color) !important;
+}
+html[data-style="warm"] .card-footer {
+    border-top: 1px solid var(--border-color) !important;
+}
+
+/* 表格: 表头浅纸底, 全部边框统一暖灰(保留 .table-bordered 的竖线宽度) */
+html[data-style="warm"] .table > :not(caption) > * > * {
+    border-color: var(--border-color) !important;
+}
+html[data-style="warm"] .table thead th {
+    background: var(--bg-header);
+    color: var(--text-secondary) !important;
+    border-bottom: 1px solid var(--border-hover) !important;
+    font-family: var(--font-body);
+    font-size: 0.82em;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: none;
+}
+html[data-style="warm"] .table-hover > tbody > tr:hover > * {
+    background: var(--accent-soft) !important;
+    color: var(--text-primary);
+}
+html[data-style="warm"] .list-group-item {
+    border-color: var(--border-color) !important;
+}
+
+/* 输入框: 白纸底 + 暖色描边 + 极浅内阴影, 聚焦时红色光圈 */
+html[data-style="warm"][data-theme] .form-control,
+html[data-style="warm"][data-theme] .form-select {
+    background-color: var(--bg-input);
+    border-color: var(--border-color);
+    box-shadow: inset 0 1px 2px rgba(60, 45, 25, 0.06);
+}
+html[data-style="warm"][data-theme] .form-control:focus,
+html[data-style="warm"][data-theme] .form-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 语义色按钮/徽标: 暖风主题改为实心纯色, 文字色按亮暗模式取对比度更高的一端 */
+html[data-style="warm"][data-theme="light"] .btn-success { background: var(--color-success) !important; color: #f4f9f5 !important; }
+html[data-style="warm"][data-theme="dark"] .btn-success { background: var(--color-success) !important; color: #10231d !important; }
+html[data-style="warm"][data-theme] .btn-warning { background: var(--color-warning) !important; color: #241a06 !important; }
+html[data-style="warm"][data-theme="light"] .btn-danger { background: var(--color-danger) !important; color: #fff6f3 !important; }
+html[data-style="warm"][data-theme="dark"] .btn-danger { background: var(--color-danger) !important; color: #241209 !important; }
+
+html[data-style="warm"][data-theme="light"] .badge.bg-success,
+html[data-style="warm"][data-theme="light"] .badge.bg-info,
+html[data-style="warm"][data-theme="light"] .bg-success,
+html[data-style="warm"][data-theme="light"] .bg-info { color: #f4f9f5 !important; }
+
+html[data-style="warm"][data-theme="dark"] .badge.bg-success,
+html[data-style="warm"][data-theme="dark"] .badge.bg-info,
+html[data-style="warm"][data-theme="dark"] .badge.bg-danger,
+html[data-style="warm"][data-theme="dark"] .bg-success,
+html[data-style="warm"][data-theme="dark"] .bg-info,
+html[data-style="warm"][data-theme="dark"] .bg-danger { color: #10231d !important; }
 
 
 

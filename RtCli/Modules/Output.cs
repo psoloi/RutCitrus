@@ -48,6 +48,21 @@ namespace RtCli.Modules
         /// </summary>
         public static Action<string, int, string, string, string?>? OnLogBroadcast;
 
+        /// <summary>
+        /// 安全清屏: 输出被重定向或运行在无 TTY 的环境(如 systemd/容器)时 Console.Clear 会抛 IOException,
+        /// 此时直接跳过而不是中断启动流程。
+        /// </summary>
+        public static void SafeClearConsole()
+        {
+            try
+            {
+                if (!Console.IsOutputRedirected)
+                    Console.Clear();
+            }
+            catch (IOException) { }
+            catch (PlatformNotSupportedException) { }
+        }
+
         public static void InitializeLogging()
         {
             if (_isLoggingInitialized) return;

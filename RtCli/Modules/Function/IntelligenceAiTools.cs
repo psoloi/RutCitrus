@@ -82,6 +82,27 @@ namespace RtCli.Modules.Function
                 if (args["confirm"]?.ToObject<bool>() == true)
                     return null;
 
+                // run_command: 禁止命令与"系统命令默认关闭"属于硬性安全拦截, 应在二次确认之前直接判定,
+                // 与 Tool_RunCommand 内的校验同源, 避免模型用"未确认"绕过安全检查而只收到泛化的危险操作提示。
+                if (toolName == "run_command")
+                {
+                    string? command = args["command"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(command))
+                    {
+                        string trimmedCmd = command.Trim();
+                        if (IsForbiddenCommand(trimmedCmd))
+                            return $"[错误] 禁止执行的命令: {trimmedCmd}";
+
+                        bool isMcCommand = trimmedCmd.StartsWith("/") || IsMcServerCommand(trimmedCmd);
+                        var toolsConfig = ContentManager.Ai.ServerAutoAi?.Tools;
+                        if (!isMcCommand && (toolsConfig == null || !toolsConfig.AllowSystemCommands))
+                        {
+                            return "[拒绝] 出于安全考虑, 系统命令执行默认关闭(仅允许发送MC服务器命令)。"
+                                 + "如确需诊断, 请先在 ai_settings.yml 的 tools 中设置 allow_system_commands: true 并配置 system_command_allowlist。";
+                        }
+                    }
+                }
+
                 return $"[拒绝] {toolName} 属于危险操作, 需在参数中提供 \"confirm\": true 二次确认后重试。";
             }
 
@@ -1123,6 +1144,9 @@ namespace RtCli.Modules.Function
             private static DateTime _hostCpuAt = DateTime.MinValue;
             private static (double usedMb, double totalMb) _cachedHostMem = (-1, -1);
             private static DateTime _hostMemAt = DateTime.MinValue;
+            // Linux CPU 采样差分: /proc/stat 是累计值, 需与上一次采样对比才能得到瞬时使用率
+            private static long _prevCpuIdle = -1;
+            private static long _prevCpuTotal = -1;
 
             /// <summary>获取主机CPU使用率(%)</summary>
             public static double GetCpuUsage()
@@ -1145,6 +1169,10 @@ namespace RtCli.Modules.Function
                             break;
                         }
                     }
+                    else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                    {
+                        value = GetCpuUsageLinux();
+                    }
                 }
                 catch { }
 
@@ -1154,6 +1182,47 @@ namespace RtCli.Modules.Function
                     _hostCpuAt = DateTime.UtcNow;
                 }
                 return value;
+            }
+
+            /// <summary>Linux: 读取 /proc/stat 首行累计值, 与上次采样差分得到使用率</summary>
+            private static double GetCpuUsageLinux()
+            {
+                try
+                {
+                    using var reader = new StreamReader("/proc/stat");
+                    string? line = reader.ReadLine();
+                    if (line == null || !line.StartsWith("cpu "))
+                        return -1;
+
+                    var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    long total = 0;
+                    for (int i = 1; i < parts.Length; i++)
+                        total += long.Parse(parts[i]);
+
+                    // idle(第 4 字段) + iowait(第 5 字段) 视为空闲时间
+                    long idle = long.Parse(parts[4]) + (parts.Length > 5 ? long.Parse(parts[5]) : 0);
+
+                    double usage;
+                    if (_prevCpuTotal >= 0 && total > _prevCpuTotal)
+                    {
+                        long dTotal = total - _prevCpuTotal;
+                        long dIdle = idle - _prevCpuIdle;
+                        usage = dTotal > 0 ? (dTotal - dIdle) * 100.0 / dTotal : -1;
+                    }
+                    else
+                    {
+                        // 首次采样只能给出自开机以来的平均值
+                        usage = total > 0 ? (total - idle) * 100.0 / total : -1;
+                    }
+
+                    _prevCpuTotal = total;
+                    _prevCpuIdle = idle;
+                    return Math.Clamp(usage, 0, 100);
+                }
+                catch
+                {
+                    return -1;
+                }
             }
 
             /// <summary>获取主机内存使用情况(已用MB, 总MB)</summary>
@@ -1180,6 +1249,10 @@ namespace RtCli.Modules.Function
                             break;
                         }
                     }
+                    else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                    {
+                        value = GetMemoryUsageLinux();
+                    }
                 }
                 catch { }
 
@@ -1189,6 +1262,42 @@ namespace RtCli.Modules.Function
                     _hostMemAt = DateTime.UtcNow;
                 }
                 return value;
+            }
+
+            /// <summary>Linux: 读取 /proc/meminfo 的 MemTotal / MemAvailable(kB)</summary>
+            private static (double usedMb, double totalMb) GetMemoryUsageLinux()
+            {
+                try
+                {
+                    double totalKb = -1;
+                    double availKb = -1;
+
+                    using var reader = new StreamReader("/proc/meminfo");
+                    string? line;
+                    while ((line = reader.ReadLine()) != null && (totalKb < 0 || availKb < 0))
+                    {
+                        if (line.StartsWith("MemTotal:"))
+                            totalKb = ParseMeminfoKb(line);
+                        else if (line.StartsWith("MemAvailable:"))
+                            availKb = ParseMeminfoKb(line);
+                    }
+
+                    if (totalKb <= 0 || availKb < 0)
+                        return (-1, -1);
+
+                    return ((totalKb - availKb) / 1024.0, totalKb / 1024.0);
+                }
+                catch
+                {
+                    return (-1, -1);
+                }
+            }
+
+            /// <summary>解析 meminfo 行(形如 "MemTotal:  16384000 kB")中的数值(kB)</summary>
+            private static double ParseMeminfoKb(string line)
+            {
+                var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                return parts.Length >= 2 ? double.Parse(parts[1]) : -1;
             }
 
             /// <summary>获取MC服务器TPS(通过发送 /tps 命令并解析, 此处返回占位说明)</summary>

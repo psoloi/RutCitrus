@@ -3,7 +3,7 @@
   "zh_CN": {
     "checker_nojava": "当前设备环境没有检测到Java",
     "checker_java": "检测到的Java版本：",
-    "checker_nodotnet": "当前设备环境没有检测到.NET，推荐安装.NET8.0及更高版本",
+    "checker_nodotnet": "当前设备环境没有检测到.NET，推荐安装.NET10.0及更高版本",
     "checker_dotnet": "检测到的.NET版本：",
     "checker_nopython": "当前设备环境没有检测到Python，推荐安装Python 3及更高版本",
     "checker_python": "检测到的Python版本：",
@@ -320,6 +320,7 @@
     "anz_not_attached_hint": "未连接到 Minecraft 服务端，请先使用 .server get 扫描并连接。",
     "anz_operation_failed": "操作失败: {0}",
     "anz_player_event_error": "玩家事件监听异常: {0}",
+    "anz_proc_scan_failed": "读取 /proc 进程信息失败: {0}",
     "anz_plugin_count": "共 {0} 个插件。使用 .fx filter plugin <序号> 切换启用/禁用，使用.fx filter plugin 0 重启服务端。",
     "anz_plugin_disabled": "已禁用插件: {0} -> {1}",
     "anz_plugin_enabled": "已启用插件: {0} -> {1}",
@@ -569,7 +570,7 @@
   "en_US": {
     "checker_nojava": "Java is not detected in the current device environment.",
     "checker_java": "Detected Java version:",
-    "checker_nodotnet": "The current device environment does not detect .NET. It is recommended to install .NET 8.0 or higher.",
+    "checker_nodotnet": "The current device environment does not detect .NET. It is recommended to install .NET 10.0 or higher.",
     "checker_dotnet": "Detected .NET version:",
     "checker_nopython": "Python is not detected in the current device environment. It is recommended to install Python 3 or higher.",
     "checker_python": "Detected Python version:",
@@ -886,6 +887,7 @@
     "anz_not_attached_hint": "Not connected to a Minecraft server. Scan and connect with .server get first.",
     "anz_operation_failed": "Operation failed: {0}",
     "anz_player_event_error": "Player event listener error: {0}",
+    "anz_proc_scan_failed": "Failed to read process info from /proc: {0}",
     "anz_plugin_count": "{0} plugin(s) in total. Use .fx filter plugin <No.> to toggle enable/disable, or .fx filter plugin 0 to restart the server.",
     "anz_plugin_disabled": "Plugin disabled: {0} -> {1}",
     "anz_plugin_enabled": "Plugin enabled: {0} -> {1}",

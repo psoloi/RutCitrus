@@ -1,42 +1,8 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+# 构建并发布 RtCli(Windows/Linux)、RtPanel(Windows/Linux) 与 Rt 扩展库
+# 产物：RtCli.zip、RtCli-linux.zip、RtPanel.zip、RtPanel-linux.zip、Rt.dll
+# 发布说明中的「更新简略」取自本次构建对应提交的 git 提交消息
 
-# This workflow will build, test, sign and package a WPF or Windows Forms desktop application
-# built on .NET Core.
-# To learn how to migrate your existing application to .NET Core,
-# refer to https://docs.microsoft.com/en-us/dotnet/desktop-wpf/migration/convert-project-from-net-framework
-#
-# To configure this workflow:
-#
-# 1. Configure environment variables
-# GitHub sets default environment variables for every workflow run.
-# Replace the variables relative to your project in the "env" section below.
-#
-# 2. Signing
-# Generate a signing certificate in the Windows Application
-# Packaging Project or add an existing signing certificate to the project.
-# Next, use PowerShell to encode the .pfx file using Base64 encoding
-# by running the following Powershell script to generate the output string:
-#
-# $pfx_cert = Get-Content '.\SigningCertificate.pfx' -Encoding Byte
-# [System.Convert]::ToBase64String($pfx_cert) | Out-File 'SigningCertificate_Encoded.txt'
-#
-# Open the output file, SigningCertificate_Encoded.txt, and copy the
-# string inside. Then, add the string to the repo as a GitHub secret
-# and name it "Base64_Encoded_Pfx."
-# For more information on how to configure your signing certificate for
-# this workflow, refer to https://github.com/microsoft/github-actions-for-desktop-apps#signing
-#
-# Finally, add the signing certificate password to the repo as a secret and name it "Pfx_Key".
-# See "Build the Windows Application Packaging project" below to see how the secret is used.
-#
-# For more information on GitHub Actions, refer to https://github.com/features/actions
-# For a complete CI/CD sample to get started with GitHub Action workflows for Desktop Applications,
-# refer to https://github.com/microsoft/github-actions-for-desktop-apps
-
-name: .NET 8 Console RCT
+name: .NET 10 Console RCT
 
 on:
   push:
@@ -46,33 +12,108 @@ on:
 
 jobs:
   build-and-publish:
-    name: Build & Publish (Windows)
+    name: Build & Publish (Windows + Linux)
     runs-on: windows-latest
     outputs:
       release_tag: ${{ steps.create-tag.outputs.tag }}
+      commit_message: ${{ steps.commit-msg.outputs.message }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup .NET 8 SDK
-        uses: actions/setup-dotnet@v3
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore ./RtCli/RtCli.csproj
+        run: |
+          dotnet restore ./RtCli/RtCli.csproj
+          dotnet restore ./RtPanel/RtPanel.csproj
+          dotnet restore ./Rt/Rt.csproj
+          dotnet restore ./RtCli.Tests/RtCli.Tests.csproj
 
       - name: Build
         run: dotnet build ./RtCli/RtCli.csproj --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test ./RtCli/RtCli.csproj --configuration Release --no-build --verbosity normal
+        run: dotnet test ./RtCli.Tests/RtCli.Tests.csproj --configuration Release --verbosity normal
 
-      - name: Publish
+      # 说明：*.pubxml 默认被 .gitignore 忽略，CI 中不依赖本地的发布配置文件，直接传入 MSBuild 属性
+      - name: Publish RtCli (win-x64)
+        run: dotnet publish ./RtCli/RtCli.csproj -c Release -r win-x64 -p:SelfContained=true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./out/rtcli-win
+
+      - name: Publish RtCli (linux-x64)
+        run: dotnet publish ./RtCli/RtCli.csproj -c Release -r linux-x64 -p:SelfContained=true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./out/rtcli-linux
+
+      - name: Publish RtPanel (win-x64)
+        run: dotnet publish ./RtPanel/RtPanel.csproj -c Release -r win-x64 -p:SelfContained=true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./out/rtpanel-win
+
+      - name: Publish RtPanel (linux-x64)
+        run: dotnet publish ./RtPanel/RtPanel.csproj -c Release -r linux-x64 -p:SelfContained=true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./out/rtpanel-linux
+
+      - name: Build Rt extension
         run: |
-          dotnet publish ./RtCli/RtCli.csproj -c Release -o ./publish
+          dotnet build ./Rt/Rt.csproj -c Release
+          # Rt 为托管类库，dll 与平台无关，Windows/Linux 通用
+          New-Item -ItemType Directory -Force -Path ./out | Out-Null
+          Copy-Item ./Rt/bin/Release/net10.0/Rt.dll ./out/Rt.dll -Force
+
+      - name: Verify artifacts
+        run: |
+          $required = @(
+            "./out/rtcli-win/RtCli.exe",
+            "./out/rtcli-linux/RtCli",
+            "./out/rtpanel-win/RtPanel.exe",
+            "./out/rtpanel-linux/RtPanel",
+            "./out/Rt.dll"
+          )
+          foreach ($p in $required) {
+              if (-not (Test-Path $p)) {
+                  Write-Error "产物缺失: $p"
+                  exit 1
+              }
+              $len = (Get-Item $p).Length
+              Write-Output ("{0}  {1:N2} MB" -f $p, ($len / 1MB))
+          }
+          # 校验 Linux 主程序为 ELF 可执行文件
+          $bytes = [System.IO.File]::ReadAllBytes("./out/rtcli-linux/RtCli")[0..3]
+          $magic = ($bytes | ForEach-Object { [char]$_ }) -join ''
+          if ($magic -ne "ELF") {
+              Write-Error "linux 产物不是 ELF 可执行文件: $magic"
+              exit 1
+          }
+
+      - name: Create zip packages
+        run: |
+          $packages = @(
+            @{ Name = "RtCli.zip"; Path = "./out/rtcli-win" },
+            @{ Name = "RtCli-linux.zip"; Path = "./out/rtcli-linux" },
+            @{ Name = "RtPanel.zip"; Path = "./out/rtpanel-win" },
+            @{ Name = "RtPanel-linux.zip"; Path = "./out/rtpanel-linux" }
+          )
+          foreach ($pkg in $packages) {
+              if (Test-Path $pkg.Name) { Remove-Item $pkg.Name -Force }
+              Compress-Archive -Path "$($pkg.Path)/*" -DestinationPath $pkg.Name -Force
+              Write-Output ("{0}  {1:N2} MB" -f $pkg.Name, ((Get-Item $pkg.Name).Length / 1MB))
+          }
+
+      - name: Collect release assets
+        run: |
+          New-Item -ItemType Directory -Force -Path ./release-assets | Out-Null
+          Copy-Item -Path @("./RtCli.zip", "./RtCli-linux.zip", "./RtPanel.zip", "./RtPanel-linux.zip", "./out/Rt.dll") -Destination ./release-assets -Force
+          Get-ChildItem ./release-assets | ForEach-Object { Write-Output $_.Name }
+
+      - name: Read commit message
+        id: commit-msg
+        run: |
+          $msg = (git log -1 --pretty=format:"%B").Trim()
+          if ([string]::IsNullOrWhiteSpace($msg)) { $msg = "无提交说明" }
+          "message<<EOF" >> $env:GITHUB_OUTPUT
+          $msg >> $env:GITHUB_OUTPUT
+          "EOF" >> $env:GITHUB_OUTPUT
 
       - name: Generate build tag
         id: create-tag
@@ -93,32 +134,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify EXE File
-        run: |
-          $exePath = "./publish/RtCli.exe"
-          if (-not (Test-Path $exePath)) {
-              Write-Error "EXE文件未生成: $exePath"
-              exit 1
-          }
-          Write-Output "生成的可执行文件大小："
-          (Get-Item $exePath).Length / 1MB | ForEach-Object { $_.ToString("0.00") + " MB" }
-
-      - name: Create Zip Package
-        run: |
-          $zipPath = "./RtCli.zip"
-          if (Test-Path $zipPath) {
-              Remove-Item $zipPath
-          }
-          Compress-Archive -Path "./publish/*" -DestinationPath $zipPath -Force
-          Write-Output "已创建压缩文件: $zipPath"
-          Write-Output "压缩文件大小："
-          (Get-Item $zipPath).Length / 1MB | ForEach-Object { $_.ToString("0.00") + " MB" }
-
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RtCli-Package
-          path: ./RtCli.zip
+          name: Release-Assets
+          path: ./release-assets
+          if-no-files-found: error
 
   create-release:
     name: Create Release
@@ -129,7 +150,7 @@ jobs:
       - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
-          name: RtCli-Package
+          name: Release-Assets
           path: ./release-assets
 
       - name: Setup current time
@@ -142,9 +163,29 @@ jobs:
           tag_name: ${{ needs.build-and-publish.outputs.release_tag }}
           name: Release ${{ needs.build-and-publish.outputs.release_tag }}
           body: |
-            🚀 自动构建版本
+            ## 🚀 自动构建版本
             - 提交哈希: ${{ github.sha }}
             - 构建时间: ${{ steps.set-time.outputs.TIME }}
             - 构建标签: ${{ needs.build-and-publish.outputs.release_tag }}
+
+            ### 更新简略
+            ${{ needs.build-and-publish.outputs.commit_message }}
+
+            ### 发布文件
+            | 文件 | 平台 | 说明 |
+            | ---- | ---- | ---- |
+            | RtCli.zip | Windows x64 | 主程序(自包含) |
+            | RtCli-linux.zip | Linux x64 | 主程序(自包含) |
+            | RtPanel.zip | Windows x64 | 管理面板(自包含) |
+            | RtPanel-linux.zip | Linux x64 | 管理面板(自包含) |
+            | Rt.dll | 跨平台 | Rt 扩展库(Windows/Linux 通用) |
+
+            ### Linux 使用说明
+            - 解压后执行 `./RtCli` 或 `./RtPanel`（首次需 `chmod +x`，解压工具通常已保留执行权限）
+            - 抓包功能需安装 libpcap：`apt install libpcap0.8` 或 `yum install libpcap`，并以 root 或授予 `CAP_NET_RAW` 权限运行
           files: |
             release-assets/RtCli.zip
+            release-assets/RtCli-linux.zip
+            release-assets/RtPanel.zip
+            release-assets/RtPanel-linux.zip
+            release-assets/Rt.dll

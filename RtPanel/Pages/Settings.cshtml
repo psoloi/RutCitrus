@@ -31,13 +31,14 @@
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <strong>主题风格</strong>
-                                <small class="text-muted d-block">经典默认 / 北欧极简 / 深空蓝运维 / Stripe 式克制</small>
+                                <small class="text-muted d-block">经典默认 / 北欧极简 / 深空蓝运维 / Stripe 式克制 / 暖风纸张</small>
                             </div>
                             <select class="form-select form-select-sm" id="themeStyleSetting" style="width:auto;" onchange="saveThemeStyle()">
                                 <option value="classic">经典默认风格</option>
                                 <option value="nordic">北欧极简风格</option>
                                 <option value="space">深空蓝运维风格</option>
                                 <option value="stripe">Stripe式克制风格</option>
+                                <option value="warm">暖风主题</option>
                             </select>
                         </div>
                     </div>
@@ -234,7 +235,7 @@
         document.getElementById('settingsThemeBtn').textContent = current === 'light' ? '暗色' : '亮色';
     }
 
-    // 主题风格(经典默认 / 北欧极简 / 深空蓝运维 / Stripe式克制)
+    // 主题风格(经典默认 / 北欧极简 / 深空蓝运维 / Stripe式克制 / 暖风)
     function applyThemeStyle(style) {
         const value = style || 'classic';
         document.documentElement.setAttribute('data-style', value);

@@ -524,7 +524,7 @@ if __name__ == ""__main__"":
 
             var psi = new ProcessStartInfo
             {
-                FileName = "python",
+                FileName = OperatingSystem.IsWindows() ? "python" : "python3",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
